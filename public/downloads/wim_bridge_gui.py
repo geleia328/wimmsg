@@ -16,6 +16,8 @@ Empacotado em .exe via PyInstaller pelo GitHub Actions (workflow em
 .github/workflows/build-windows.yml).
 """
 
+from __future__ import annotations
+
 # =============================================================================
 # CONSTANTES DE BUILD — editadas antes de compilar o executável
 # =============================================================================
@@ -24,8 +26,6 @@ BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
 APP_VERSION = "1.0.0"
 # =============================================================================
-
-from __future__ import annotations
 
 import hashlib
 import json
