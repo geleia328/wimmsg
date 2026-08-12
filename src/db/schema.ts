@@ -81,6 +81,8 @@ export const clientWindows = pgTable(
     hwnd: varchar("hwnd", { length: 32 }).notNull().default(""),
     foreground: varchar("foreground", { length: 8 }).notNull().default("no"),
     matched: varchar("matched", { length: 8 }).notNull().default("no"),
+    slot: varchar("slot", { length: 8 }).notNull().default(""),
+    realm: varchar("realm", { length: 64 }).notNull().default(""),
     lastSeen: timestamp("last_seen", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -93,3 +95,28 @@ export const clientWindows = pgTable(
 
 export type ClientWindow = typeof clientWindows.$inferSelect;
 export type NewClientWindow = typeof clientWindows.$inferInsert;
+
+/**
+ * GSE (Gnome Sequencer Enhanced) macro spam state per character.
+ *
+ * The site is the source of truth for what SHOULD be running. The Python
+ * bridge polls this table and starts/stops per-character spammer threads
+ * to match `running`.
+ *
+ * `keybind`     — key that GSE is bound to inside WoW (default "1"). The
+ *                 Python bridge sends PostMessage WM_KEYDOWN/WM_KEYUP for
+ *                 this key, so no window focus is needed.
+ * `intervalMs`  — delay between key presses. 100ms = 10 taps/second.
+ */
+export const gseState = pgTable("gse_state", {
+  character: varchar("character", { length: 128 }).primaryKey(),
+  running: varchar("running", { length: 8 }).notNull().default("no"),
+  keybind: varchar("keybind", { length: 32 }).notNull().default("1"),
+  intervalMs: varchar("interval_ms", { length: 8 }).notNull().default("100"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type GseState = typeof gseState.$inferSelect;
+export type NewGseState = typeof gseState.$inferInsert;

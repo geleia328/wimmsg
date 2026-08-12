@@ -16,6 +16,8 @@ type ScanPayload = {
     hwnd: string | number;
     foreground?: boolean;
     matched?: boolean;
+    slot?: number | string;
+    realm?: string;
   }>;
 };
 
@@ -49,6 +51,8 @@ export async function POST(request: NextRequest) {
       hwnd: String(w.hwnd),
       foreground: w.foreground ? "yes" : "no",
       matched: w.matched ? "yes" : "no",
+      slot: w.slot !== undefined ? String(w.slot) : "",
+      realm: (w.realm ?? "").slice(0, 64),
       lastSeen: now,
     }));
 
@@ -67,6 +71,8 @@ export async function POST(request: NextRequest) {
             pid: r.pid,
             foreground: r.foreground,
             matched: r.matched,
+            slot: r.slot,
+            realm: r.realm,
             lastSeen: now,
           },
         });

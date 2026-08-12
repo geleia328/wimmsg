@@ -25,6 +25,8 @@ export async function GET() {
       windowTitle: r.windowTitle,
       pid: r.pid,
       hwnd: r.hwnd,
+      slot: r.slot,
+      realm: r.realm,
       foreground: r.foreground === "yes",
       matched: r.matched === "yes",
       lastSeen: r.lastSeen,

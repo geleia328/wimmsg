@@ -194,23 +194,65 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
           <h2 className="text-xl font-semibold text-amber-300">
             3. Instalar o addon WIMBridge
           </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Baixe o pacote completo:
+          </p>
           <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
             <li>
               <a
-                href="/downloads/WIMBridge.zip"
+                href="/api/download/WIMBridge.zip"
                 className="text-amber-400 hover:underline"
                 download
               >
-                WIMBridge.zip
+                📦 WIMBridge.zip
               </a>{" "}
               — descompacte em{" "}
-              <code>World of Warcraft/_retail_/Interface/AddOns/</code>{" "}
-              (em cada instalação usada).
+              <code>World of Warcraft/_retail_/Interface/AddOns/</code>
             </li>
           </ul>
-          <p className="mt-2 text-sm text-slate-300">
-            Faça <code>/reload</code> em cada janela após instalar. Teste com{" "}
-            <code>/wimbridge test</code> — deve imprimir uma linha com o marcador.
+
+          <div className="mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
+            <b className="text-amber-300">O download do .zip não funciona?</b>
+            <p className="mt-1">
+              Alguns navegadores/antivírus bloqueiam .zip vindos de sites
+              desconhecidos. Baixe os 2 arquivos avulsos abaixo:
+            </p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              <li>
+                Crie uma pasta chamada exatamente{" "}
+                <code>WIMBridge</code> dentro de{" "}
+                <code>World of Warcraft/_retail_/Interface/AddOns/</code>
+              </li>
+              <li>
+                Baixe e coloque estes dois arquivos dentro dela:
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <a
+                    href="/api/download/WIMBridge.toc"
+                    download
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
+                  >
+                    ⬇ WIMBridge.toc
+                  </a>
+                  <a
+                    href="/api/download/WIMBridge.lua"
+                    download
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
+                  >
+                    ⬇ WIMBridge.lua
+                  </a>
+                </div>
+              </li>
+            </ol>
+            <p className="mt-2 text-slate-400">
+              Se o navegador abrir o arquivo como texto em vez de baixar,
+              clique com o <b>botão direito → &quot;Salvar link como…&quot;</b>.
+            </p>
+          </div>
+
+          <p className="mt-3 text-sm text-slate-300">
+            Depois de copiar os arquivos, faça <code>/reload</code> em cada
+            janela do WoW. Teste com <code>/wimbridge test</code> — deve
+            imprimir uma linha com o marcador.
           </p>
         </section>
 
@@ -224,7 +266,7 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
           <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
             <li>
               <a
-                href="/downloads/wim_bridge.py"
+                href="/api/download/wim_bridge.py"
                 className="text-amber-400 hover:underline"
                 download
               >
@@ -233,7 +275,7 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             </li>
             <li>
               <a
-                href="/downloads/requirements.txt"
+                href="/api/download/requirements.txt"
                 className="text-amber-400 hover:underline"
                 download
               >
@@ -242,7 +284,7 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             </li>
             <li>
               <a
-                href="/downloads/config.example.ini"
+                href="/api/download/config.example.ini"
                 className="text-amber-400 hover:underline"
                 download
               >

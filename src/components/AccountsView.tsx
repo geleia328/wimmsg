@@ -9,6 +9,8 @@ type ClientWindow = {
   windowTitle: string;
   pid: string;
   hwnd: string;
+  slot: string;
+  realm: string;
   foreground: boolean;
   matched: boolean;
   online: boolean;
@@ -119,10 +121,11 @@ export function AccountsView() {
             <thead>
               <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Slot</th>
                 <th className="px-4 py-3">Personagem</th>
-                <th className="px-4 py-3">Título da janela</th>
+                <th className="px-4 py-3">Servidor</th>
+                <th className="px-4 py-3">Título</th>
                 <th className="px-4 py-3">PID</th>
-                <th className="px-4 py-3">HWND</th>
                 <th className="px-4 py-3">Foreground</th>
                 <th className="px-4 py-3">Visto</th>
               </tr>
@@ -131,7 +134,7 @@ export function AccountsView() {
               {loading && windows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
                     Buscando janelas...
@@ -141,13 +144,13 @@ export function AccountsView() {
               {!loading && windows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
-                    Nenhuma janela do WoW detectada. Verifique se o Python
-                    bridge está rodando (
-                    <Link href="/setup" className="text-amber-400 underline">
-                      setup
+                    Nenhuma janela do WoW detectada. Abra o Bakers Whisper no
+                    seu PC e clique em ▶ Iniciar (
+                    <Link href="/download" className="text-amber-400 underline">
+                      baixar
                     </Link>
                     ).
                   </td>
@@ -171,6 +174,15 @@ export function AccountsView() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
+                    {w.slot ? (
+                      <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-xs font-bold text-amber-300">
+                        wow{w.slot}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-600">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
                     {w.matched && w.character ? (
                       <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-xs text-emerald-300">
                         {w.character}
@@ -181,14 +193,20 @@ export function AccountsView() {
                       </span>
                     )}
                   </td>
+                  <td className="px-4 py-3">
+                    {w.realm ? (
+                      <span className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 font-mono text-xs text-sky-300">
+                        {w.realm}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-600">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-300">
                     {w.windowTitle}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">
                     {w.pid || "—"}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                    {w.hwnd}
                   </td>
                   <td className="px-4 py-3">
                     {w.foreground ? (

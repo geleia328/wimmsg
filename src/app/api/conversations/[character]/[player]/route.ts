@@ -69,6 +69,20 @@ export async function POST(
     );
   }
 
+  // Detect potential realm mismatch: WoW whispers only work between the same
+  // realm or across officially connected realms. We can't know the connected
+  // realm groups, but we can flag when suffixes differ.
+  const charRealm = character.includes("-")
+    ? character.split("-").slice(-1)[0].toLowerCase()
+    : "";
+  const playerRealm = player.includes("-")
+    ? player.split("-").slice(-1)[0].toLowerCase()
+    : "";
+  const realmWarning =
+    charRealm && playerRealm && charRealm !== playerRealm
+      ? `Personagem está em ${character.split("-").slice(-1)[0]} mas o destinatário está em ${player.split("-").slice(-1)[0]}. O envio pode falhar se os servidores não estiverem conectados.`
+      : undefined;
+
   const [inserted] = await db
     .insert(messages)
     .values({
@@ -81,5 +95,5 @@ export async function POST(
     })
     .returning();
 
-  return NextResponse.json({ message: inserted });
+  return NextResponse.json({ message: inserted, warning: realmWarning });
 }

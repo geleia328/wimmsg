@@ -251,6 +251,11 @@ export function ChatApp() {
         },
       );
       if (res.ok) {
+        const data = (await res.json()) as { warning?: string };
+        if (data.warning) {
+          // Non-blocking: message was queued, just inform the user.
+          alert(`⚠ Aviso de servidor:\n\n${data.warning}`);
+        }
         setDraft("");
         void fetchMessages(selected.character, selected.player);
         void refreshTop();
@@ -262,6 +267,21 @@ export function ChatApp() {
       setSending(false);
     }
   }, [selected, draft, fetchMessages, refreshTop]);
+
+  // Compute realm mismatch warning for the currently selected conversation.
+  const realmMismatch = useMemo(() => {
+    if (!selected) return null;
+    const cr = selected.character.includes("-")
+      ? selected.character.split("-").slice(-1)[0]
+      : "";
+    const pr = selected.player.includes("-")
+      ? selected.player.split("-").slice(-1)[0]
+      : "";
+    if (cr && pr && cr.toLowerCase() !== pr.toLowerCase()) {
+      return { charRealm: cr, playerRealm: pr };
+    }
+    return null;
+  }, [selected]);
 
   const startNewConversation = useCallback(() => {
     const c = newCharacter.trim();
@@ -401,10 +421,22 @@ export function ChatApp() {
             )}
           </div>
           <a
+            href="/download"
+            className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-1 text-amber-300 hover:bg-amber-500/20"
+          >
+            📥 Download
+          </a>
+          <a
             href="/accounts"
             className="rounded border border-emerald-500/50 bg-emerald-500/10 px-3 py-1 text-emerald-300 hover:bg-emerald-500/20"
           >
-            📡 Varrer contas
+            📡 Contas
+          </a>
+          <a
+            href="/gse"
+            className="rounded border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1 text-fuchsia-300 hover:bg-fuchsia-500/20"
+          >
+            ⚙ GSE
           </a>
           <a
             href="/setup"
@@ -592,6 +624,14 @@ export function ChatApp() {
                     </span>
                   )}
                 </div>
+                {realmMismatch && (
+                  <div className="mt-2 rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                    ⚠ <b>Servidor diferente:</b> seu personagem está em{" "}
+                    <b>{realmMismatch.charRealm}</b> mas o destinatário está em{" "}
+                    <b>{realmMismatch.playerRealm}</b>. A mensagem pode falhar
+                    se os servidores não forem conectados.
+                  </div>
+                )}
               </div>
 
               <div
