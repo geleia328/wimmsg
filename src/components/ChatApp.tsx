@@ -24,6 +24,7 @@ type CharacterInfo = {
 type WindowStatus = {
   character: string;
   windowTitle: string;
+  slot: string;
   online: boolean;
   foreground: boolean;
   matched: boolean;
@@ -114,6 +115,7 @@ export function ChatApp() {
   const [newPlayer, setNewPlayer] = useState("");
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
   const [showNotifSettings, setShowNotifSettings] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const notif = useNotifications();
@@ -185,6 +187,8 @@ export function ChatApp() {
             character: string;
             player: string;
             body: string;
+            slot?: string | null;
+            windowTitle?: string | null;
           }>;
           latestId: number;
         };
@@ -202,6 +206,8 @@ export function ChatApp() {
               character: m.character,
               player: m.player,
               body: m.body,
+              slot: m.slot,
+              windowTitle: m.windowTitle,
             });
             lastIncomingIdRef.current = m.id;
           }
@@ -253,7 +259,6 @@ export function ChatApp() {
       if (res.ok) {
         const data = (await res.json()) as { warning?: string };
         if (data.warning) {
-          // Non-blocking: message was queued, just inform the user.
           alert(`⚠ Aviso de servidor:\n\n${data.warning}`);
         }
         setDraft("");
@@ -267,6 +272,32 @@ export function ChatApp() {
       setSending(false);
     }
   }, [selected, draft, fetchMessages, refreshTop]);
+
+  const deleteConversation = useCallback(async () => {
+    if (!selected) return;
+    const ok = window.confirm(
+      `Apagar toda a conversa entre ${selected.character} e ${selected.player}?\n\nEssa ação remove o histórico do site.`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(selected.character)}/${encodeURIComponent(selected.player)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        alert(err.error ?? "erro ao apagar conversa");
+        return;
+      }
+      setMessages([]);
+      setSelected(null);
+      setDraft("");
+      await refreshTop();
+    } finally {
+      setDeleting(false);
+    }
+  }, [selected, refreshTop]);
 
   // Compute realm mismatch warning for the currently selected conversation.
   const realmMismatch = useMemo(() => {
@@ -620,6 +651,16 @@ export function ChatApp() {
                     />
                     {selected.character}
                   </span>
+                  {statusMap[selected.character]?.slot && (
+                    <span className="rounded border border-cyan-500/40 bg-cyan-500/10 px-2 py-0.5 font-mono text-cyan-300">
+                      {statusMap[selected.character]?.slot}
+                    </span>
+                  )}
+                  {statusMap[selected.character]?.windowTitle && (
+                    <span className="text-slate-500">
+                      {statusMap[selected.character]?.windowTitle}
+                    </span>
+                  )}
                   {statusMap[selected.character]?.online ? (
                     <span className="text-emerald-400">
                       janela detectada · pronto para enviar
@@ -638,6 +679,15 @@ export function ChatApp() {
                     se os servidores não forem conectados.
                   </div>
                 )}
+                <div className="mt-3">
+                  <button
+                    onClick={() => void deleteConversation()}
+                    disabled={deleting}
+                    className="rounded border border-rose-500/50 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 disabled:opacity-40"
+                  >
+                    {deleting ? "apagando..." : "🗑 Apagar conversa"}
+                  </button>
+                </div>
               </div>
 
               <div

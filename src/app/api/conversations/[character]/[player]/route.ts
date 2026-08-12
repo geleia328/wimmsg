@@ -7,8 +7,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET  → messages between `character` (your window) and `player` (the other end).
- * POST → queues a new outgoing whisper to be typed in that specific window.
+ * GET    → messages between `character` (your window) and `player` (the other end).
+ * POST   → queues a new outgoing whisper to be typed in that specific window.
+ * DELETE → removes the entire conversation between `character` and `player`.
  */
 export async function GET(
   request: NextRequest,
@@ -69,9 +70,6 @@ export async function POST(
     );
   }
 
-  // Detect potential realm mismatch: WoW whispers only work between the same
-  // realm or across officially connected realms. We can't know the connected
-  // realm groups, but we can flag when suffixes differ.
   const charRealm = character.includes("-")
     ? character.split("-").slice(-1)[0].toLowerCase()
     : "";
@@ -96,4 +94,20 @@ export async function POST(
     .returning();
 
   return NextResponse.json({ message: inserted, warning: realmWarning });
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ character: string; player: string }> },
+) {
+  const { character: rawChar, player: rawPlayer } = await context.params;
+  const character = decodeURIComponent(rawChar);
+  const player = decodeURIComponent(rawPlayer);
+
+  const deleted = await db
+    .delete(messages)
+    .where(and(eq(messages.character, character), eq(messages.player, player)))
+    .returning({ id: messages.id });
+
+  return NextResponse.json({ ok: true, deleted: deleted.length });
 }
