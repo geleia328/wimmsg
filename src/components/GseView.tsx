@@ -27,6 +27,7 @@ type Controls = {
   whisperAfterSendDelayMs: number;
   whisperChatOpenDelayMs: number;
   whisperWReadyDelayMs: number;
+  whisperSpaceDelayMs: number;
   whisperKeystrokeDelayMs: number;
   whisperChatSendDelayMs: number;
   whisperCloseChatEnabled: boolean;
@@ -45,7 +46,8 @@ export function GseView() {
     whisperFocusDelayMs: 2000,
     whisperAfterSendDelayMs: 1000,
     whisperChatOpenDelayMs: 1000,
-    whisperWReadyDelayMs: 1500,
+    whisperWReadyDelayMs: 1000,
+    whisperSpaceDelayMs: 1000,
     whisperKeystrokeDelayMs: 100,
     whisperChatSendDelayMs: 1000,
     whisperCloseChatEnabled: false,
@@ -56,7 +58,8 @@ export function GseView() {
     whisperFocusDelayMs: "2000",
     whisperAfterSendDelayMs: "1000",
     whisperChatOpenDelayMs: "1000",
-    whisperWReadyDelayMs: "1500",
+    whisperWReadyDelayMs: "1000",
+    whisperSpaceDelayMs: "1000",
     whisperKeystrokeDelayMs: "100",
     whisperChatSendDelayMs: "1000",
     whisperChatCloseDelayMs: "400",
@@ -101,6 +104,7 @@ export function GseView() {
           whisperAfterSendDelayMs: String(nextControls.whisperAfterSendDelayMs),
           whisperChatOpenDelayMs: String(nextControls.whisperChatOpenDelayMs),
           whisperWReadyDelayMs: String(nextControls.whisperWReadyDelayMs),
+          whisperSpaceDelayMs: String(nextControls.whisperSpaceDelayMs),
           whisperKeystrokeDelayMs: String(nextControls.whisperKeystrokeDelayMs),
           whisperChatSendDelayMs: String(nextControls.whisperChatSendDelayMs),
           whisperChatCloseDelayMs: String(nextControls.whisperChatCloseDelayMs),
@@ -270,6 +274,7 @@ export function GseView() {
       whisperAfterSendDelayMs: Number(delayDraft.whisperAfterSendDelayMs),
       whisperChatOpenDelayMs: Number(delayDraft.whisperChatOpenDelayMs),
       whisperWReadyDelayMs: Number(delayDraft.whisperWReadyDelayMs),
+      whisperSpaceDelayMs: Number(delayDraft.whisperSpaceDelayMs),
       whisperKeystrokeDelayMs: Number(delayDraft.whisperKeystrokeDelayMs),
       whisperChatSendDelayMs: Number(delayDraft.whisperChatSendDelayMs),
       whisperChatCloseDelayMs: Number(delayDraft.whisperChatCloseDelayMs),
@@ -280,6 +285,7 @@ export function GseView() {
       !Number.isFinite(patch.whisperAfterSendDelayMs) ||
       !Number.isFinite(patch.whisperChatOpenDelayMs) ||
       !Number.isFinite(patch.whisperWReadyDelayMs) ||
+      !Number.isFinite(patch.whisperSpaceDelayMs) ||
       !Number.isFinite(patch.whisperKeystrokeDelayMs) ||
       !Number.isFinite(patch.whisperChatSendDelayMs) ||
       !Number.isFinite(patch.whisperChatCloseDelayMs) ||
@@ -469,7 +475,7 @@ export function GseView() {
               </span>
             </label>
             <label className="text-xs text-slate-400">
-              ⏱ Whisper abre (após colar /w Nome)
+              ⏱ Antes do espaço (após /w Nome)
               <input
                 type="number"
                 min={300}
@@ -482,8 +488,26 @@ export function GseView() {
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
               <span className="mt-1 block text-[10px] text-slate-600">
-                espera o jogo abrir o modo whisper antes de colar a mensagem
-                (1,5s na ordem padrão)
+                espera após colar /w Nome-Server antes de pressionar espaço
+                (1s na ordem padrão)
+              </span>
+            </label>
+            <label className="text-xs text-slate-400">
+              ⏱ Espaço (abre o whisper)
+              <input
+                type="number"
+                min={300}
+                max={10000}
+                step={100}
+                value={delayDraft.whisperSpaceDelayMs}
+                onChange={(e) =>
+                  setDraftField("whisperSpaceDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera após pressionar espaço antes de colar a mensagem (1s na
+                ordem padrão)
               </span>
             </label>
             <label className="text-xs text-slate-400">
@@ -585,8 +609,9 @@ export function GseView() {
             ) : (
               <span className="text-xs text-slate-500">
                 ordem salva: foco {controls.whisperFocusDelayMs}ms · pós-Enter{" "}
-                {controls.whisperChatOpenDelayMs}ms · whisper abre{" "}
-                {controls.whisperWReadyDelayMs}ms · pós-colar{" "}
+                {controls.whisperChatOpenDelayMs}ms · antes do espaço{" "}
+                {controls.whisperWReadyDelayMs}ms · pós-espaço{" "}
+                {controls.whisperSpaceDelayMs}ms · pós-colar{" "}
                 {controls.whisperChatSendDelayMs}ms · pós-envio{" "}
                 {controls.whisperAfterSendDelayMs}ms
               </span>

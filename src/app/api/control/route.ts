@@ -18,6 +18,7 @@ type Controls = {
   whisperAfterSendDelayMs: number;
   whisperChatOpenDelayMs: number;
   whisperWReadyDelayMs: number;
+  whisperSpaceDelayMs: number;
   whisperKeystrokeDelayMs: number;
   whisperChatSendDelayMs: number;
   whisperCloseChatEnabled: boolean;
@@ -39,6 +40,7 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 200, 10000),
     whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 300, 10000),
     whisperWReadyDelayMs: num(get("whisper_w_ready_delay_ms"), 300, 10000),
+    whisperSpaceDelayMs: num(get("whisper_space_delay_ms"), 300, 10000),
     whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 50, 1000),
     whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 300, 10000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
@@ -116,6 +118,12 @@ export async function POST(request: NextRequest) {
     pairs.push({
       key: "whisper_w_ready_delay_ms",
       value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperWReadyDelayMs)))),
+    });
+  }
+  if (typeof payload.whisperSpaceDelayMs === "number") {
+    pairs.push({
+      key: "whisper_space_delay_ms",
+      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperSpaceDelayMs)))),
     });
   }
   if (typeof payload.whisperKeystrokeDelayMs === "number") {

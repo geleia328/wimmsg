@@ -807,7 +807,8 @@ DEFAULT_CONTROLS = {
     "whisperFocusDelayMs": 2000,
     "whisperAfterSendDelayMs": 1000,
     "whisperChatOpenDelayMs": 1000,
-    "whisperWReadyDelayMs": 1500,
+    "whisperWReadyDelayMs": 1000,
+    "whisperSpaceDelayMs": 1000,
     "whisperKeystrokeDelayMs": 100,
     "whisperChatSendDelayMs": 1000,
     "whisperCloseChatEnabled": False,
@@ -1339,13 +1340,11 @@ class BridgeEngine:
         ORDEM OFICIAL DE ENVIO (definida pelo usuário para evitar bugs):
           1) focar a janela ......... aguardar 2s   (whisperFocusDelayMs)
           2) pressionar Enter ....... aguardar 1s   (whisperChatOpenDelayMs)
-          3) colar /w Nome-Server ... aguardar 1,5s (whisperWReadyDelayMs)
-             → o jogo abre o modo whisper
-          4) colar a mensagem ....... aguardar 1s   (whisperChatSendDelayMs)
-          5) pressionar Enter ....... aguardar 1s   (whisperAfterSendDelayMs)
-
-        Em duas etapas: primeiro o /w Nome abre o whisper no jogo, depois a
-        mensagem é colada separada — o jogo nunca recebe tudo de uma vez.
+          3) colar /w Nome-Server ... aguardar 1s   (whisperWReadyDelayMs)
+          4) pressionar ESPAÇO ...... aguardar 1s   (whisperSpaceDelayMs)
+             → O WoW EXIGE o espaço para abrir o modo whisper!
+          5) colar a mensagem ....... aguardar 1s   (whisperChatSendDelayMs)
+          6) pressionar Enter ....... aguardar 1s   (whisperAfterSendDelayMs)
         """
         if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
             raise RuntimeError("pyautogui/pydirectinput não disponíveis")
@@ -1366,7 +1365,10 @@ class BridgeEngine:
                     0.3, int(controls.get("whisperChatOpenDelayMs", 1000)) / 1000.0
                 )
                 w_ready_delay = max(
-                    0.3, int(controls.get("whisperWReadyDelayMs", 1500)) / 1000.0
+                    0.3, int(controls.get("whisperWReadyDelayMs", 1000)) / 1000.0
+                )
+                space_delay = max(
+                    0.3, int(controls.get("whisperSpaceDelayMs", 1000)) / 1000.0
                 )
                 keystroke_delay = max(
                     0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
@@ -1398,7 +1400,7 @@ class BridgeEngine:
                 press_ctrl_a()
                 time.sleep(0.25)
 
-                # 3) Colar "/w Nome-Server" → aguardar (1,5s).
+                # 3) Colar "/w Nome-Server" → aguardar (1s).
                 w_cmd = f"/w {player}"
                 pasted_w = False
                 if HAS_WIN32:
@@ -1409,10 +1411,14 @@ class BridgeEngine:
                             pydirectinput.write(ch, interval=keystroke_delay)
                     else:
                         pyautogui.typewrite(w_cmd, interval=keystroke_delay)
-                # O jogo abre o modo whisper com o destinatário correto.
                 time.sleep(w_ready_delay)
 
-                # 4) Colar a mensagem → aguardar (1s).
+                # 4) ESPAÇO — o WoW exige espaço após /w Nome para abrir o
+                #    modo whisper → aguardar (1s).
+                press_key("space")
+                time.sleep(space_delay)
+
+                # 5) Colar a mensagem → aguardar (1s).
                 pasted_body = False
                 if HAS_WIN32:
                     pasted_body = set_clipboard_text(body) and paste_ctrl_v()
@@ -1424,7 +1430,7 @@ class BridgeEngine:
                         pyautogui.typewrite(body, interval=keystroke_delay)
                 time.sleep(send_delay)
 
-                # 5) Enter envia o whisper → aguardar (1s).
+                # 6) Enter envia o whisper → aguardar (1s).
                 press_key("enter")
                 if close_enabled:
                     time.sleep(close_delay)

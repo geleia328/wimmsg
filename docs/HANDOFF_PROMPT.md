@@ -76,6 +76,10 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - Sequência em duas etapas: foco (2000ms) → Enter → 1000ms → colar `/w Nome-Server` → **1500ms** (jogo abre o modo whisper) → colar a mensagem → 1000ms → Enter envia → 1000ms pós-envio.
     - Novo controle `whisperWReadyDelayMs` (whisper_w_ready_delay_ms, default 1500) — o tempo entre colar o /w e colar a mensagem.
     - `_send` reescrito com a ordem exata (Ctrl+A de segurança só no início); defaults atualizados em schema, /api/control, init-db, GseView e DEFAULT_CONTROLS do bridge.
+16. ✅ FIX ESPAÇO v1.1.8 — o WoW exige espaço após /w Nome:
+    - Nova ordem: foco (2s) → Enter → 1s → colar `/w Nome-Server` → 1s → **press_key("space")** → 1s → colar mensagem → 1s → Enter → 1s.
+    - Novo controle `whisperSpaceDelayMs` (whisper_space_delay_ms, default 1000); `whisperWReadyDelayMs` agora é "antes do espaço" (default 1000).
+    - Atualizados: schema, /api/control, init-db, GseView (labels + campo novo) e bridge (_send + DEFAULT_CONTROLS).
 
 **Relatório completo (cole aqui):**
 
