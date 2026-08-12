@@ -166,8 +166,8 @@ export function SettingsView() {
   ]);
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto max-w-4xl px-6 py-10">
+      <div className="flex items-center justify-between">
         <div>
           <Link href="/" className="text-xs text-amber-400 hover:underline">
             ← voltar ao chat
@@ -186,7 +186,7 @@ export function SettingsView() {
           Use o <code>ADMIN_TOKEN</code> se configurou na Vercel. Caso contrário,
           use o <code>BRIDGE_TOKEN</code> atual.
         </p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <div className="mt-3 flex gap-2">
           <input
             value={adminToken}
             onChange={(e) => setAdminToken(e.target.value)}
@@ -353,7 +353,7 @@ export function SettingsView() {
                 Token dinâmico do site: {settings.bridgeToken.dynamicConfigured ? settings.bridgeToken.dynamicMasked : "não configurado"}
               </div>
             </div>
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            <div className="mt-4 flex gap-2">
               <input
                 value={bridgeToken}
                 onChange={(e) => setBridgeToken(e.target.value)}

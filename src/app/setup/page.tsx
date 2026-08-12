@@ -7,12 +7,12 @@ const CODE_BLOCK =
 
 export default function SetupPage() {
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
+    <div className="mx-auto max-w-4xl px-6 py-10">
       <Link href="/" className="text-xs text-amber-400 hover:underline">
         ← voltar ao chat
       </Link>
-      <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Setup do Bakers Whisper</h1>
-      <p className="mt-2 text-sm text-slate-400 sm:text-base">
+      <h1 className="mt-2 text-3xl font-bold">Setup do Bakers Whisper</h1>
+      <p className="mt-2 text-slate-400">
         Modo <b>multi-janela</b>: você abre várias sessões do WoW no mesmo PC,
         vê todos os whispers agregados aqui e responde manualmente pelo site.
         Cada resposta é entregue pelo Python na janela do personagem certo.
@@ -24,7 +24,15 @@ export default function SetupPage() {
         >
           📡 Abrir varredura de contas
         </Link>{" "}
-        para ver as janelas do WoW detectadas em tempo real.
+        para ver as janelas do WoW detectadas em tempo real.{" "}
+        <a
+          href="/report"
+          target="_blank"
+          rel="noreferrer"
+          className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
+        >
+          📄 Relatório completo do projeto
+        </a>
       </p>
 
       <div className="mt-8 space-y-8">

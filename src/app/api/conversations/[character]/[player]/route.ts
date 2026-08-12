@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, eq, gt } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -96,30 +96,4 @@ export async function POST(
     .returning();
 
   return NextResponse.json({ message: inserted, warning: realmWarning });
-}
-
-/**
- * DELETE → removes all messages between `character` and `player`.
- */
-export async function DELETE(
-  _request: NextRequest,
-  context: { params: Promise<{ character: string; player: string }> },
-) {
-  const { character: rawChar, player: rawPlayer } = await context.params;
-  const character = decodeURIComponent(rawChar);
-  const player = decodeURIComponent(rawPlayer);
-
-  const result = await db
-    .delete(messages)
-    .where(
-      and(eq(messages.character, character), eq(messages.player, player)),
-    )
-    .returning({ id: messages.id });
-
-  return NextResponse.json({
-    ok: true,
-    deletedCount: result.length,
-    character,
-    player,
-  });
 }

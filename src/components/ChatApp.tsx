@@ -305,38 +305,6 @@ export function ChatApp() {
     }
   }, [newCharacter, newPlayer, conversations]);
 
-  const deleteConversation = useCallback(
-    async (character: string, player: string) => {
-      if (
-        !window.confirm(
-          `Tem certeza que deseja apagar toda a conversa com ${player}?\n\nEssa ação não pode ser desfeita.`,
-        )
-      )
-        return;
-      try {
-        const res = await fetch(
-          `/api/conversations/${encodeURIComponent(character)}/${encodeURIComponent(player)}`,
-          { method: "DELETE" },
-        );
-        if (res.ok) {
-          setConversations((prev) =>
-            prev.filter(
-              (cv) => !(cv.character === character && cv.player === player),
-            ),
-          );
-          if (
-            selected?.character === character &&
-            selected?.player === player
-          ) {
-            setSelected(null);
-            setMessages([]);
-          }
-        }
-      } catch {}
-    },
-    [selected],
-  );
-
   const filteredConversations = useMemo(() => {
     if (characterFilter === ALL) return conversations;
     return conversations.filter((c) => c.character === characterFilter);
@@ -348,15 +316,15 @@ export function ChatApp() {
   );
 
   return (
-    <div className="flex h-dvh min-h-screen w-full flex-col">
-      <header className="flex flex-col gap-4 border-b border-slate-800 bg-slate-900/80 px-4 py-3 backdrop-blur sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
+    <div className="flex h-screen w-full flex-col">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/80 px-6 py-3 backdrop-blur">
+        <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-yellow-500 to-amber-700 font-black text-slate-900 shadow">
             🥐
           </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-bold leading-tight sm:text-lg">Bakers Whisper</h1>
-            <p className="text-[11px] text-slate-400 sm:text-xs">
+          <div>
+            <h1 className="text-lg font-bold leading-tight">Bakers Whisper</h1>
+            <p className="text-xs text-slate-400">
               <span className="mr-2">
                 <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60 align-middle" />{" "}
                 {totalWindowsOnline} janela(s) online
@@ -371,26 +339,24 @@ export function ChatApp() {
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <div className="mr-1 flex items-center gap-2">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                bridgeUp === null
-                  ? "bg-slate-500"
-                  : bridgeUp
-                    ? "bg-emerald-400"
-                    : "bg-rose-500"
-              }`}
-            />
-            <span className="text-slate-400">
-              {bridgeUp === null
-                ? "conectando..."
+        <div className="flex items-center gap-2 text-xs">
+          <span
+            className={`h-2 w-2 rounded-full ${
+              bridgeUp === null
+                ? "bg-slate-500"
                 : bridgeUp
-                  ? "API online"
-                  : "sem conexão"}
-            </span>
-          </div>
-          <div className="relative">
+                  ? "bg-emerald-400"
+                  : "bg-rose-500"
+            }`}
+          />
+          <span className="text-slate-400">
+            {bridgeUp === null
+              ? "conectando..."
+              : bridgeUp
+                ? "API online"
+                : "sem conexão"}
+          </span>
+          <div className="relative ml-4">
             <button
               onClick={() => setShowNotifSettings((s) => !s)}
               className={`rounded border px-3 py-1 transition ${
@@ -403,7 +369,7 @@ export function ChatApp() {
               {notif.prefs.sound ? "🔔" : "🔕"}
             </button>
             {showNotifSettings && (
-              <div className="absolute right-0 top-full z-50 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-2xl">
+              <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-2xl">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
                   Notificações
                 </div>
@@ -488,7 +454,7 @@ export function ChatApp() {
       </header>
 
       {/* Character filter bar */}
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/50 px-3 py-2 text-xs sm:px-4">
+      <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/50 px-4 py-2 text-xs">
         <button
           onClick={() => setCharacterFilter(ALL)}
           className={`whitespace-nowrap rounded-full border px-3 py-1 transition ${
@@ -535,10 +501,10 @@ export function ChatApp() {
         })}
       </div>
 
-      <div className="flex flex-1 flex-col overflow-hidden lg:flex-row">
+      <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="flex min-h-[16rem] w-full flex-none flex-col border-b border-slate-800 bg-slate-900/40 lg:min-h-0 lg:w-96 lg:border-b-0 lg:border-r">
-          <div className="border-b border-slate-800 p-3 sm:p-4">
+        <aside className="flex w-96 flex-col border-r border-slate-800 bg-slate-900/40">
+          <div className="border-b border-slate-800 p-3">
             <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
               Nova conversa
             </div>
@@ -555,7 +521,7 @@ export function ChatApp() {
                   <option key={c.character} value={c.character} />
                 ))}
               </datalist>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="flex gap-2">
                 <input
                   value={newPlayer}
                   onChange={(e) => setNewPlayer(e.target.value)}
@@ -567,7 +533,7 @@ export function ChatApp() {
                 />
                 <button
                   onClick={startNewConversation}
-                  className="rounded bg-amber-600 px-3 py-2 text-sm font-semibold text-slate-900 hover:bg-amber-500 sm:px-4"
+                  className="rounded bg-amber-600 px-3 text-sm font-semibold text-slate-900 hover:bg-amber-500"
                 >
                   +
                 </button>
@@ -583,72 +549,50 @@ export function ChatApp() {
                 Aguarde um whisper ou inicie um novo acima.
               </div>
             )}
-              {filteredConversations.map((c) => {
-                const active =
-                  selected?.character === c.character && selected?.player === c.player;
-                return (
-                  <button
-                    key={`${c.character}::${c.player}`}
-                    onClick={() =>
-                      setSelected({ character: c.character, player: c.player })
-                    }
-                    className={`group relative flex w-full flex-col gap-1 border-b border-slate-800/60 px-4 py-3 text-left transition ${
-                      active
-                        ? "bg-amber-500/10 border-l-2 border-l-amber-500"
-                        : "hover:bg-slate-800/40"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-semibold text-slate-100">
-                        {c.player}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                          {timeAgo(c.lastAt)}
-                        </span>
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void deleteConversation(c.character, c.player);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.stopPropagation();
-                              void deleteConversation(c.character, c.player);
-                            }
-                          }}
-                          title={`Apagar conversa com ${c.player}`}
-                          className="hidden rounded p-1 text-rose-400/0 transition hover:bg-rose-500/20 hover:text-rose-400 group-hover:inline-flex"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${charColor(c.character)}`}
-                      >
-                        {c.character}
-                      </span>
-                      <span className="truncate text-xs text-slate-400">
-                        {c.lastDirection === "outgoing" ? "→ " : ""}
-                        {c.lastBody}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
+            {filteredConversations.map((c) => {
+              const active =
+                selected?.character === c.character && selected?.player === c.player;
+              return (
+                <button
+                  key={`${c.character}::${c.player}`}
+                  onClick={() =>
+                    setSelected({ character: c.character, player: c.player })
+                  }
+                  className={`flex w-full flex-col gap-1 border-b border-slate-800/60 px-4 py-3 text-left transition ${
+                    active
+                      ? "bg-amber-500/10 border-l-2 border-l-amber-500"
+                      : "hover:bg-slate-800/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-semibold text-slate-100">
+                      {c.player}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {timeAgo(c.lastAt)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${charColor(c.character)}`}
+                    >
+                      {c.character}
+                    </span>
+                    <span className="truncate text-xs text-slate-400">
+                      {c.lastDirection === "outgoing" ? "→ " : ""}
+                      {c.lastBody}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </aside>
 
         {/* Message pane */}
-        <main className="flex min-h-0 flex-1 flex-col bg-[radial-gradient(circle_at_top,rgba(120,80,20,0.15),transparent_60%)]">
+        <main className="flex flex-1 flex-col bg-[radial-gradient(circle_at_top,rgba(120,80,20,0.15),transparent_60%)]">
           {!selected ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center text-slate-500">
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-slate-500">
               <div className="text-6xl">💬</div>
               <div>Selecione uma conversa à esquerda</div>
               <div className="text-xs">
@@ -657,62 +601,48 @@ export function ChatApp() {
             </div>
           ) : (
             <>
-              <div className="flex items-start justify-between gap-3 border-b border-slate-800 px-4 py-3 sm:px-6">
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm text-slate-400">
-                    Whisper com{" "}
-                    <span className="break-all font-bold text-amber-300 sm:break-normal">{selected.player}</span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                    <span className="text-slate-500">via</span>
+              <div className="border-b border-slate-800 px-6 py-3">
+                <div className="text-sm text-slate-400">
+                  Whisper com{" "}
+                  <span className="font-bold text-amber-300">{selected.player}</span>
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs">
+                  <span className="text-slate-500">via</span>
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${charColor(selected.character)}`}
+                  >
                     <span
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${charColor(selected.character)}`}
-                    >
-                      <span
-                        className={`h-2 w-2 rounded-full ${
-                          statusMap[selected.character]?.online
-                            ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60"
-                            : "bg-slate-600"
-                        }`}
-                      />
-                      {selected.character}
+                      className={`h-2 w-2 rounded-full ${
+                        statusMap[selected.character]?.online
+                          ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60"
+                          : "bg-slate-600"
+                      }`}
+                    />
+                    {selected.character}
+                  </span>
+                  {statusMap[selected.character]?.online ? (
+                    <span className="text-emerald-400">
+                      janela detectada · pronto para enviar
                     </span>
-                    {statusMap[selected.character]?.online ? (
-                      <span className="text-emerald-400">
-                        janela detectada · pronto para enviar
-                      </span>
-                    ) : (
-                      <span className="text-rose-400">
-                        janela não detectada — o envio pode falhar
-                      </span>
-                    )}
-                  </div>
-                  {realmMismatch && (
-                    <div className="mt-2 rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                      ⚠ <b>Servidor diferente:</b> seu personagem está em{" "}
-                      <b>{realmMismatch.charRealm}</b> mas o destinatário está em{" "}
-                      <b>{realmMismatch.playerRealm}</b>. A mensagem pode falhar
-                      se os servidores não forem conectados.
-                    </div>
+                  ) : (
+                    <span className="text-rose-400">
+                      janela não detectada — o envio pode falhar
+                    </span>
                   )}
                 </div>
-                <button
-                  onClick={() =>
-                    void deleteConversation(
-                      selected.character,
-                      selected.player,
-                    )
-                  }
-                  title={`Apagar conversa com ${selected.player}`}
-                  className="shrink-0 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-400 hover:bg-rose-500/20 hover:text-rose-300"
-                >
-                  🗑 Apagar
-                </button>
+                {realmMismatch && (
+                  <div className="mt-2 rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                    ⚠ <b>Servidor diferente:</b> seu personagem está em{" "}
+                    <b>{realmMismatch.charRealm}</b> mas o destinatário está em{" "}
+                    <b>{realmMismatch.playerRealm}</b>. A mensagem pode falhar
+                    se os servidores não forem conectados.
+                  </div>
+                )}
               </div>
 
               <div
                 ref={scrollRef}
-                className="flex-1 space-y-3 overflow-y-auto px-3 py-4 sm:px-6"
+                className="flex-1 space-y-3 overflow-y-auto px-6 py-4"
               >
                 {messages.length === 0 && (
                   <div className="pt-12 text-center text-sm text-slate-500">
@@ -729,7 +659,7 @@ export function ChatApp() {
                       className={`flex ${mine ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-[85vw] sm:max-w-lg rounded-2xl px-4 py-2 shadow ${
+                        className={`max-w-lg rounded-2xl px-4 py-2 shadow ${
                           mine
                             ? "bg-amber-600 text-slate-950"
                             : "bg-slate-800 text-slate-100"
@@ -767,7 +697,7 @@ export function ChatApp() {
               </div>
 
               <div className="border-t border-slate-800 bg-slate-900/60 p-3">
-                <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-end">
+                <div className="flex items-end gap-2">
                   <textarea
                     value={draft}
                     onChange={(e) => setDraft(e.target.value.slice(0, 255))}
@@ -784,16 +714,17 @@ export function ChatApp() {
                   <button
                     onClick={() => void sendReply()}
                     disabled={sending || !draft.trim()}
-                    className="rounded-lg bg-amber-500 px-5 py-2 text-sm font-bold text-slate-950 shadow disabled:opacity-40 hover:bg-amber-400 sm:self-auto"
+                    className="rounded-lg bg-amber-500 px-5 py-2 text-sm font-bold text-slate-950 shadow disabled:opacity-40 hover:bg-amber-400"
                   >
                     {sending ? "..." : "Enviar"}
                   </button>
                 </div>
-                <div className="mt-1 flex flex-col gap-1 text-[10px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="break-words">
-                    O Python bridge focará a janela <b>{selected.character}</b> e digitará <code>/w {selected.player}</code> ...
+                <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+                  <span>
+                    O Python bridge focará a janela{" "}
+                    <b>{selected.character}</b> e digitará <code>/w {selected.player}</code> ...
                   </span>
-                  <span className="shrink-0 self-end sm:self-auto">{draft.length}/255</span>
+                  <span>{draft.length}/255</span>
                 </div>
               </div>
             </>
