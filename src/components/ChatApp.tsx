@@ -41,7 +41,7 @@ type Message = {
   sentAt: string | null;
 };
 
-const POLL_MS = 2000;
+const POLL_MS = 1000; // Polling mais rápido para tempo real
 const ALL = "__ALL__";
 
 function timeAgo(iso: string): string {
@@ -111,6 +111,7 @@ export function ChatApp() {
   const [sending, setSending] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Record<number, boolean>>({});
   const [clearingConversation, setClearingConversation] = useState(false);
+  const [syncingHistory, setSyncingHistory] = useState(false);
   const [newCharacter, setNewCharacter] = useState("");
   const [newPlayer, setNewPlayer] = useState("");
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
@@ -155,6 +156,7 @@ export function ChatApp() {
     }
   }, []);
 
+  // Fetch unidirectional (original)
   const fetchMessages = useCallback(
     async (character: string, player: string) => {
       const res = await fetch(
@@ -164,12 +166,37 @@ export function ChatApp() {
       const data = (await res.json()) as { messages: Message[] };
       const msgs = data.messages ?? [];
       setMessages(msgs);
-      // Track the highest message id we've seen in this conversation
       for (const m of msgs) {
         if (m.id > maxMessageIdRef.current) maxMessageIdRef.current = m.id;
       }
     },
     [],
+  );
+
+  // Fetch BIDIRECTIONAL - mostra mensagens de ambos os lados (A→B e B→A)
+  const fetchBidirectionalMessages = useCallback(
+    async (charA: string, charB: string) => {
+      try {
+        const res = await fetch(
+          `/api/conversations/bidirectional?charA=${encodeURIComponent(charA)}&charB=${encodeURIComponent(charB)}`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) {
+          // Fallback para unidirecional se API der erro
+          return fetchMessages(charA, charB);
+        }
+        const data = (await res.json()) as { messages: Message[] };
+        const msgs = data.messages ?? [];
+        setMessages(msgs);
+        for (const m of msgs) {
+          if (m.id > maxMessageIdRef.current) maxMessageIdRef.current = m.id;
+        }
+      } catch {
+        // Fallback
+        fetchMessages(charA, charB);
+      }
+    },
+    [fetchMessages],
   );
 
   useEffect(() => {
@@ -224,11 +251,8 @@ export function ChatApp() {
               sel.player === m.player;
 
             if (isCurrentChat) {
-              // Auto-refresh the messages in the currently-open conversation
-              // so the new whisper appears instantly without waiting for the
-              // regular /api/conversations polling cycle.
-              await fetchMessages(m.character, m.player);
-              // Scroll to bottom
+              // Auto-refresh usando bidirecional para mostrar mensagens de ambos os lados
+              await fetchBidirectionalMessages(m.character, m.player);
               setTimeout(() => {
                 if (scrollRef.current) {
                   scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -267,13 +291,15 @@ export function ChatApp() {
       delete next[key];
       return next;
     });
-    void fetchMessages(selected.character, selected.player);
+    // Usar API bidirecional para mostrar conversa completa (A→B e B→A)
+    void fetchBidirectionalMessages(selected.character, selected.player);
+    // Polling mais rápido quando conversa está aberta (500ms)
     const id = setInterval(
-      () => void fetchMessages(selected.character, selected.player),
-      POLL_MS,
+      () => void fetchBidirectionalMessages(selected.character, selected.player),
+      500,
     );
     return () => clearInterval(id);
-  }, [selected, fetchMessages]);
+  }, [selected, fetchBidirectionalMessages]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -372,6 +398,28 @@ export function ChatApp() {
       void refreshTop();
     } finally {
       setClearingConversation(false);
+    }
+  }, [selected, refreshTop]);
+
+  const syncHistory = useCallback(async () => {
+    if (!selected) return;
+    setSyncingHistory(true);
+    try {
+      const res = await fetch(
+        `/api/sync?character=${encodeURIComponent(selected.character)}&player=${encodeURIComponent(selected.player)}&limit=50`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) {
+        alert("Erro ao sincronizar histórico");
+        return;
+      }
+      const data = (await res.json()) as { messages: Message[] };
+      if (data.messages.length > 0) {
+        setMessages(data.messages);
+        void refreshTop();
+      }
+    } finally {
+      setSyncingHistory(false);
     }
   }, [selected, refreshTop]);
 
@@ -792,6 +840,14 @@ export function ChatApp() {
                       </div>
                     </div>
                   </div>
+                  <button
+                    onClick={() => void syncHistory()}
+                    disabled={syncingHistory}
+                    className="shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/50 disabled:text-slate-500 sm:px-3 sm:text-xs"
+                    title="Sincronizar histórico do arquivo de log"
+                  >
+                    {syncingHistory ? "🔄 Sincronizando..." : "🔄 Sincronizar"}
+                  </button>
                   <button
                     onClick={() => void clearConversation()}
                     disabled={clearingConversation || messages.length === 0}
