@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
   // enforce auth on bridge-specific header presence.
   const authHeader = request.headers.get("authorization");
   if (authHeader) {
-    const guard = checkBridgeAuth(request);
+    const guard = await checkBridgeAuth(request);
     if (!guard.ok) return guard.response;
   }
 

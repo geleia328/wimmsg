@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.4"
 # =============================================================================
 
 import hashlib
@@ -976,7 +976,7 @@ class App:
             fg=ACCENT,
             font=("Segoe UI", 9, "bold"),
             padx=12,
-            pady=(8, 2),
+            pady=4,
         ).grid(row=0, column=0, sticky="w")
 
         tk.Label(
@@ -1019,7 +1019,7 @@ class App:
         )
         token_value = "" if self.config.server.token == "REPLACE_WITH_YOUR_TOKEN" else self.config.server.token
         self.token_entry.insert(0, token_value)
-        self.token_entry.grid(row=2, column=1, sticky="we", padx=(0, 8), pady=(2, 8))
+        self.token_entry.grid(row=2, column=1, sticky="we", padx=(0, 8), pady=4)
 
         server_box.grid_columnconfigure(1, weight=1)
         tk.Button(

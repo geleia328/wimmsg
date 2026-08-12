@@ -120,3 +120,21 @@ export const gseState = pgTable("gse_state", {
 
 export type GseState = typeof gseState.$inferSelect;
 export type NewGseState = typeof gseState.$inferInsert;
+
+/**
+ * Generic app settings edited from the admin settings page.
+ *
+ * Important: DATABASE_URL is intentionally NOT stored here. The app needs the
+ * database connection before it can read any table, so database credentials
+ * must remain as an environment variable in Vercel/hosting provider.
+ */
+export const appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 128 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
+export type NewAppSetting = typeof appSettings.$inferInsert;

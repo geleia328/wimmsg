@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  * routed to.
  */
 export async function GET(request: NextRequest) {
-  const guard = checkBridgeAuth(request);
+  const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
 
   const pending = await db

@@ -23,7 +23,7 @@ type IncomingPayload = {
  * so re-posting is idempotent.
  */
 export async function POST(request: NextRequest) {
-  const guard = checkBridgeAuth(request);
+  const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
 
   let payload: IncomingPayload;

@@ -439,6 +439,12 @@ export function ChatApp() {
             ⚙ GSE
           </a>
           <a
+            href="/settings"
+            className="rounded border border-sky-500/50 bg-sky-500/10 px-3 py-1 text-sky-300 hover:bg-sky-500/20"
+          >
+            🔐 Config
+          </a>
+          <a
             href="/setup"
             className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
           >

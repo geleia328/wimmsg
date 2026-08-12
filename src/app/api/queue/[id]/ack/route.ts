@@ -17,7 +17,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const guard = checkBridgeAuth(request);
+  const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
 
   const { id: idStr } = await context.params;
