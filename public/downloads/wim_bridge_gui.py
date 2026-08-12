@@ -528,6 +528,20 @@ def paste_ctrl_v() -> bool:
         return False
 
 
+def press_ctrl_a() -> None:
+    """Ctrl+A — select everything in the focused text field (clears leftover
+    text from the chat box before we paste the new command)."""
+    try:
+        if HAS_PYDIRECTINPUT:
+            pydirectinput.keyDown("ctrl")
+            pydirectinput.press("a")
+            pydirectinput.keyUp("ctrl")
+        else:
+            pyautogui.hotkey("ctrl", "a")
+    except Exception:
+        pass
+
+
 def press_key(name: str) -> None:
     """Press a single key with the active input library."""
     if HAS_PYDIRECTINPUT:
@@ -790,12 +804,12 @@ _send_lock = threading.Lock()
 DEFAULT_CONTROLS = {
     "bridgeReaderEnabled": True,
     "gseMasterEnabled": False,
-    "whisperFocusDelayMs": 800,
+    "whisperFocusDelayMs": 1000,
     "whisperAfterSendDelayMs": 800,
-    "whisperChatOpenDelayMs": 600,
-    "whisperKeystrokeDelayMs": 80,
-    "whisperChatSendDelayMs": 500,
-    "whisperCloseChatEnabled": True,
+    "whisperChatOpenDelayMs": 2000,
+    "whisperKeystrokeDelayMs": 100,
+    "whisperChatSendDelayMs": 800,
+    "whisperCloseChatEnabled": False,
     "whisperChatCloseDelayMs": 400,
     "queuePollMs": 1500,
 }
@@ -1184,19 +1198,26 @@ class BridgeEngine:
         try:
             with _send_lock:
                 controls = self._get_controls()
+                # PISOS de segurança: cada etapa espera no MÍNIMO o valor
+                # abaixo antes de mandar a próxima tecla. O jogo não recebe
+                # input novo antes de terminar a ação anterior — mensagem
+                # "picada" e chat bugando eram teclas rápidas demais.
                 focus_delay = max(
-                    0.3, int(controls.get("whisperFocusDelayMs", 800)) / 1000.0
+                    0.5, int(controls.get("whisperFocusDelayMs", 1000)) / 1000.0
                 )
                 open_delay = max(
-                    0.3, int(controls.get("whisperChatOpenDelayMs", 600)) / 1000.0
+                    0.5, int(controls.get("whisperChatOpenDelayMs", 2000)) / 1000.0
                 )
                 keystroke_delay = max(
-                    0.02, int(controls.get("whisperKeystrokeDelayMs", 80)) / 1000.0
+                    0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
                 )
                 send_delay = max(
-                    0.3, int(controls.get("whisperChatSendDelayMs", 500)) / 1000.0
+                    0.4, int(controls.get("whisperChatSendDelayMs", 800)) / 1000.0
                 )
-                close_enabled = bool(controls.get("whisperCloseChatEnabled", True))
+                # ATENÇÃO: o WoW JÁ fecha o campo de chat sozinho depois de
+                # enviar. Pressionar ESC com o chat fechado ABRE O MENU do
+                # jogo — por isso o default é desligado.
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", False))
                 close_delay = max(
                     0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
                 )
@@ -1207,27 +1228,37 @@ class BridgeEngine:
                     raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
                 # 1) Espera a janela receber o foco de verdade.
                 time.sleep(focus_delay)
-                press_key("enter")  # abre o chat
-                # 2) Espera o campo de chat abrir completamente.
+                press_key("enter")  # abre o campo de chat
+                # 2) Espera o campo de chat abrir COMPLETAMENTE antes de
+                #    escrever qualquer coisa (este é o delay que estava
+                #    rápido demais — o início da mensagem era engolido).
                 time.sleep(open_delay)
-                # Atomic paste via clipboard.
+                # 3) Limpa qualquer texto que tenha ficado no campo (ex.: uma
+                #    mensagem anterior que falhou) para o comando nunca se
+                #    misturar com restos.
+                press_ctrl_a()
+                time.sleep(0.25)
+                # 4) Atomic paste via clipboard: o comando inteiro chega de
+                #    uma vez.
                 pasted = False
                 if HAS_WIN32:
                     pasted = set_clipboard_text(command) and paste_ctrl_v()
                 if not pasted:
-                    if HAS_PYAUTOGUI:
-                        pyautogui.typewrite(command, interval=keystroke_delay)
-                    else:
+                    # Fallback: digita com pausa generosa entre teclas.
+                    if HAS_PYDIRECTINPUT:
                         for ch in command:
                             pydirectinput.write(ch, interval=keystroke_delay)
-                # 3) Espera o jogo processar o texto colado antes do Enter.
+                    else:
+                        pyautogui.typewrite(command, interval=keystroke_delay)
+                # 5) Espera o jogo processar o texto inteiro antes do Enter.
                 time.sleep(send_delay)
-                press_key("enter")
+                press_key("enter")  # envia o whisper
                 if close_enabled:
-                    # 4) Espera a ação concluir antes de fechar com Escape.
+                    # Somente se o usuário ligar explicitamente (alguns setups
+                    # mantêm o chat aberto após enviar).
                     time.sleep(close_delay)
                     press_key("esc")
-                # 5) Estabilidade antes de liberar o GSE.
+                # 6) Estabilidade antes de liberar o GSE de volta.
                 time.sleep(after_delay)
         finally:
             for s in paused_spammers:

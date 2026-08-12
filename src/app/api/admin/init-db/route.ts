@@ -95,12 +95,12 @@ export async function POST(request: NextRequest) {
       INSERT INTO app_settings (key, value) VALUES
         ('bridge_reader_enabled', 'yes'),
         ('gse_master_enabled', 'no'),
-        ('whisper_focus_delay_ms', '800'),
+        ('whisper_focus_delay_ms', '1000'),
         ('whisper_after_send_delay_ms', '800'),
-        ('whisper_chat_open_delay_ms', '600'),
-        ('whisper_keystroke_delay_ms', '80'),
-        ('whisper_chat_send_delay_ms', '500'),
-        ('whisper_close_chat_enabled', 'yes'),
+        ('whisper_chat_open_delay_ms', '2000'),
+        ('whisper_keystroke_delay_ms', '100'),
+        ('whisper_chat_send_delay_ms', '800'),
+        ('whisper_close_chat_enabled', 'no'),
         ('whisper_chat_close_delay_ms', '400'),
         ('queue_poll_ms', '1500')
       ON CONFLICT (key) DO NOTHING

@@ -36,9 +36,9 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     gseMasterEnabled: get("gse_master_enabled") === "yes",
     whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 200, 10000),
     whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 200, 10000),
-    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 200, 5000),
-    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 20, 1000),
-    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 200, 5000),
+    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 500, 10000),
+    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 50, 1000),
+    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 300, 10000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
     whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 200, 5000),
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
@@ -107,19 +107,19 @@ export async function POST(request: NextRequest) {
   if (typeof payload.whisperChatOpenDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_open_delay_ms",
-      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatOpenDelayMs)))),
+      value: String(Math.max(500, Math.min(10000, Math.floor(payload.whisperChatOpenDelayMs)))),
     });
   }
   if (typeof payload.whisperKeystrokeDelayMs === "number") {
     pairs.push({
       key: "whisper_keystroke_delay_ms",
-      value: String(Math.max(20, Math.min(1000, Math.floor(payload.whisperKeystrokeDelayMs)))),
+      value: String(Math.max(50, Math.min(1000, Math.floor(payload.whisperKeystrokeDelayMs)))),
     });
   }
   if (typeof payload.whisperChatSendDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_send_delay_ms",
-      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatSendDelayMs)))),
+      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperChatSendDelayMs)))),
     });
   }
   if (typeof payload.whisperCloseChatEnabled === "boolean") {

@@ -41,21 +41,21 @@ export function GseView() {
   const [controls, setControls] = useState<Controls>({
     bridgeReaderEnabled: true,
     gseMasterEnabled: false,
-    whisperFocusDelayMs: 800,
+    whisperFocusDelayMs: 1000,
     whisperAfterSendDelayMs: 800,
-    whisperChatOpenDelayMs: 600,
-    whisperKeystrokeDelayMs: 80,
-    whisperChatSendDelayMs: 500,
-    whisperCloseChatEnabled: true,
+    whisperChatOpenDelayMs: 2000,
+    whisperKeystrokeDelayMs: 100,
+    whisperChatSendDelayMs: 800,
+    whisperCloseChatEnabled: false,
     whisperChatCloseDelayMs: 400,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
-    whisperFocusDelayMs: "800",
+    whisperFocusDelayMs: "1000",
     whisperAfterSendDelayMs: "800",
-    whisperChatOpenDelayMs: "600",
-    whisperKeystrokeDelayMs: "80",
-    whisperChatSendDelayMs: "500",
+    whisperChatOpenDelayMs: "2000",
+    whisperKeystrokeDelayMs: "100",
+    whisperChatSendDelayMs: "800",
     whisperChatCloseDelayMs: "400",
     queuePollMs: "1500",
   });
@@ -417,13 +417,13 @@ export function GseView() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="font-bold text-slate-100">
-                  Fechar chat do jogo após enviar (Escape)
+                  Pressionar ESC para fechar o chat após enviar
                 </div>
                 <div className="text-xs text-slate-500">
-                  Fecha o campo de chat depois de cada whisper enviado para não
-                  atrapalhar o GSE nem outras janelas. A próxima mensagem da
-                  fila reabre o chat sozinha — você pode responder qualquer
-                  pessoa depois, mesmo com o chat fechado.
+                  ⚠ Deixe <b>DESLIGADO</b> (padrão): o WoW já fecha o campo de
+                  chat sozinho depois de enviar — e pressionar ESC com o chat
+                  fechado ABRE O MENU do jogo (é isso que estava bugando). Só
+                  ligue se o seu WoW mantiver o chat aberto após enviar.
                 </div>
               </div>
               <button
@@ -450,8 +450,8 @@ export function GseView() {
               <span className="ml-1 text-slate-600">(abrir /w)</span>
               <input
                 type="number"
-                min={200}
-                max={5000}
+                min={500}
+                max={10000}
                 step={100}
                 value={delayDraft.whisperChatOpenDelayMs}
                 onChange={(e) =>
@@ -459,6 +459,10 @@ export function GseView() {
                 }
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera depois do Enter para o campo abrir 100% antes de
+                escrever — se a mensagem chega picada, AUMENTE este valor
+              </span>
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Delay de foco antes de abrir o chat
@@ -476,12 +480,12 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Entre cada tecla digitada
-              <span className="ml-1 text-slate-600">(typing)</span>
+              <span className="ml-1 text-slate-600">(fallback, sem colar)</span>
               <input
                 type="number"
-                min={20}
+                min={50}
                 max={1000}
-                step={5}
+                step={10}
                 inputMode="numeric"
                 value={delayDraft.whisperKeystrokeDelayMs}
                 onChange={(e) =>
@@ -492,11 +496,11 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Enviar mensagem (Enter)
-              <span className="ml-1 text-slate-600">(após colar)</span>
+              <span className="ml-1 text-slate-600">(após escrever)</span>
               <input
                 type="number"
-                min={200}
-                max={5000}
+                min={300}
+                max={10000}
                 step={100}
                 value={delayDraft.whisperChatSendDelayMs}
                 onChange={(e) =>

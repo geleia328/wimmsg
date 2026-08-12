@@ -66,6 +66,12 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - Sent-history persistido (`%APPDATA%/BakersWhisper/sent_history.json`): durante replay, [W To] de mensagens que o PRÓPRIO bridge enviou são pulados (site já tem essas linhas do ack da fila).
     - `_canonical_char` normaliza o OWN do addon (case-insensitive) — conversas não se dividem por variação de maiúsculas/minúsculas.
     - `_type_command` refatorado: mesma rotina segura (foco→Enter→paste→Enter→ESC) usada para whispers E para o dump.
+14. ✅ Envio lento e seguro v1.1.6 (fim da mensagem picada e do jogo bugando):
+    - CAUSA do "jogo buga": o bridge pressionava ESC após enviar, mas o WoW JÁ fecha o campo de chat sozinho — ESC com chat fechado ABRE O MENU do jogo. Agora `whisperCloseChatEnabled` é default OFF (toggle com aviso no site).
+    - Nova sequência do `_type_command`: foco (1000ms) → Enter → **2000ms esperando o chat abrir 100%** → Ctrl+A (limpa texto residual) → espera 250ms → cola o comando inteiro (clipboard) → **800ms** antes do Enter de envio → pós-envio 800ms.
+    - Pisos no bridge: foco ≥0.5s, abrir chat ≥0.5s, enviar ≥0.4s, typing ≥0.05s/tecla — impossível digitar antes do campo estar pronto.
+    - Fallback de digitação prefere pydirectinput (melhor para jogos) com 100ms/tecla.
+    - Site: label explicativo "se a mensagem chega picada, AUMENTE este valor"; faixas até 10000ms para abrir/enviar/foco/pós.
 
 **Relatório completo (cole aqui):**
 
