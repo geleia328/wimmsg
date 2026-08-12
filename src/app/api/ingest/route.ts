@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
+import { getKnownOwnCharacters } from "@/lib/ownCharacters";
 import { checkBridgeAuth } from "@/lib/auth";
-import { sql } from "drizzle-orm";
+import { and, eq, gt, like, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,23 +15,19 @@ type IncomingPayload = {
     player: string;
     body: string;
     receivedAt?: string;
-    /**
-     * The bridge posts BOTH sides of the chat:
-     *  - "incoming" (default): a whisper RECEIVED in this window
-     *    (from the addon echo or the native `[W From]` chat log line).
-     *  - "outgoing": a whisper SENT from this window, e.g. typed in-game and
-     *    captured from the native `[W To]` chat log line. This makes sure
-     *    replies typed inside WoW are never lost and show up in the site.
-     */
+    /** incoming = received in the WoW window; outgoing = typed in WoW. */
     direction?: "incoming" | "outgoing";
     status?: string;
   }>;
 };
 
 /**
- * The Python bridge posts newly-seen chat lines here. `character` identifies
- * WHICH of your WoW windows the message belongs to. We upsert by external_id
- * so re-posting is idempotent.
+ * Bridge ingestion for both directions of the game chat.
+ *
+ * For outgoing lines typed directly in WoW, if the recipient is another known
+ * own character, we immediately create the opposite incoming side too. This
+ * makes two of the user's WoW windows behave like one normal messenger thread
+ * even before the recipient's chat log gets tailed.
  */
 export async function POST(request: NextRequest) {
   const guard = await checkBridgeAuth(request);
@@ -60,7 +57,7 @@ export async function POST(request: NextRequest) {
       return {
         character: m.character.trim() || "unknown",
         player: m.player.trim(),
-        body: m.body,
+        body: m.body.trim(),
         direction: isOutgoing ? ("outgoing" as const) : ("incoming" as const),
         status: isOutgoing
           ? ((m.status ?? "sent") as "sent" | "failed")
@@ -76,16 +73,86 @@ export async function POST(request: NextRequest) {
     .filter((r) => r.player.length > 0 && r.body.length > 0);
 
   if (rows.length === 0) {
-    return NextResponse.json({ inserted: 0 });
+    return NextResponse.json({ inserted: 0, received: 0 });
+  }
+
+  // A site-originated self-character message is mirrored before the bridge
+  // sees the game echo. Remove the later incoming echo from this request.
+  const mirrorSince = new Date(Date.now() - 120_000);
+  const mirrors = await db
+    .select({
+      character: messages.character,
+      player: messages.player,
+      body: messages.body,
+    })
+    .from(messages)
+    .where(
+      and(
+        like(messages.externalId, "mirror-%"),
+        eq(messages.direction, "incoming"),
+        gt(messages.createdAt, mirrorSince),
+      ),
+    );
+  const mirrorSet = new Set(
+    mirrors.map(
+      (m) =>
+        `${m.character.toLowerCase()}|${m.player.toLowerCase()}|${m.body}`,
+    ),
+  );
+
+  const filteredRows = rows.filter(
+    (r) =>
+      !(
+        r.direction === "incoming" &&
+        mirrorSet.has(
+          `${r.character.toLowerCase()}|${r.player.toLowerCase()}|${r.body}`,
+        )
+      ),
+  );
+
+  // Direct game → game self-chat: outgoing from A to B also appears incoming
+  // in B's conversation with A immediately. We intentionally use the helper
+  // without `matched=yes`; a bridge rescan can temporarily clear that flag.
+  let ownCharacters = new Set<string>();
+  try {
+    ownCharacters = await getKnownOwnCharacters();
+  } catch {
+    /* regular third-party ingestion still works if discovery is unavailable */
+  }
+
+  const mirroredRows = filteredRows
+    .filter(
+      (r) =>
+        r.direction === "outgoing" &&
+        r.player.toLowerCase() !== r.character.toLowerCase() &&
+        ownCharacters.has(r.player.toLowerCase()),
+    )
+    .map((r) => ({
+      character: r.player,
+      player: r.character,
+      body: r.body,
+      direction: "incoming" as const,
+      status: "received" as const,
+      externalId: `mirror-${r.externalId}`,
+      createdAt: r.createdAt,
+    }));
+
+  const allRows = [...filteredRows, ...mirroredRows];
+  if (allRows.length === 0) {
+    return NextResponse.json({ inserted: 0, received: rows.length });
   }
 
   const inserted = await db
     .insert(messages)
-    .values(rows)
+    .values(allRows)
     .onConflictDoNothing({ target: messages.externalId })
     .returning({ id: messages.id });
 
-  return NextResponse.json({ inserted: inserted.length, received: rows.length });
+  return NextResponse.json({
+    inserted: inserted.length,
+    received: rows.length,
+    mirrored: mirroredRows.length,
+  });
 }
 
 export async function GET() {
