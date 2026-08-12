@@ -30,6 +30,12 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
      * GseView: `min-h-dvh`, tabela scroll hint, grid timing responsivo `sm:grid-cols-2 lg:grid-cols-3`.
      * SettingsView: sections com padding responsivo `p-4 sm:p-5`, títulos `text-base sm:text-lg`.
      * Download/Setup: paddings e títulos responsivos.
+9. ✅ Bug fixes GSE v1.1.1:
+   - `charDirtyRef`: o poll de 2s não sobrescreve mais edições não salvas de keybind/intervalo dos personagens (antes o `setStates(map)` do refresh apagava os rascunhos).
+   - `updateControls` agora retorna boolean; `saveDelays` só limpa o flag dirty em caso de sucesso (antes um POST 401/erro limpava o dirty e o poll revertia os valores).
+   - Alertas claros para 401 (instruções de token admin em /settings) e erros de conexão, com valores preservados.
+   - `saveAllCharChanges` checa `res.ok` por personagem, limpa o dirty ANTES do refresh para sincronizar os valores salvos.
+   - Campo typing com `step={1}` e `inputMode="numeric"` para digitação fácil no mobile.
 
 **Relatório completo (cole aqui):**
 

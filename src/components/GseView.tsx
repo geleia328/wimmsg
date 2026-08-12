@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type WindowStatus = {
   character: string;
@@ -56,6 +56,9 @@ export function GseView() {
   });
   const [delayDirty, setDelayDirty] = useState(false);
   const [charDirty, setCharDirty] = useState<Record<string, boolean>>({});
+  // Sync copy of charDirty so the polling refresh can read it without
+  // recreating the interval (avoids overwriting unsaved character edits).
+  const charDirtyRef = useRef<Record<string, boolean>>({});
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [savingChars, setSavingChars] = useState(false);
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
@@ -73,7 +76,15 @@ export function GseView() {
       for (const s of (g as { states: GseRow[] }).states ?? []) {
         map[s.character] = s;
       }
-      setStates(map);
+      // Merge server states but KEEP local unsaved edits (dirty characters)
+      // so the 2s polling never overwrites what the user is typing.
+      setStates((prev) => {
+        const merged: Record<string, GseRow> = { ...map };
+        for (const c of Object.keys(charDirtyRef.current)) {
+          if (charDirtyRef.current[c] && prev[c]) merged[c] = prev[c];
+        }
+        return merged;
+      });
       const nextControls = (c as { controls: Controls }).controls;
       setControls(nextControls);
       if (!delayDirty) {
@@ -136,10 +147,10 @@ export function GseView() {
     setSavingChars(true);
     try {
       for (const c of characters) {
-        if (!charDirty[c]) continue;
+        if (!charDirtyRef.current[c]) continue;
         const st = states[c];
         if (!st) continue;
-        await fetch(`/api/gse/${encodeURIComponent(c)}`, {
+        const res = await fetch(`/api/gse/${encodeURIComponent(c)}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -147,13 +158,22 @@ export function GseView() {
             intervalMs: st.intervalMs,
           }),
         });
+        if (!res.ok) {
+          alert(
+            `Falha ao salvar ${c}. Verifique sua conexão e tente novamente.\n\n` +
+              "As alterações não salvas foram preservadas.",
+          );
+          return;
+        }
       }
+      // Clear dirty BEFORE refreshing so the poll syncs the saved values.
+      charDirtyRef.current = {};
       setCharDirty({});
       await refresh();
     } finally {
       setSavingChars(false);
     }
-  }, [characters, states, charDirty, refresh]);
+  }, [characters, states, refresh]);
 
   const removeCharacter = useCallback(
     async (character: string) => {
@@ -164,9 +184,18 @@ export function GseView() {
 
       setRemoving((r) => ({ ...r, [character]: true }));
       try {
-        await fetch(`/api/gse/${encodeURIComponent(character)}`, {
+        const res = await fetch(`/api/gse/${encodeURIComponent(character)}`, {
           method: "DELETE",
         });
+        if (!res.ok) {
+          alert("Falha ao remover o personagem. Tente novamente.");
+          return;
+        }
+        // Drop any pending local edits for this character before resyncing.
+        const nd = { ...charDirtyRef.current };
+        delete nd[character];
+        charDirtyRef.current = nd;
+        setCharDirty(nd);
         await refresh();
       } finally {
         setRemoving((r) => {
@@ -192,21 +221,35 @@ export function GseView() {
   );
 
   const updateControls = useCallback(
-    async (patch: Partial<Controls>) => {
+    async (patch: Partial<Controls>): Promise<boolean> => {
       const adminToken = localStorage.getItem("bakers-whisper:admin-token") ?? "";
-      const res = await fetch("/api/control", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-admin-token": adminToken,
-        },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) {
-        alert("Abra /settings e informe o token admin antes de alterar controles.");
-        return;
+      try {
+        const res = await fetch("/api/control", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-admin-token": adminToken,
+          },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) {
+          if (res.status === 401) {
+            alert(
+              "Não foi possível salvar: token admin inválido ou não configurado.\n\n" +
+                "Abra 🔐 Config (/settings), cole o BRIDGE_TOKEN (ou ADMIN_TOKEN) no campo \"Acesso admin\" e clique em Entrar.\n" +
+                "Depois volte aqui e clique em salvar novamente. Seus valores ficaram preservados.",
+            );
+          } else {
+            alert("Erro ao salvar os controles. Tente novamente.");
+          }
+          return false;
+        }
+        await refresh();
+        return true;
+      } catch {
+        alert("Sem conexão com o servidor. Verifique sua internet e tente novamente.");
+        return false;
       }
-      await refresh();
     },
     [refresh],
   );
@@ -231,8 +274,10 @@ export function GseView() {
       alert("Preencha todos os delays com números válidos.");
       return;
     }
-    await updateControls(patch);
-    setDelayDirty(false);
+    // Only clear the dirty flag when the save actually succeeded — otherwise
+    // the next poll would overwrite the user's edits with old server values.
+    const ok = await updateControls(patch);
+    if (ok) setDelayDirty(false);
   }, [delayDraft, updateControls]);
 
   function setDraftField(key: keyof typeof delayDraft, value: string) {
@@ -258,6 +303,7 @@ export function GseView() {
         [field]: field === "intervalMs" ? Number(value) : value,
       },
     }));
+    charDirtyRef.current = { ...charDirtyRef.current, [character]: true };
     setCharDirty((d) => ({ ...d, [character]: true }));
   }
 
@@ -396,7 +442,8 @@ export function GseView() {
                 type="number"
                 min={10}
                 max={500}
-                step={10}
+                step={1}
+                inputMode="numeric"
                 value={delayDraft.whisperKeystrokeDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperKeystrokeDelayMs", e.target.value)
