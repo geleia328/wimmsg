@@ -89,8 +89,20 @@ CONFIG_FILE = app_data_dir() / "config.json"
 
 
 # =============================================================================
-# Persistent config (character name mappings)
+# Persistent config (server settings + character mappings)
 # =============================================================================
+@dataclass
+class ServerSettings:
+    api_url: str = API_URL
+    token: str = BRIDGE_TOKEN
+
+
+@dataclass
+class AppConfig:
+    server: ServerSettings = field(default_factory=ServerSettings)
+    mappings: dict[str, "SavedMapping"] = field(default_factory=dict)
+
+
 @dataclass
 class SavedMapping:
     """
@@ -106,23 +118,31 @@ class SavedMapping:
     character: str
 
 
-def load_mappings() -> dict[str, SavedMapping]:
+def load_config() -> AppConfig:
     if not CONFIG_FILE.exists():
-        return {}
+        return AppConfig()
     try:
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        out: dict[str, SavedMapping] = {}
+        server_data = data.get("server", {})
+        server = ServerSettings(
+            api_url=server_data.get("api_url") or API_URL,
+            token=server_data.get("token") or BRIDGE_TOKEN,
+        )
+        mappings: dict[str, SavedMapping] = {}
         for key, item in data.get("mappings", {}).items():
             # Backwards compat: old format used window_title as key.
             if "exe_path" in item:
-                out[key] = SavedMapping(**item)
-        return out
+                mappings[key] = SavedMapping(**item)
+        return AppConfig(server=server, mappings=mappings)
     except Exception:
-        return {}
+        return AppConfig()
 
 
-def save_mappings(mappings: dict[str, SavedMapping]) -> None:
-    payload = {"mappings": {k: m.__dict__ for k, m in mappings.items()}}
+def save_config(config: AppConfig) -> None:
+    payload = {
+        "server": config.server.__dict__,
+        "mappings": {k: m.__dict__ for k, m in config.mappings.items()},
+    }
     CONFIG_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -137,15 +157,26 @@ def realm_of(character: str) -> str:
 # API client
 # =============================================================================
 class ApiClient:
-    def __init__(self) -> None:
+    def __init__(self, api_url: str = API_URL, token: str = BRIDGE_TOKEN) -> None:
         self.s = requests.Session()
-        if BRIDGE_TOKEN and BRIDGE_TOKEN != "REPLACE_WITH_YOUR_TOKEN":
-            self.s.headers["Authorization"] = f"Bearer {BRIDGE_TOKEN}"
+        self.api_url = api_url.rstrip("/")
+        self.token = token.strip()
+        self._apply_headers()
+
+    def _apply_headers(self) -> None:
+        self.s.headers.clear()
+        if self.token and self.token != "REPLACE_WITH_YOUR_TOKEN":
+            self.s.headers["Authorization"] = f"Bearer {self.token}"
         self.s.headers["content-type"] = "application/json"
         self.s.headers["user-agent"] = f"{APP_NAME}/{APP_VERSION}"
 
+    def update_server(self, api_url: str, token: str) -> None:
+        self.api_url = api_url.rstrip("/")
+        self.token = token.strip()
+        self._apply_headers()
+
     def _url(self, p: str) -> str:
-        return f"{API_URL.rstrip('/')}{p}"
+        return f"{self.api_url}{p}"
 
     def ingest(self, msgs: list[dict]) -> int:
         if not msgs:
@@ -182,12 +213,35 @@ class ApiClient:
         r.raise_for_status()
         return r.json().get("states", [])
 
-    def health(self) -> bool:
+    def health(self) -> tuple[bool, str]:
+        """Return (ok, human_message) for UI/log diagnostics."""
         try:
-            r = self.s.get(self._url("/api/health"), timeout=5)
-            return r.ok
-        except Exception:
-            return False
+            url = self._url("/api/health")
+            r = self.s.get(url, timeout=8)
+            if not r.ok:
+                text = r.text[:500]
+                return False, f"health HTTP {r.status_code}: {text}"
+            try:
+                data = r.json()
+            except Exception:
+                return True, "health OK (non-json response)"
+            if data.get("ok") is True:
+                return True, "health OK"
+            return False, f"health respondeu ok=false: {data}"
+        except Exception as e:
+            return False, f"health falhou: {type(e).__name__}: {e}"
+
+    def auth_check(self) -> tuple[bool, str]:
+        """Check an authenticated bridge endpoint so token problems are obvious."""
+        try:
+            r = self.s.get(self._url("/api/queue"), timeout=8)
+            if r.status_code == 401:
+                return False, "token inválido ou ausente (401 unauthorized)"
+            if not r.ok:
+                return False, f"queue HTTP {r.status_code}: {r.text[:300]}"
+            return True, "token/API OK"
+        except Exception as e:
+            return False, f"queue falhou: {type(e).__name__}: {e}"
 
 
 # =============================================================================
@@ -842,12 +896,18 @@ BAD = "#ef4444"
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.api = ApiClient()
+        self.config = load_config()
+        self.api = ApiClient(
+            api_url=self.config.server.api_url,
+            token=self.config.server.token,
+        )
         self.engine: Optional[BridgeEngine] = None
         self.log_queue: "queue.Queue[str]" = queue.Queue()
-        self.mappings = load_mappings()
+        self.mappings = self.config.mappings
         self.detected: list[DetectedWindow] = []
         self.rows: dict[int, dict] = {}  # hwnd -> {'entry': Entry, 'status_lbl': Label, ...}
+        self._last_health_ok: Optional[bool] = None
+        self._last_auth_ok: Optional[bool] = None
         self._build_ui()
         self._flush_log_periodically()
         self._auto_scan_periodically()
@@ -905,6 +965,85 @@ class App:
             padx=12,
             pady=8,
         ).pack(anchor="w")
+
+        # Server settings card
+        server_box = tk.Frame(self.root, bg=CARD)
+        server_box.pack(fill="x", padx=16, pady=(0, 8))
+        tk.Label(
+            server_box,
+            text="Servidor",
+            bg=CARD,
+            fg=ACCENT,
+            font=("Segoe UI", 9, "bold"),
+            padx=12,
+            pady=(8, 2),
+        ).grid(row=0, column=0, sticky="w")
+
+        tk.Label(
+            server_box,
+            text="API URL",
+            bg=CARD,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            padx=12,
+        ).grid(row=1, column=0, sticky="w")
+        self.api_url_entry = tk.Entry(
+            server_box,
+            bg="#0f172a",
+            fg=FG,
+            insertbackground=FG,
+            relief="flat",
+            font=("Consolas", 9),
+            width=48,
+        )
+        self.api_url_entry.insert(0, self.config.server.api_url)
+        self.api_url_entry.grid(row=1, column=1, sticky="we", padx=(0, 8), pady=2)
+
+        tk.Label(
+            server_box,
+            text="Token",
+            bg=CARD,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            padx=12,
+        ).grid(row=2, column=0, sticky="w")
+        self.token_entry = tk.Entry(
+            server_box,
+            bg="#0f172a",
+            fg=FG,
+            insertbackground=FG,
+            relief="flat",
+            font=("Consolas", 9),
+            show="•",
+            width=48,
+        )
+        token_value = "" if self.config.server.token == "REPLACE_WITH_YOUR_TOKEN" else self.config.server.token
+        self.token_entry.insert(0, token_value)
+        self.token_entry.grid(row=2, column=1, sticky="we", padx=(0, 8), pady=(2, 8))
+
+        server_box.grid_columnconfigure(1, weight=1)
+        tk.Button(
+            server_box,
+            text="💾 Salvar servidor",
+            bg="#334155",
+            fg=FG,
+            font=("Segoe UI", 8),
+            relief="flat",
+            padx=10,
+            pady=4,
+            command=self.on_save_server,
+        ).grid(row=1, column=2, rowspan=1, sticky="e", padx=(0, 12))
+        tk.Button(
+            server_box,
+            text="🌐 Testar",
+            bg="#334155",
+            fg=FG,
+            font=("Segoe UI", 8),
+            relief="flat",
+            padx=10,
+            pady=4,
+            command=self.on_test_connection,
+        ).grid(row=2, column=2, rowspan=1, sticky="e", padx=(0, 12))
 
         # Table container with scroll
         wrap = tk.Frame(self.root, bg=BG)
@@ -985,6 +1124,18 @@ class App:
             command=self.on_rename_now,
         ).pack(side="left", padx=(8, 0))
 
+        tk.Button(
+            controls,
+            text="🌐 Testar conexão",
+            bg=CARD,
+            fg=FG,
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=self.on_test_connection,
+        ).pack(side="left", padx=(8, 0))
+
         self.auto_rename_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
             controls,
@@ -1059,6 +1210,42 @@ class App:
         ok = apply_renames(self.detected, slots)
         self._log(f"🔤 {ok} janela(s) renomeada(s) para wow1, wow2, ...")
         self._render_table()
+
+    def on_save_server(self):
+        api_url = self.api_url_entry.get().strip().rstrip("/")
+        token = self.token_entry.get().strip()
+        if not api_url.startswith("http://") and not api_url.startswith("https://"):
+            messagebox.showwarning(
+                APP_NAME,
+                "API URL inválida. Ela precisa começar com http:// ou https://\n\n"
+                "Exemplo: https://wimmsg-lntm.vercel.app",
+            )
+            return
+        self.config.server = ServerSettings(api_url=api_url, token=token)
+        self.api.update_server(api_url, token)
+        try:
+            save_config(self.config)
+            self._log(f"💾 servidor salvo: {api_url}")
+        except Exception as e:
+            self._log(f"❌ não consegui salvar servidor: {e}")
+            return
+        self.on_test_connection()
+
+    def on_test_connection(self):
+        # Apply unsaved values temporarily too, so the user can test before saving.
+        api_url = self.api_url_entry.get().strip().rstrip("/")
+        token = self.token_entry.get().strip()
+        if api_url:
+            self.api.update_server(api_url, token)
+
+        def check():
+            self._log(f"🌐 testando {self.api.api_url}/api/health ...")
+            ok, msg = self.api.health()
+            self._log(("✅" if ok else "❌") + f" health: {msg}")
+            if ok:
+                auth_ok, auth_msg = self.api.auth_check()
+                self._log(("✅" if auth_ok else "❌") + f" auth: {auth_msg}")
+        threading.Thread(target=check, daemon=True).start()
 
     def _render_table(self):
         for w in self.table_inner.winfo_children():
@@ -1225,7 +1412,8 @@ class App:
                 return
 
         try:
-            save_mappings(self.mappings)
+            self.config.mappings = self.mappings
+            save_config(self.config)
         except Exception as e:
             self._log(f"⚠ não consegui salvar config: {e}")
 
@@ -1275,16 +1463,27 @@ class App:
 
     def _check_health_periodically(self):
         def check():
-            ok = self.api.health()
-            self.root.after(0, lambda: self._update_status(ok))
+            ok, msg = self.api.health()
+            auth_ok, auth_msg = self.api.auth_check() if ok else (False, "")
+            self.root.after(0, lambda: self._update_status(ok, msg, auth_ok, auth_msg))
         threading.Thread(target=check, daemon=True).start()
         self.root.after(10000, self._check_health_periodically)
 
-    def _update_status(self, ok: bool):
-        if ok:
+    def _update_status(self, ok: bool, msg: str, auth_ok: bool, auth_msg: str):
+        if ok and auth_ok:
             self.status_lbl.configure(text="🟢 servidor online", fg=OK)
+        elif ok and not auth_ok:
+            self.status_lbl.configure(text="🟠 servidor online, token inválido", fg=ACCENT)
         else:
             self.status_lbl.configure(text="🔴 sem conexão com servidor", fg=BAD)
+
+        # Log only on state changes (avoid flooding every 10s).
+        if self._last_health_ok is None or self._last_health_ok != ok:
+            self._log(("✅" if ok else "❌") + f" health: {msg}")
+            self._last_health_ok = ok
+        if ok and (self._last_auth_ok is None or self._last_auth_ok != auth_ok):
+            self._log(("✅" if auth_ok else "❌") + f" auth: {auth_msg}")
+            self._last_auth_ok = auth_ok
 
     def _update_status_counters(self, total: int, matched: int):
         gse_count = 0

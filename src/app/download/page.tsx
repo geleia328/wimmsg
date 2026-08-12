@@ -25,7 +25,7 @@ export default function DownloadPage() {
         <p className="mt-2 text-sm text-slate-400">
           Aplicativo pronto pra usar — só baixar e abrir.
           <br />
-          Sem instalar Python, sem terminal, sem configurar rede.
+          Sem instalar Python. Se precisar, dá para trocar API URL e Token dentro do app.
         </p>
         <a
           href={DIRECT_EXE_URL}
@@ -87,6 +87,21 @@ export default function DownloadPage() {
               4
             </span>
             <div>
+              <b>Confira a seção Servidor no app.</b> Normalmente ela já vem
+              preenchida. Se aparecer &quot;sem conexão&quot;, coloque:
+              <div className="mt-2 rounded bg-slate-950 p-2 font-mono text-xs text-slate-300">
+                API URL: https://wimmsg-lntm.vercel.app
+                <br />
+                Token: o mesmo BRIDGE_TOKEN configurado na Vercel
+              </div>
+              Clique em <b>💾 Salvar servidor</b> e depois <b>🌐 Testar</b>.
+            </div>
+          </li>
+          <li className="flex gap-4">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500 font-bold text-slate-950">
+              5
+            </span>
+            <div>
               <b>Digite o nome completo do personagem</b> ao lado de cada
               janela — sempre no formato{" "}
               <code className="rounded bg-slate-800 px-1.5">Nome-Reino</code>{" "}
@@ -101,7 +116,7 @@ export default function DownloadPage() {
           </li>
           <li className="flex gap-4">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500 font-bold text-slate-950">
-              5
+              6
             </span>
             <div>
               Clique em <b>▶ Iniciar</b>. As janelas do WoW são renomeadas
