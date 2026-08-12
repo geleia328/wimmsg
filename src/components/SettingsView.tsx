@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 
 type SettingsPayload = {
   ok: boolean;
+  tablesReady: boolean;
+  tableErrors?: Record<string, string | null>;
   database: {
     configured: boolean;
     maskedUrl: string;
@@ -32,6 +34,15 @@ export function SettingsView() {
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Vercel env updater form. These are intentionally NOT persisted in the
+  // browser except the project name, so secrets are not left behind by default.
+  const [vercelToken, setVercelToken] = useState("");
+  const [vercelProject, setVercelProject] = useState("wimmsg-lntm");
+  const [vercelTeamId, setVercelTeamId] = useState("");
+  const [databaseUrl, setDatabaseUrl] = useState("");
+  const [envBridgeToken, setEnvBridgeToken] = useState("");
+  const [deployHookUrl, setDeployHookUrl] = useState("");
 
   useEffect(() => {
     setAdminToken(localStorage.getItem(ADMIN_KEY) ?? "");
@@ -87,6 +98,73 @@ export function SettingsView() {
     }
   }, [bridgeToken, headers, load]);
 
+  const initDb = useCallback(async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const r = await fetch("/api/admin/init-db", {
+        method: "POST",
+        headers: headers(),
+      });
+      const data = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!r.ok || !data.ok) {
+        setError(data.error ?? `Erro HTTP ${r.status}`);
+        return;
+      }
+      await load();
+      alert("Tabelas criadas/atualizadas com sucesso!");
+    } finally {
+      setSaving(false);
+    }
+  }, [headers, load]);
+
+  const updateVercelEnv = useCallback(async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const r = await fetch("/api/admin/vercel-env", {
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify({
+          vercelToken,
+          projectIdOrName: vercelProject,
+          teamId: vercelTeamId || undefined,
+          databaseUrl: databaseUrl || undefined,
+          bridgeToken: envBridgeToken || undefined,
+          deployHookUrl: deployHookUrl || undefined,
+        }),
+      });
+      const data = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        updated?: string[];
+        nextStep?: string;
+      };
+      if (!r.ok || !data.ok) {
+        setError(data.error ?? `Erro HTTP ${r.status}`);
+        return;
+      }
+      setDatabaseUrl("");
+      setEnvBridgeToken("");
+      alert(
+        `Variáveis atualizadas: ${(data.updated ?? []).join(", ")}\n\n${data.nextStep ?? "Faça redeploy na Vercel."}`,
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    databaseUrl,
+    deployHookUrl,
+    envBridgeToken,
+    headers,
+    vercelProject,
+    vercelTeamId,
+    vercelToken,
+  ]);
+
   return (
     <div className="mx-auto max-w-4xl px-6 py-10">
       <div className="flex items-center justify-between">
@@ -132,6 +210,31 @@ export function SettingsView() {
 
       {settings && (
         <>
+          {!settings.tablesReady && (
+            <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-5">
+              <h2 className="text-lg font-bold text-amber-300">
+                Banco conectado, mas tabelas não existem
+              </h2>
+              <p className="mt-2 text-sm text-amber-100">
+                O Neon já está acessível, mas ainda falta criar as tabelas do
+                Bakers Whisper. Clique no botão abaixo para inicializar tudo
+                automaticamente.
+              </p>
+              <button
+                onClick={() => void initDb()}
+                disabled={saving}
+                className="mt-4 rounded bg-amber-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40"
+              >
+                {saving ? "criando..." : "🧱 Criar/atualizar tabelas agora"}
+              </button>
+              {settings.tableErrors && (
+                <pre className="mt-4 max-h-40 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-400">
+                  {JSON.stringify(settings.tableErrors, null, 2)}
+                </pre>
+              )}
+            </section>
+          )}
+
           <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
             <h2 className="text-lg font-bold text-emerald-300">Status</h2>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -144,18 +247,95 @@ export function SettingsView() {
           <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
             <h2 className="text-lg font-bold text-sky-300">PostgreSQL / Neon</h2>
             <div className="mt-3 rounded bg-slate-950 p-3 font-mono text-xs text-slate-300">
-              DATABASE_URL: {settings.database.maskedUrl || "não configurada"}
+              DATABASE_URL atual: {settings.database.maskedUrl || "não configurada"}
             </div>
-            <div className="mt-3 rounded border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
-              <b>Por segurança, a URL do Postgres não pode ser editada aqui.</b>
-              <p className="mt-1 text-xs">
-                O site precisa da <code>DATABASE_URL</code> antes de conseguir
-                abrir qualquer página ou ler o banco. No Vercel, altere em:
-                <br />
-                <b>Project → Settings → Environment Variables → DATABASE_URL</b>
-                <br />
-                Depois clique em <b>Redeploy</b>.
+            <div className="mt-3 rounded border border-sky-500/40 bg-sky-500/10 p-4 text-sm text-sky-100">
+              <b>Alterar DATABASE_URL pela Vercel API</b>
+              <p className="mt-1 text-xs text-sky-200/80">
+                Cole abaixo sua Pooled connection string do Neon, um Vercel
+                Access Token e o nome/id do projeto. O site atualizará as
+                Environment Variables da Vercel para você.
               </p>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <label className="text-xs text-slate-400">
+                Vercel Access Token
+                <input
+                  value={vercelToken}
+                  onChange={(e) => setVercelToken(e.target.value)}
+                  type="password"
+                  placeholder="Cole um token da Vercel aqui"
+                  className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
+                />
+              </label>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-slate-400">
+                  Projeto Vercel / ID
+                  <input
+                    value={vercelProject}
+                    onChange={(e) => setVercelProject(e.target.value)}
+                    placeholder="wimmsg-lntm"
+                    className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
+                  />
+                </label>
+                <label className="text-xs text-slate-400">
+                  Team ID (opcional)
+                  <input
+                    value={vercelTeamId}
+                    onChange={(e) => setVercelTeamId(e.target.value)}
+                    placeholder="team_xxx se o projeto estiver em equipe"
+                    className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
+                  />
+                </label>
+              </div>
+
+              <label className="text-xs text-slate-400">
+                Nova DATABASE_URL do Neon
+                <textarea
+                  value={databaseUrl}
+                  onChange={(e) => setDatabaseUrl(e.target.value)}
+                  rows={3}
+                  placeholder="postgresql://neondb_owner:SENHA@ep-xxx-pooler.../neondb?sslmode=require"
+                  className="mt-1 w-full resize-none rounded bg-slate-800 px-3 py-2 font-mono text-xs text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
+                />
+              </label>
+
+              <label className="text-xs text-slate-400">
+                BRIDGE_TOKEN de produção (opcional)
+                <input
+                  value={envBridgeToken}
+                  onChange={(e) => setEnvBridgeToken(e.target.value)}
+                  type="password"
+                  placeholder="Se quiser atualizar também o token env da Vercel"
+                  className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
+                />
+              </label>
+
+              <label className="text-xs text-slate-400">
+                Deploy Hook URL (opcional, para redeploy automático)
+                <input
+                  value={deployHookUrl}
+                  onChange={(e) => setDeployHookUrl(e.target.value)}
+                  placeholder="https://api.vercel.com/v1/integrations/deploy/..."
+                  className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
+                />
+              </label>
+
+              <button
+                onClick={() => void updateVercelEnv()}
+                disabled={saving || !vercelToken || !vercelProject || (!databaseUrl && !envBridgeToken)}
+                className="rounded bg-sky-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40"
+              >
+                {saving ? "atualizando..." : "☁️ Atualizar variáveis na Vercel"}
+              </button>
+            </div>
+
+            <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">
+              Depois de alterar <code>DATABASE_URL</code>, a Vercel precisa de
+              um <b>Redeploy</b>. Se você não preencher Deploy Hook URL, vá em
+              Vercel → Deployments → três pontinhos → Redeploy.
             </div>
           </section>
 
