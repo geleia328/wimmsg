@@ -20,19 +20,35 @@ type GseRow = {
   updatedAt: string;
 };
 
+type Controls = {
+  bridgeReaderEnabled: boolean;
+  gseMasterEnabled: boolean;
+  whisperFocusDelayMs: number;
+  whisperAfterSendDelayMs: number;
+  queuePollMs: number;
+};
+
 const POLL_MS = 2000;
 
 export function GseView() {
   const [windows, setWindows] = useState<WindowStatus[]>([]);
   const [states, setStates] = useState<Record<string, GseRow>>({});
+  const [controls, setControls] = useState<Controls>({
+    bridgeReaderEnabled: true,
+    gseMasterEnabled: false,
+    whisperFocusDelayMs: 500,
+    whisperAfterSendDelayMs: 500,
+    queuePollMs: 1500,
+  });
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [w, g] = await Promise.all([
+      const [w, g, c] = await Promise.all([
         fetch("/api/status", { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/gse", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/control", { cache: "no-store" }).then((r) => r.json()),
       ]);
       setWindows((w as { windows: WindowStatus[] }).windows ?? []);
       const map: Record<string, GseRow> = {};
@@ -40,6 +56,7 @@ export function GseView() {
         map[s.character] = s;
       }
       setStates(map);
+      setControls((c as { controls: Controls }).controls);
       setBridgeUp(true);
     } catch {
       setBridgeUp(false);
@@ -95,6 +112,26 @@ export function GseView() {
     [characters, refresh],
   );
 
+  const updateControls = useCallback(
+    async (patch: Partial<Controls>) => {
+      const adminToken = localStorage.getItem("bakers-whisper:admin-token") ?? "";
+      const res = await fetch("/api/control", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": adminToken,
+        },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        alert("Abra /settings e informe o token admin antes de alterar controles.");
+        return;
+      }
+      await refresh();
+    },
+    [refresh],
+  );
+
   return (
     <div className="min-h-screen">
       <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-6 py-3">
@@ -138,10 +175,107 @@ export function GseView() {
           <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
             Controle global
           </div>
-          <div className="flex flex-wrap gap-3">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-bold text-slate-100">Leitor de janelas/whispers</div>
+                  <div className="text-xs text-slate-500">
+                    Mantém scan de contas + leitura do chat log ativa.
+                  </div>
+                </div>
+                <button
+                  onClick={() =>
+                    void updateControls({
+                      bridgeReaderEnabled: !controls.bridgeReaderEnabled,
+                    })
+                  }
+                  className={`rounded px-4 py-2 text-xs font-bold ${
+                    controls.bridgeReaderEnabled
+                      ? "bg-emerald-500 text-slate-950"
+                      : "bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {controls.bridgeReaderEnabled ? "LIGADO" : "DESLIGADO"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-bold text-slate-100">Master GSE</div>
+                  <div className="text-xs text-slate-500">
+                    Se desligado, nenhuma janela recebe clique/tecla GSE.
+                  </div>
+                </div>
+                <button
+                  onClick={() =>
+                    void updateControls({
+                      gseMasterEnabled: !controls.gseMasterEnabled,
+                    })
+                  }
+                  className={`rounded px-4 py-2 text-xs font-bold ${
+                    controls.gseMasterEnabled
+                      ? "bg-fuchsia-500 text-white"
+                      : "bg-slate-700 text-slate-300"
+                  }`}
+                >
+                  {controls.gseMasterEnabled ? "GSE ON" : "GSE OFF"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <label className="text-xs text-slate-400">
+              Delay antes de digitar whisper
+              <input
+                type="number"
+                value={controls.whisperFocusDelayMs}
+                onChange={(e) =>
+                  setControls((c) => ({ ...c, whisperFocusDelayMs: Number(e.target.value) }))
+                }
+                onBlur={(e) =>
+                  void updateControls({ whisperFocusDelayMs: Number(e.target.value) })
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Delay depois de enviar whisper
+              <input
+                type="number"
+                value={controls.whisperAfterSendDelayMs}
+                onChange={(e) =>
+                  setControls((c) => ({ ...c, whisperAfterSendDelayMs: Number(e.target.value) }))
+                }
+                onBlur={(e) =>
+                  void updateControls({ whisperAfterSendDelayMs: Number(e.target.value) })
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Poll da fila de whisper
+              <input
+                type="number"
+                value={controls.queuePollMs}
+                onChange={(e) =>
+                  setControls((c) => ({ ...c, queuePollMs: Number(e.target.value) }))
+                }
+                onBlur={(e) =>
+                  void updateControls({ queuePollMs: Number(e.target.value) })
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-3">
             <button
               onClick={() => void bulk("startAll")}
-              disabled={characters.length === 0}
+              disabled={characters.length === 0 || !controls.gseMasterEnabled}
               className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400 disabled:opacity-40"
             >
               ▶ Iniciar TODOS ({characters.length})
@@ -155,12 +289,9 @@ export function GseView() {
             </button>
           </div>
           <p className="mt-3 text-xs text-slate-500">
-            💡 O GSE é enviado em <b>background</b> (via <code>PostMessage</code>{" "}
-            do Windows), então não precisa deixar a janela em foco.
-            <br />
-            Quando uma resposta de whisper for digitada em uma janela, o GSE
-            daquela janela pausa automaticamente por ~1s e retoma sozinho —
-            sem misturar teclas.
+            💡 O leitor pode ficar ligado com o GSE desligado. O GSE só roda
+            quando <b>Master GSE</b> está ON e o personagem também está marcado
+            como rodando.
           </p>
         </div>
 
@@ -271,7 +402,12 @@ export function GseView() {
                         onClick={() =>
                           void updateOne(c, { running: !state.running })
                         }
-                        disabled={busy[c]}
+                        disabled={busy[c] || (!controls.gseMasterEnabled && !state.running)}
+                        title={
+                          !controls.gseMasterEnabled && !state.running
+                            ? "Ligue o Master GSE primeiro"
+                            : undefined
+                        }
                         className={`rounded-lg px-4 py-2 text-xs font-bold shadow transition disabled:opacity-40 ${
                           state.running
                             ? "bg-rose-500 text-white hover:bg-rose-400"

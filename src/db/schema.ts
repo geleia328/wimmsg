@@ -138,3 +138,11 @@ export const appSettings = pgTable("app_settings", {
 
 export type AppSetting = typeof appSettings.$inferSelect;
 export type NewAppSetting = typeof appSettings.$inferInsert;
+
+export const DEFAULT_APP_CONTROLS = {
+  bridge_reader_enabled: "yes",
+  gse_master_enabled: "no",
+  whisper_focus_delay_ms: "500",
+  whisper_after_send_delay_ms: "500",
+  queue_poll_ms: "1500",
+} as const;

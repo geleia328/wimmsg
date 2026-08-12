@@ -91,6 +91,16 @@ export async function POST(request: NextRequest) {
       )
     `);
 
+    await db.execute(sql`
+      INSERT INTO app_settings (key, value) VALUES
+        ('bridge_reader_enabled', 'yes'),
+        ('gse_master_enabled', 'no'),
+        ('whisper_focus_delay_ms', '500'),
+        ('whisper_after_send_delay_ms', '500'),
+        ('queue_poll_ms', '1500')
+      ON CONFLICT (key) DO NOTHING
+    `);
+
     return NextResponse.json({ ok: true, message: "tables_created_or_ready" });
   } catch (error) {
     return NextResponse.json(

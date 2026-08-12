@@ -213,6 +213,11 @@ class ApiClient:
         r.raise_for_status()
         return r.json().get("states", [])
 
+    def controls(self) -> dict:
+        r = self.s.get(self._url("/api/control"), timeout=10)
+        r.raise_for_status()
+        return r.json().get("controls", {})
+
     def health(self) -> tuple[bool, str]:
         """Return (ok, human_message) for UI/log diagnostics."""
         try:
@@ -607,6 +612,14 @@ def make_ext_id(character: str, player: str, body: str) -> str:
 # =============================================================================
 _send_lock = threading.Lock()
 
+DEFAULT_CONTROLS = {
+    "bridgeReaderEnabled": True,
+    "gseMasterEnabled": False,
+    "whisperFocusDelayMs": 500,
+    "whisperAfterSendDelayMs": 500,
+    "queuePollMs": 1500,
+}
+
 
 @dataclass
 class RuntimeCharacter:
@@ -627,6 +640,8 @@ class BridgeEngine:
         # character name -> GseSpammer
         self.spammers: dict[str, GseSpammer] = {}
         self.spammers_lock = threading.Lock()
+        self.controls = DEFAULT_CONTROLS.copy()
+        self.controls_lock = threading.Lock()
 
     def start(self, chars: list[RuntimeCharacter]) -> None:
         self.chars = chars
@@ -652,10 +667,15 @@ class BridgeEngine:
         t3.start()
         self.threads.append(t3)
 
-        # GSE state syncer — polls the site and starts/stops spammers.
-        t4 = threading.Thread(target=self._gse_syncer, daemon=True)
+        # Control syncer — reader on/off, GSE master, delays.
+        t4 = threading.Thread(target=self._control_syncer, daemon=True)
         t4.start()
         self.threads.append(t4)
+
+        # GSE state syncer — polls the site and starts/stops spammers.
+        t5 = threading.Thread(target=self._gse_syncer, daemon=True)
+        t5.start()
+        self.threads.append(t5)
 
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
@@ -680,10 +700,63 @@ class BridgeEngine:
                 return c
         return None
 
+    def _get_controls(self) -> dict:
+        with self.controls_lock:
+            return self.controls.copy()
+
+    def _control_syncer(self) -> None:
+        last_gse_master = None
+        last_reader = None
+        while not self.stop_event.is_set():
+            try:
+                raw = self.api.controls()
+                merged = DEFAULT_CONTROLS.copy()
+                merged.update({k: v for k, v in raw.items() if k in merged})
+                with self.controls_lock:
+                    self.controls = merged
+
+                if last_reader is None or last_reader != merged["bridgeReaderEnabled"]:
+                    self.log(
+                        "📖 leitor "
+                        + ("ligado" if merged["bridgeReaderEnabled"] else "desligado")
+                    )
+                    last_reader = merged["bridgeReaderEnabled"]
+
+                if last_gse_master is None or last_gse_master != merged["gseMasterEnabled"]:
+                    self.log(
+                        "⚙ master GSE "
+                        + ("ligado" if merged["gseMasterEnabled"] else "desligado")
+                    )
+                    last_gse_master = merged["gseMasterEnabled"]
+                    if not merged["gseMasterEnabled"]:
+                        self._stop_all_spammers("master GSE OFF")
+            except Exception as e:
+                self.log(f"❌ control sync falhou: {e}")
+
+            for _ in range(10):
+                if self.stop_event.is_set():
+                    return
+                time.sleep(0.1)
+
+    def _stop_all_spammers(self, reason: str) -> None:
+        with self.spammers_lock:
+            for s in self.spammers.values():
+                s.pause_event.set()
+                s.stop()
+            count = len(self.spammers)
+            self.spammers.clear()
+        if count:
+            self.log(f"⏹ {count} GSE parado(s): {reason}")
+
     def _incoming(self, ref: RuntimeCharacter) -> None:
         buffer: list[dict] = []
         last_flush = time.time()
         for line in tail_file(ref.chat_log, self.stop_event, self.log):
+            if not self._get_controls().get("bridgeReaderEnabled", True):
+                # Reader disabled from the site: keep the tailer alive, but do
+                # not parse/ingest messages until re-enabled.
+                time.sleep(0.2)
+                continue
             parsed = parse_whisper(line, ref.character)
             if parsed:
                 own, sender, body = parsed
@@ -742,7 +815,8 @@ class BridgeEngine:
                     except Exception:
                         pass
                 time.sleep(0.3)
-            time.sleep(1.0)
+            poll_ms = int(self._get_controls().get("queuePollMs", 1500))
+            time.sleep(max(0.5, min(10.0, poll_ms / 1000.0)))
 
     def _send(self, ref: RuntimeCharacter, player: str, body: str) -> None:
         if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
@@ -760,11 +834,14 @@ class BridgeEngine:
 
         try:
             with _send_lock:
+                controls = self._get_controls()
+                focus_delay = int(controls.get("whisperFocusDelayMs", 500)) / 1000.0
+                after_delay = int(controls.get("whisperAfterSendDelayMs", 500)) / 1000.0
                 if not focus_hwnd(ref.hwnd):
                     raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
-                # Small delay lets any in-flight PostMessage flush before we
-                # start typing on the (now focused) window.
-                time.sleep(0.30)
+                # Delay de estabilidade: dá tempo para o foco e mensagens em
+                # background terminarem antes de digitar o /w.
+                time.sleep(max(0.1, min(5.0, focus_delay)))
                 if HAS_PYDIRECTINPUT:
                     pydirectinput.press("enter")
                 else:
@@ -781,9 +858,8 @@ class BridgeEngine:
                     pydirectinput.press("enter")
                 else:
                     pyautogui.press("enter")
-                # Small pause before releasing so the /w command is processed
-                # before GSE resumes hammering keys at the window.
-                time.sleep(0.15)
+                # Delay de estabilidade antes de liberar o GSE de volta.
+                time.sleep(max(0.1, min(5.0, after_delay)))
         finally:
             if spammer:
                 spammer.pause_event.clear()
@@ -804,6 +880,11 @@ class BridgeEngine:
                 continue
 
             desired = {s["character"]: s for s in states}
+            controls = self._get_controls()
+            if not controls.get("gseMasterEnabled", False):
+                self._stop_all_spammers("master GSE OFF")
+                time.sleep(1.0)
+                continue
 
             with self.spammers_lock:
                 # Stop / update existing
