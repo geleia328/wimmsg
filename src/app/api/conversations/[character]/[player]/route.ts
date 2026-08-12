@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET    → messages between `character` (your window) and `player` (the other end).
- * POST   → queues a new outgoing whisper to be typed in that specific window.
- * DELETE → removes the entire conversation between `character` and `player`.
+ * GET  → messages between `character` (your window) and `player` (the other end).
+ * POST → queues a new outgoing whisper to be typed in that specific window.
  */
 export async function GET(
   request: NextRequest,
@@ -70,6 +69,9 @@ export async function POST(
     );
   }
 
+  // Detect potential realm mismatch: WoW whispers only work between the same
+  // realm or across officially connected realms. We can't know the connected
+  // realm groups, but we can flag when suffixes differ.
   const charRealm = character.includes("-")
     ? character.split("-").slice(-1)[0].toLowerCase()
     : "";
@@ -96,6 +98,9 @@ export async function POST(
   return NextResponse.json({ message: inserted, warning: realmWarning });
 }
 
+/**
+ * DELETE → removes all messages between `character` and `player`.
+ */
 export async function DELETE(
   _request: NextRequest,
   context: { params: Promise<{ character: string; player: string }> },
@@ -104,10 +109,17 @@ export async function DELETE(
   const character = decodeURIComponent(rawChar);
   const player = decodeURIComponent(rawPlayer);
 
-  const deleted = await db
+  const result = await db
     .delete(messages)
-    .where(and(eq(messages.character, character), eq(messages.player, player)))
+    .where(
+      and(eq(messages.character, character), eq(messages.player, player)),
+    )
     .returning({ id: messages.id });
 
-  return NextResponse.json({ ok: true, deleted: deleted.length });
+  return NextResponse.json({
+    ok: true,
+    deletedCount: result.length,
+    character,
+    player,
+  });
 }
