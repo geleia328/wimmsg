@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.7"
 # =============================================================================
 
 import hashlib
@@ -106,12 +106,11 @@ class AppConfig:
 @dataclass
 class SavedMapping:
     """
-    Persisted per WoW install (keyed by exe_path). We remember:
-      - `slot`: the wowN number this install had last time
-      - `character`: the character name typed by the user for that install
+    Persisted per slot (wow1, wow2, ...), not per exe_path.
 
-    Keying by exe_path (not window title / hwnd / pid) means the same install
-    always gets the same slot/character across restarts.
+    Important: many users run multiple WoW windows from the SAME installation
+    folder. If we key by exe_path, every window overwrites the same character.
+    So the stable identity is now the assigned slot number.
     """
     exe_path: str
     slot: int
@@ -130,9 +129,14 @@ def load_config() -> AppConfig:
         )
         mappings: dict[str, SavedMapping] = {}
         for key, item in data.get("mappings", {}).items():
-            # Backwards compat: old format used window_title as key.
             if "exe_path" in item:
-                mappings[key] = SavedMapping(**item)
+                m = SavedMapping(**item)
+                # New format: always key by slot:N. Old configs keyed by exe_path
+                # are migrated if they contain slot.
+                if m.slot:
+                    mappings[f"slot:{m.slot}"] = m
+                else:
+                    mappings[key] = m
         return AppConfig(server=server, mappings=mappings)
     except Exception:
         return AppConfig()
@@ -312,18 +316,24 @@ def enum_wow_windows() -> list[DetectedWindow]:
         if not title:
             return
         low = title.lower()
-        looks_wow_by_title = any(h in low for h in WOW_TITLE_HINTS)
         pid = _pid_for_hwnd(hwnd)
         exe = _exe_for_pid(pid) if pid else ""
-        exe_low = exe.lower()
-        looks_wow_by_exe = any(h in exe_low for h in WOW_EXE_HINTS)
-        if not (looks_wow_by_title or looks_wow_by_exe):
+        exe_name = Path(exe).name.lower() if exe else ""
+
+        # Prefer process executable detection. This avoids detecting browser
+        # tabs/pages/editors containing the word "wow".
+        looks_wow_by_exe = exe_name in WOW_EXE_HINTS
+
+        # Fallback only if psutil/exe lookup failed: very strict title match.
+        # Accept official "World of Warcraft" and our own renamed "wowN" slots.
+        looks_wow_by_title = (
+            low == "world of warcraft"
+            or re.fullmatch(r"wow\d+", low) is not None
+        )
+
+        if not looks_wow_by_exe and not (not exe and looks_wow_by_title):
             return
-        # Filter out browser tabs with "WoW" in the title, editors, etc.
-        if not looks_wow_by_exe and any(
-            bad in low for bad in ("chrome", "firefox", "edge", "code -", "visual studio")
-        ):
-            return
+
         results.append(
             DetectedWindow(
                 hwnd=int(hwnd),
@@ -336,6 +346,9 @@ def enum_wow_windows() -> list[DetectedWindow]:
         )
 
     win32gui.EnumWindows(cb, None)
+    # Deterministic ordering helps stable slot assignment before windows are
+    # renamed. PID tends to follow launch order; hwnd is fallback.
+    results.sort(key=lambda w: (w.pid or 0, w.hwnd))
     return results
 
 
@@ -369,22 +382,25 @@ def assign_slots(
     Decide the wowN slot number for each detected window.
 
     Priority:
-      1) If the exe_path was seen before → reuse the same slot.
-      2) Otherwise pick the smallest slot not already used.
+      1) If current window title is already wowN, keep N.
+      2) Otherwise assign the smallest free slot by deterministic window order.
 
-    Returns: {hwnd: slot_number}
+    We deliberately DO NOT key by exe_path because many windows may share the
+    same Wow.exe path.
     """
     used: set[int] = set()
     result: dict[int, int] = {}
 
-    # Pass 1 — restore known installs
+    # Pass 1 — preserve current wowN title if present.
     for w in wins:
-        m = saved.get(w.exe_path) if w.exe_path else None
-        if m and m.slot not in used:
-            result[w.hwnd] = m.slot
-            used.add(m.slot)
+        m = re.fullmatch(r"wow(\d+)", w.title.strip().lower())
+        if m:
+            slot = int(m.group(1))
+            if slot > 0 and slot not in used:
+                result[w.hwnd] = slot
+                used.add(slot)
 
-    # Pass 2 — assign fresh slots to new/unrecognized installs
+    # Pass 2 — assign fresh slots.
     def next_free() -> int:
         n = 1
         while n in used:
@@ -797,12 +813,12 @@ class BridgeEngine:
                 body = msg["body"]
                 ref = self._find_char_by_name(character)
                 if not ref:
-                    err = f"personagem '{character}' não configurado aqui"
-                    self.log(f"❌ #{mid}: {err}")
-                    try:
-                        self.api.ack(mid, "failed", error=err)
-                    except Exception:
-                        pass
+                    # Do NOT mark failed. If the buyer/whisper reply is queued
+                    # while that WoW window is closed, keep it pending so it can
+                    # be sent automatically when the character/window comes back.
+                    self.log(
+                        f"⏳ #{mid}: aguardando janela/personagem '{character}' abrir/mapeiar"
+                    )
                     continue
                 self.log(f"→ #{mid} [{character} → {player}]: {body}")
                 try:
@@ -1207,6 +1223,18 @@ class App:
 
         tk.Button(
             controls,
+            text="💾 Salvar personagens",
+            bg=CARD,
+            fg=OK,
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=12,
+            pady=6,
+            command=self.on_save_characters,
+        ).pack(side="left", padx=(8, 0))
+
+        tk.Button(
+            controls,
             text="🌐 Testar conexão",
             bg=CARD,
             fg=FG,
@@ -1291,6 +1319,35 @@ class App:
         ok = apply_renames(self.detected, slots)
         self._log(f"🔤 {ok} janela(s) renomeada(s) para wow1, wow2, ...")
         self._render_table()
+
+    def _save_character_entries(self) -> int:
+        count = 0
+        for hwnd, row in self.rows.items():
+            w: DetectedWindow = row["win"]
+            name = row["entry"].get().strip()
+            if not w.slot:
+                continue
+            key = f"slot:{w.slot}"
+            if name:
+                self.mappings[key] = SavedMapping(
+                    exe_path=w.exe_path,
+                    slot=w.slot,
+                    character=name,
+                )
+                count += 1
+            elif key in self.mappings:
+                # Empty field intentionally clears that slot's saved name.
+                self.mappings.pop(key, None)
+        self.config.mappings = self.mappings
+        save_config(self.config)
+        return count
+
+    def on_save_characters(self):
+        try:
+            count = self._save_character_entries()
+            self._log(f"💾 {count} personagem(ns) salvo(s) por slot wowN.")
+        except Exception as e:
+            self._log(f"❌ erro ao salvar personagens: {e}")
 
     def on_save_server(self):
         api_url = self.api_url_entry.get().strip().rstrip("/")
@@ -1395,7 +1452,9 @@ class App:
             anchor="w",
         ).pack(side="left")
 
-        # Character entry — pre-fill from persisted map keyed by exe_path
+        # Character entry — pre-fill from persisted map keyed by slot.
+        # This lets each wowN keep a different own-character name even when all
+        # windows come from the same WoW installation folder.
         entry = tk.Entry(
             row,
             bg="#0f172a",
@@ -1405,7 +1464,7 @@ class App:
             font=("Consolas", 9),
             width=24,
         )
-        saved = self.mappings.get(win.exe_path) if win.exe_path else None
+        saved = self.mappings.get(f"slot:{win.slot}") if win.slot else None
         if saved and saved.character:
             entry.insert(0, saved.character)
         entry.pack(side="left", padx=(4, 4))
@@ -1460,13 +1519,7 @@ class App:
                     chat_log=log_path,
                 )
             )
-            # Persist by exe_path so we remember slot + character next time.
-            if w.exe_path:
-                self.mappings[w.exe_path] = SavedMapping(
-                    exe_path=w.exe_path,
-                    slot=w.slot or 0,
-                    character=name,
-                )
+            # Persist later by slot via _save_character_entries().
 
         if not chars:
             messagebox.showwarning(
@@ -1493,8 +1546,7 @@ class App:
                 return
 
         try:
-            self.config.mappings = self.mappings
-            save_config(self.config)
+            self._save_character_entries()
         except Exception as e:
             self._log(f"⚠ não consegui salvar config: {e}")
 
