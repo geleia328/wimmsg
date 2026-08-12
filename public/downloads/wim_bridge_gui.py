@@ -723,13 +723,13 @@ _send_lock = threading.Lock()
 DEFAULT_CONTROLS = {
     "bridgeReaderEnabled": True,
     "gseMasterEnabled": False,
-    "whisperFocusDelayMs": 500,
-    "whisperAfterSendDelayMs": 500,
-    "whisperChatOpenDelayMs": 300,
-    "whisperKeystrokeDelayMs": 50,
-    "whisperChatSendDelayMs": 200,
+    "whisperFocusDelayMs": 800,
+    "whisperAfterSendDelayMs": 800,
+    "whisperChatOpenDelayMs": 600,
+    "whisperKeystrokeDelayMs": 80,
+    "whisperChatSendDelayMs": 500,
     "whisperCloseChatEnabled": True,
-    "whisperChatCloseDelayMs": 200,
+    "whisperChatCloseDelayMs": 400,
     "queuePollMs": 1500,
 }
 
@@ -998,23 +998,37 @@ class BridgeEngine:
         try:
             with _send_lock:
                 controls = self._get_controls()
-                focus_delay = int(controls.get("whisperFocusDelayMs", 500)) / 1000.0
-                open_delay = int(controls.get("whisperChatOpenDelayMs", 300)) / 1000.0
-                keystroke_delay = max(
-                    0.01, int(controls.get("whisperKeystrokeDelayMs", 50)) / 1000.0
+                # FLOORS de segurança: cada etapa espera no MÍNIMO o valor
+                # abaixo antes de mandar a próxima tecla — o jogo não recebe
+                # input novo antes de terminar a ação anterior (chat abrindo
+                # outras coisas era o sintoma de teclas rápidas demais).
+                focus_delay = max(
+                    0.3, int(controls.get("whisperFocusDelayMs", 800)) / 1000.0
                 )
-                send_delay = int(controls.get("whisperChatSendDelayMs", 200)) / 1000.0
+                open_delay = max(
+                    0.3, int(controls.get("whisperChatOpenDelayMs", 600)) / 1000.0
+                )
+                keystroke_delay = max(
+                    0.02, int(controls.get("whisperKeystrokeDelayMs", 80)) / 1000.0
+                )
+                send_delay = max(
+                    0.3, int(controls.get("whisperChatSendDelayMs", 500)) / 1000.0
+                )
                 close_enabled = bool(controls.get("whisperCloseChatEnabled", True))
-                close_delay = int(controls.get("whisperChatCloseDelayMs", 200)) / 1000.0
-                after_delay = int(controls.get("whisperAfterSendDelayMs", 500)) / 1000.0
+                close_delay = max(
+                    0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
+                )
+                after_delay = max(
+                    0.3, int(controls.get("whisperAfterSendDelayMs", 800)) / 1000.0
+                )
                 if not focus_hwnd(ref.hwnd):
                     raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
-                # Delay de estabilidade: dá tempo para o foco e mensagens em
-                # background terminarem antes de digitar o /w.
-                time.sleep(max(0.1, min(5.0, focus_delay)))
+                # 1) Espera a janela receber o foco de verdade antes de
+                #    qualquer tecla.
+                time.sleep(focus_delay)
                 press_key("enter")  # abre o chat (funciona mesmo com o chat fechado)
-                # Delay para o campo de chat abrir antes de inserir o comando.
-                time.sleep(max(0.0, min(3.0, open_delay)))
+                # 2) Espera o campo de chat abrir completamente.
+                time.sleep(open_delay)
                 cmd = f"/w {player} {body}"
                 # Atomic paste via clipboard: the whole command arrives at
                 # once, so long messages are never "cut" in half.
@@ -1029,21 +1043,20 @@ class BridgeEngine:
                     else:
                         for ch in cmd:
                             pydirectinput.write(ch, interval=keystroke_delay)
-                # Delay antes de pressionar Enter para enviar a mensagem.
-                time.sleep(max(0.0, min(3.0, send_delay)))
+                # 3) Espera o jogo processar o texto colado antes do Enter.
+                time.sleep(send_delay)
                 press_key("enter")  # envia o whisper
                 # Remember what we just typed: the game echoes the sent whisper
                 # to the chat log as [W To] — skip it so the site doesn't show
                 # the same outgoing message twice.
                 self._remember_whisper(ref.character, player, body)
                 if close_enabled:
-                    # Fecha o campo de chat do jogo (Escape) para não
-                    # atrapalhar a rotação/GSE nem outras janelas. A próxima
-                    # mensagem da fila reabre o chat sozinha.
-                    time.sleep(max(0.0, min(3.0, close_delay)))
+                    # 4) Espera a mensagem ser enviada de verdade antes de
+                    #    fechar o campo de chat com Escape.
+                    time.sleep(close_delay)
                     press_key("esc")
-                # Delay de estabilidade antes de liberar o GSE de volta.
-                time.sleep(max(0.1, min(5.0, after_delay)))
+                # 5) Delay de estabilidade antes de liberar o GSE de volta.
+                time.sleep(after_delay)
         finally:
             for s in paused_spammers:
                 s.pause_event.clear()

@@ -41,22 +41,22 @@ export function GseView() {
   const [controls, setControls] = useState<Controls>({
     bridgeReaderEnabled: true,
     gseMasterEnabled: false,
-    whisperFocusDelayMs: 500,
-    whisperAfterSendDelayMs: 500,
-    whisperChatOpenDelayMs: 300,
-    whisperKeystrokeDelayMs: 50,
-    whisperChatSendDelayMs: 200,
+    whisperFocusDelayMs: 800,
+    whisperAfterSendDelayMs: 800,
+    whisperChatOpenDelayMs: 600,
+    whisperKeystrokeDelayMs: 80,
+    whisperChatSendDelayMs: 500,
     whisperCloseChatEnabled: true,
-    whisperChatCloseDelayMs: 200,
+    whisperChatCloseDelayMs: 400,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
-    whisperFocusDelayMs: "500",
-    whisperAfterSendDelayMs: "500",
-    whisperChatOpenDelayMs: "300",
-    whisperKeystrokeDelayMs: "50",
-    whisperChatSendDelayMs: "200",
-    whisperChatCloseDelayMs: "200",
+    whisperFocusDelayMs: "800",
+    whisperAfterSendDelayMs: "800",
+    whisperChatOpenDelayMs: "600",
+    whisperKeystrokeDelayMs: "80",
+    whisperChatSendDelayMs: "500",
+    whisperChatCloseDelayMs: "400",
     queuePollMs: "1500",
   });
   const [delayDirty, setDelayDirty] = useState(false);
@@ -450,9 +450,9 @@ export function GseView() {
               <span className="ml-1 text-slate-600">(abrir /w)</span>
               <input
                 type="number"
-                min={0}
-                max={3000}
-                step={50}
+                min={200}
+                max={5000}
+                step={100}
                 value={delayDraft.whisperChatOpenDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatOpenDelayMs", e.target.value)
@@ -461,11 +461,11 @@ export function GseView() {
               />
             </label>
             <label className="text-xs text-slate-400">
-              ⏱ Delay de foco antes de digitar
+              ⏱ Delay de foco antes de abrir o chat
               <input
                 type="number"
-                min={100}
-                max={5000}
+                min={200}
+                max={10000}
                 step={100}
                 value={delayDraft.whisperFocusDelayMs}
                 onChange={(e) =>
@@ -479,9 +479,9 @@ export function GseView() {
               <span className="ml-1 text-slate-600">(typing)</span>
               <input
                 type="number"
-                min={10}
-                max={500}
-                step={1}
+                min={20}
+                max={1000}
+                step={5}
                 inputMode="numeric"
                 value={delayDraft.whisperKeystrokeDelayMs}
                 onChange={(e) =>
@@ -492,11 +492,12 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Enviar mensagem (Enter)
+              <span className="ml-1 text-slate-600">(após colar)</span>
               <input
                 type="number"
-                min={0}
-                max={3000}
-                step={50}
+                min={200}
+                max={5000}
+                step={100}
                 value={delayDraft.whisperChatSendDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatSendDelayMs", e.target.value)
@@ -509,9 +510,9 @@ export function GseView() {
               <span className="ml-1 text-slate-600">(após enviar)</span>
               <input
                 type="number"
-                min={0}
-                max={3000}
-                step={50}
+                min={200}
+                max={5000}
+                step={100}
                 value={delayDraft.whisperChatCloseDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatCloseDelayMs", e.target.value)
@@ -521,10 +522,11 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Depois de enviar whisper
+              <span className="ml-1 text-slate-600">(liberar GSE)</span>
               <input
                 type="number"
-                min={100}
-                max={5000}
+                min={200}
+                max={10000}
                 step={100}
                 value={delayDraft.whisperAfterSendDelayMs}
                 onChange={(e) =>

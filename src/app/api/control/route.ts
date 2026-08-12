@@ -34,13 +34,13 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
   return {
     bridgeReaderEnabled: get("bridge_reader_enabled") === "yes",
     gseMasterEnabled: get("gse_master_enabled") === "yes",
-    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 100, 5000),
-    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 100, 5000),
-    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 3000),
-    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 10, 500),
-    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
+    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 200, 10000),
+    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 200, 10000),
+    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 200, 5000),
+    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 20, 1000),
+    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 200, 5000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
-    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
+    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 200, 5000),
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
@@ -95,31 +95,31 @@ export async function POST(request: NextRequest) {
   if (typeof payload.whisperFocusDelayMs === "number") {
     pairs.push({
       key: "whisper_focus_delay_ms",
-      value: String(Math.max(100, Math.min(5000, Math.floor(payload.whisperFocusDelayMs)))),
+      value: String(Math.max(200, Math.min(10000, Math.floor(payload.whisperFocusDelayMs)))),
     });
   }
   if (typeof payload.whisperAfterSendDelayMs === "number") {
     pairs.push({
       key: "whisper_after_send_delay_ms",
-      value: String(Math.max(100, Math.min(5000, Math.floor(payload.whisperAfterSendDelayMs)))),
+      value: String(Math.max(200, Math.min(10000, Math.floor(payload.whisperAfterSendDelayMs)))),
     });
   }
   if (typeof payload.whisperChatOpenDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_open_delay_ms",
-      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatOpenDelayMs)))),
+      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatOpenDelayMs)))),
     });
   }
   if (typeof payload.whisperKeystrokeDelayMs === "number") {
     pairs.push({
       key: "whisper_keystroke_delay_ms",
-      value: String(Math.max(10, Math.min(500, Math.floor(payload.whisperKeystrokeDelayMs)))),
+      value: String(Math.max(20, Math.min(1000, Math.floor(payload.whisperKeystrokeDelayMs)))),
     });
   }
   if (typeof payload.whisperChatSendDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_send_delay_ms",
-      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatSendDelayMs)))),
+      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatSendDelayMs)))),
     });
   }
   if (typeof payload.whisperCloseChatEnabled === "boolean") {
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
   if (typeof payload.whisperChatCloseDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_close_delay_ms",
-      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatCloseDelayMs)))),
+      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatCloseDelayMs)))),
     });
   }
   if (typeof payload.queuePollMs === "number") {

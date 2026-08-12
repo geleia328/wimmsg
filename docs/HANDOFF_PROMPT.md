@@ -54,6 +54,11 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - Fechar chat: novos controles `whisperCloseChatEnabled` (default yes) e `whisperChatCloseDelayMs` (default 200). Após enviar, o bridge pressiona ESC e fecha o campo de chat do jogo. A próxima mensagem da fila reabre o chat sozinha (Enter → paste /w player → Enter → ESC), então dá para conversar depois com fulano/lucas mesmo com o chat fechado.
     - GSE master OFF: corrida corrigida — `_control_syncer` para TODOS os spammers a CADA ciclo (0.5s) enquanto master estiver OFF, mesmo se `_gse_syncer` tentar recriar com controles obsoletos.
     - `whisperChatOpenDelayMs` default 300ms (chat aberto antes do paste).
+12. ✅ Tempos de envio mais lentos v1.1.4 (chat do jogo não buga mais):
+    - Novos defaults: foco 800ms, abrir chat 600ms, typing 80ms, enviar (após colar) 500ms, fechar chat (ESC) 400ms, pós-envio 800ms.
+    - PISOS mínimos no bridge `_send`: foco/abrir/enviar/fechar nunca ficam abaixo de 0.3s (typing 0.02s) mesmo se configurados para menos — o jogo sempre termina a ação anterior antes da próxima tecla.
+    - Faixas do site ampliadas: abrir/enviar/fechar até 5000ms, foco/pós até 10000ms, typing até 1000ms; mínimos 200ms.
+    - Atualizados: schema, /api/control (GET+POST), seed init-db, GseView (defaults + inputs) e DEFAULT_CONTROLS do bridge.
 
 **Relatório completo (cole aqui):**
 
