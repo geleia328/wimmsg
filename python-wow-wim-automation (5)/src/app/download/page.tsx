@@ -2,8 +2,8 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
-// Seu repositório do GitHub:
-const GITHUB_REPO = "geleia328/wimmsg";
+// TROQUE PARA O SEU REPO DO GITHUB:
+const GITHUB_REPO = "SEU_USUARIO/bakers-whisper";
 const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 const DIRECT_EXE_URL = `https://github.com/${GITHUB_REPO}/releases/latest/download/BakersWhisper.exe`;
 
