@@ -59,6 +59,13 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - PISOS mínimos no bridge `_send`: foco/abrir/enviar/fechar nunca ficam abaixo de 0.3s (typing 0.02s) mesmo se configurados para menos — o jogo sempre termina a ação anterior antes da próxima tecla.
     - Faixas do site ampliadas: abrir/enviar/fechar até 5000ms, foco/pós até 10000ms, typing até 1000ms; mínimos 200ms.
     - Atualizados: schema, /api/control (GET+POST), seed init-db, GseView (defaults + inputs) e DEFAULT_CONTROLS do bridge.
+13. ✅ Histórico completo do chat v1.1.5 (extrai o que já estava escrito no jogo):
+    - REPLAY do WoWChatLog.txt: ao abrir uma janela, o bridge relê os últimos ~2MB do log e ingere TODOS os whispers já escritos (recebidos via addon/native, enviados no jogo via [W To]) com `receivedAt` real — a conversa aparece no site em ordem cronológica. Se o arquivo tem linhas [WIMBRIDGE], as nativas [W From] são puladas (o addon já cobre) para não duplicar.
+    - ADDON: echo agora inclui `<TS:epoch>` (idempotência), guarda whispers recebidos em SavedVariables (WIMBridgeDB, máx 300) e o comando `/wimbridge dump` re-imprime o histórico com os MESMOS TS. O bridge roda o dump automaticamente uma vez por janela/sessão (`_history_syncer` + `_type_command`), recuperando whispers que aconteceram antes do /chatlog ou do bridge abrir.
+    - `make_ext_id` determinístico (hash character|player|body|ts): replay, dump e rotação de log são idempotentes — nunca duplicam no site.
+    - Sent-history persistido (`%APPDATA%/BakersWhisper/sent_history.json`): durante replay, [W To] de mensagens que o PRÓPRIO bridge enviou são pulados (site já tem essas linhas do ack da fila).
+    - `_canonical_char` normaliza o OWN do addon (case-insensitive) — conversas não se dividem por variação de maiúsculas/minúsculas.
+    - `_type_command` refatorado: mesma rotina segura (foco→Enter→paste→Enter→ESC) usada para whispers E para o dump.
 
 **Relatório completo (cole aqui):**
 
