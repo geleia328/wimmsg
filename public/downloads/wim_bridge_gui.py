@@ -804,11 +804,12 @@ _send_lock = threading.Lock()
 DEFAULT_CONTROLS = {
     "bridgeReaderEnabled": True,
     "gseMasterEnabled": False,
-    "whisperFocusDelayMs": 1000,
-    "whisperAfterSendDelayMs": 800,
-    "whisperChatOpenDelayMs": 2000,
+    "whisperFocusDelayMs": 2000,
+    "whisperAfterSendDelayMs": 1000,
+    "whisperChatOpenDelayMs": 1000,
+    "whisperWReadyDelayMs": 1500,
     "whisperKeystrokeDelayMs": 100,
-    "whisperChatSendDelayMs": 800,
+    "whisperChatSendDelayMs": 1000,
     "whisperCloseChatEnabled": False,
     "whisperChatCloseDelayMs": 400,
     "queuePollMs": 1500,
@@ -1334,12 +1335,110 @@ class BridgeEngine:
             time.sleep(max(0.5, min(10.0, poll_ms / 1000.0)))
 
     def _send(self, ref: RuntimeCharacter, player: str, body: str) -> None:
-        self._type_command(ref, f"/w {player} {body}")
-        # Remember what we just typed: the game echoes the sent whisper to the
-        # chat log as [W To] — skip it so the site doesn't show the same
-        # outgoing message twice (live + replay + next bridge restarts).
-        self._remember_whisper(ref.character, player, body)
-        self._persist_sent(ref.character, player, body)
+        """
+        ORDEM OFICIAL DE ENVIO (definida pelo usuário para evitar bugs):
+          1) focar a janela ......... aguardar 2s   (whisperFocusDelayMs)
+          2) pressionar Enter ....... aguardar 1s   (whisperChatOpenDelayMs)
+          3) colar /w Nome-Server ... aguardar 1,5s (whisperWReadyDelayMs)
+             → o jogo abre o modo whisper
+          4) colar a mensagem ....... aguardar 1s   (whisperChatSendDelayMs)
+          5) pressionar Enter ....... aguardar 1s   (whisperAfterSendDelayMs)
+
+        Em duas etapas: primeiro o /w Nome abre o whisper no jogo, depois a
+        mensagem é colada separada — o jogo nunca recebe tudo de uma vez.
+        """
+        if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
+            raise RuntimeError("pyautogui/pydirectinput não disponíveis")
+
+        # Pausa TODOS os spammers GSE durante a digitação.
+        with self.spammers_lock:
+            paused_spammers = list(self.spammers.values())
+        for s in paused_spammers:
+            s.pause_event.set()
+
+        try:
+            with _send_lock:
+                controls = self._get_controls()
+                focus_delay = max(
+                    0.5, int(controls.get("whisperFocusDelayMs", 2000)) / 1000.0
+                )
+                open_delay = max(
+                    0.3, int(controls.get("whisperChatOpenDelayMs", 1000)) / 1000.0
+                )
+                w_ready_delay = max(
+                    0.3, int(controls.get("whisperWReadyDelayMs", 1500)) / 1000.0
+                )
+                keystroke_delay = max(
+                    0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
+                )
+                send_delay = max(
+                    0.3, int(controls.get("whisperChatSendDelayMs", 1000)) / 1000.0
+                )
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", False))
+                close_delay = max(
+                    0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
+                )
+                after_delay = max(
+                    0.3, int(controls.get("whisperAfterSendDelayMs", 1000)) / 1000.0
+                )
+
+                if not focus_hwnd(ref.hwnd):
+                    raise RuntimeError(
+                        f"não consegui focar janela {ref.window_title!r}"
+                    )
+
+                # 1) Janela focada → aguardar o tempo configurado (2s).
+                time.sleep(focus_delay)
+
+                # 2) Enter abre o campo de chat → aguardar (1s).
+                press_key("enter")
+                time.sleep(open_delay)
+
+                # Segurança: limpa qualquer texto residual no campo.
+                press_ctrl_a()
+                time.sleep(0.25)
+
+                # 3) Colar "/w Nome-Server" → aguardar (1,5s).
+                w_cmd = f"/w {player}"
+                pasted_w = False
+                if HAS_WIN32:
+                    pasted_w = set_clipboard_text(w_cmd) and paste_ctrl_v()
+                if not pasted_w:
+                    if HAS_PYDIRECTINPUT:
+                        for ch in w_cmd:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(w_cmd, interval=keystroke_delay)
+                # O jogo abre o modo whisper com o destinatário correto.
+                time.sleep(w_ready_delay)
+
+                # 4) Colar a mensagem → aguardar (1s).
+                pasted_body = False
+                if HAS_WIN32:
+                    pasted_body = set_clipboard_text(body) and paste_ctrl_v()
+                if not pasted_body:
+                    if HAS_PYDIRECTINPUT:
+                        for ch in body:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(body, interval=keystroke_delay)
+                time.sleep(send_delay)
+
+                # 5) Enter envia o whisper → aguardar (1s).
+                press_key("enter")
+                if close_enabled:
+                    time.sleep(close_delay)
+                    press_key("esc")
+                time.sleep(after_delay)
+
+                # Remember what we just typed: the game echoes the sent whisper
+                # to the chat log as [W To] — skip it so the site doesn't show
+                # the same outgoing message twice (live + replay + restarts).
+                self._remember_whisper(ref.character, player, body)
+                self._persist_sent(ref.character, player, body)
+        finally:
+            for s in paused_spammers:
+                s.pause_event.clear()
 
     def _gse_syncer(self) -> None:
         """

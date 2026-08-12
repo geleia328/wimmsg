@@ -72,6 +72,10 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - Pisos no bridge: foco ≥0.5s, abrir chat ≥0.5s, enviar ≥0.4s, typing ≥0.05s/tecla — impossível digitar antes do campo estar pronto.
     - Fallback de digitação prefere pydirectinput (melhor para jogos) com 100ms/tecla.
     - Site: label explicativo "se a mensagem chega picada, AUMENTE este valor"; faixas até 10000ms para abrir/enviar/foco/pós.
+15. ✅ ORDEM OFICIAL DE ENVIO v1.1.7 (definida pelo usuário):
+    - Sequência em duas etapas: foco (2000ms) → Enter → 1000ms → colar `/w Nome-Server` → **1500ms** (jogo abre o modo whisper) → colar a mensagem → 1000ms → Enter envia → 1000ms pós-envio.
+    - Novo controle `whisperWReadyDelayMs` (whisper_w_ready_delay_ms, default 1500) — o tempo entre colar o /w e colar a mensagem.
+    - `_send` reescrito com a ordem exata (Ctrl+A de segurança só no início); defaults atualizados em schema, /api/control, init-db, GseView e DEFAULT_CONTROLS do bridge.
 
 **Relatório completo (cole aqui):**
 
