@@ -110,6 +110,8 @@ export function ChatApp() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [deletingIds, setDeletingIds] = useState<Record<number, boolean>>({});
+  const [clearingConversation, setClearingConversation] = useState(false);
   const [newCharacter, setNewCharacter] = useState("");
   const [newPlayer, setNewPlayer] = useState("");
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
@@ -268,6 +270,71 @@ export function ChatApp() {
     }
   }, [selected, draft, fetchMessages, refreshTop]);
 
+  const deleteMessage = useCallback(
+    async (message: Message) => {
+      if (!selected) return;
+      const ok = window.confirm(
+        "Apagar esta mensagem do chat?\n\n" +
+          "Se ela ainda estiver pendente, também será removida da fila de envio.",
+      );
+      if (!ok) return;
+
+      setDeletingIds((current) => ({ ...current, [message.id]: true }));
+      try {
+        const res = await fetch(`/api/messages/${message.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          alert(err.error ?? "erro ao apagar mensagem");
+          return;
+        }
+        setMessages((prev) => prev.filter((m) => m.id !== message.id));
+        void refreshTop();
+      } finally {
+        setDeletingIds((current) => {
+          const next = { ...current };
+          delete next[message.id];
+          return next;
+        });
+      }
+    },
+    [selected, refreshTop],
+  );
+
+  const clearConversation = useCallback(async () => {
+    if (!selected) return;
+    const ok = window.confirm(
+      `Apagar TODAS as mensagens entre ${selected.character} e ${selected.player}?\n\n` +
+        "Isso também remove respostas pendentes dessa conversa da fila.",
+    );
+    if (!ok) return;
+
+    setClearingConversation(true);
+    try {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(selected.character)}/${encodeURIComponent(selected.player)}`,
+        { method: "DELETE" },
+      );
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        alert(err.error ?? "erro ao limpar conversa");
+        return;
+      }
+      setMessages([]);
+      setConversations((prev) =>
+        prev.filter(
+          (c) =>
+            c.character !== selected.character || c.player !== selected.player,
+        ),
+      );
+      setSelected(null);
+      void refreshTop();
+    } finally {
+      setClearingConversation(false);
+    }
+  }, [selected, refreshTop]);
+
   // Compute realm mismatch warning for the currently selected conversation.
   const realmMismatch = useMemo(() => {
     if (!selected) return null;
@@ -316,15 +383,17 @@ export function ChatApp() {
   );
 
   return (
-    <div className="flex h-screen w-full flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/80 px-6 py-3 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-yellow-500 to-amber-700 font-black text-slate-900 shadow">
+    <div className="flex h-dvh w-full flex-col">
+      <header className="relative flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-3 py-2.5 backdrop-blur sm:px-6">
+        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-yellow-500 to-amber-700 font-black text-slate-900 shadow sm:h-9 sm:w-9">
             🥐
           </div>
-          <div>
-            <h1 className="text-lg font-bold leading-tight">Bakers Whisper</h1>
-            <p className="text-xs text-slate-400">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-bold leading-tight sm:text-lg">
+              Bakers Whisper
+            </h1>
+            <p className="truncate text-[11px] text-slate-400 sm:text-xs">
               <span className="mr-2">
                 <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60 align-middle" />{" "}
                 {totalWindowsOnline} janela(s) online
@@ -339,24 +408,40 @@ export function ChatApp() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              bridgeUp === null
-                ? "bg-slate-500"
-                : bridgeUp
-                  ? "bg-emerald-400"
-                  : "bg-rose-500"
-            }`}
-          />
-          <span className="text-slate-400">
-            {bridgeUp === null
-              ? "conectando..."
-              : bridgeUp
-                ? "API online"
-                : "sem conexão"}
-          </span>
-          <div className="relative ml-4">
+        <nav className="order-last -mx-1 flex w-full items-center gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs md:order-none md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
+          <a
+            href="/download"
+            className="whitespace-nowrap rounded border border-amber-500/50 bg-amber-500/10 px-2.5 py-1 text-amber-300 hover:bg-amber-500/20 md:px-3"
+          >
+            📥 Download
+          </a>
+          <a
+            href="/accounts"
+            className="whitespace-nowrap rounded border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-1 text-emerald-300 hover:bg-emerald-500/20 md:px-3"
+          >
+            📡 Contas
+          </a>
+          <a
+            href="/gse"
+            className="whitespace-nowrap rounded border border-fuchsia-500/50 bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-300 hover:bg-fuchsia-500/20 md:px-3"
+          >
+            ⚙ GSE
+          </a>
+          <a
+            href="/settings"
+            className="whitespace-nowrap rounded border border-sky-500/50 bg-sky-500/10 px-2.5 py-1 text-sky-300 hover:bg-sky-500/20 md:px-3"
+          >
+            🔐 Config
+          </a>
+          <a
+            href="/setup"
+            className="whitespace-nowrap rounded border border-slate-700 px-2.5 py-1 text-slate-300 hover:bg-slate-800 md:px-3"
+          >
+            Setup
+          </a>
+        </nav>
+        <div className="flex shrink-0 items-center gap-2 text-xs">
+          <div className="relative">
             <button
               onClick={() => setShowNotifSettings((s) => !s)}
               className={`rounded border px-3 py-1 transition ${
@@ -369,7 +454,7 @@ export function ChatApp() {
               {notif.prefs.sound ? "🔔" : "🔕"}
             </button>
             {showNotifSettings && (
-              <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-2xl">
+              <div className="absolute right-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-2xl">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
                   Notificações
                 </div>
@@ -420,41 +505,27 @@ export function ChatApp() {
               </div>
             )}
           </div>
-          <a
-            href="/download"
-            className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-1 text-amber-300 hover:bg-amber-500/20"
-          >
-            📥 Download
-          </a>
-          <a
-            href="/accounts"
-            className="rounded border border-emerald-500/50 bg-emerald-500/10 px-3 py-1 text-emerald-300 hover:bg-emerald-500/20"
-          >
-            📡 Contas
-          </a>
-          <a
-            href="/gse"
-            className="rounded border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1 text-fuchsia-300 hover:bg-fuchsia-500/20"
-          >
-            ⚙ GSE
-          </a>
-          <a
-            href="/settings"
-            className="rounded border border-sky-500/50 bg-sky-500/10 px-3 py-1 text-sky-300 hover:bg-sky-500/20"
-          >
-            🔐 Config
-          </a>
-          <a
-            href="/setup"
-            className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
-          >
-            Setup
-          </a>
+          <span
+            className={`h-2 w-2 rounded-full ${
+              bridgeUp === null
+                ? "bg-slate-500"
+                : bridgeUp
+                  ? "bg-emerald-400"
+                  : "bg-rose-500"
+            }`}
+          />
+          <span className="hidden text-slate-400 sm:inline">
+            {bridgeUp === null
+              ? "conectando..."
+              : bridgeUp
+                ? "API online"
+                : "sem conexão"}
+          </span>
         </div>
       </header>
 
       {/* Character filter bar */}
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/50 px-4 py-2 text-xs">
+      <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/50 px-3 py-2 text-xs sm:px-4">
         <button
           onClick={() => setCharacterFilter(ALL)}
           className={`whitespace-nowrap rounded-full border px-3 py-1 transition ${
@@ -502,8 +573,12 @@ export function ChatApp() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="flex w-96 flex-col border-r border-slate-800 bg-slate-900/40">
+        {/* Sidebar (on mobile it behaves as a drawer: hidden while a chat is open) */}
+        <aside
+          className={`${
+            selected ? "hidden md:flex" : "flex"
+          } w-full flex-col border-r border-slate-800 bg-slate-900/40 md:w-96`}
+        >
           <div className="border-b border-slate-800 p-3">
             <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
               Nova conversa
@@ -590,7 +665,11 @@ export function ChatApp() {
         </aside>
 
         {/* Message pane */}
-        <main className="flex flex-1 flex-col bg-[radial-gradient(circle_at_top,rgba(120,80,20,0.15),transparent_60%)]">
+        <main
+          className={`${
+            selected ? "flex" : "hidden md:flex"
+          } flex-1 flex-col bg-[radial-gradient(circle_at_top,rgba(120,80,20,0.15),transparent_60%)]`}
+        >
           {!selected ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-slate-500">
               <div className="text-6xl">💬</div>
@@ -601,12 +680,33 @@ export function ChatApp() {
             </div>
           ) : (
             <>
-              <div className="border-b border-slate-800 px-6 py-3">
-                <div className="text-sm text-slate-400">
-                  Whisper com{" "}
-                  <span className="font-bold text-amber-300">{selected.player}</span>
+              <div className="border-b border-slate-800 px-3 py-3 sm:px-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <button
+                      onClick={() => setSelected(null)}
+                      aria-label="Voltar para a lista de conversas"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-300 transition hover:bg-slate-700 md:hidden"
+                    >
+                      ←
+                    </button>
+                    <div className="min-w-0 text-sm text-slate-400">
+                      Whisper com{" "}
+                      <span className="truncate font-bold text-amber-300">
+                        {selected.player}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void clearConversation()}
+                    disabled={clearingConversation || messages.length === 0}
+                    className="shrink-0 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/50 disabled:text-slate-500 sm:px-3 sm:text-xs"
+                    title="Apagar todas as mensagens desta conversa"
+                  >
+                    {clearingConversation ? "apagando..." : "🗑 Limpar"}
+                  </button>
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-xs">
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                   <span className="text-slate-500">via</span>
                   <span
                     className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${charColor(selected.character)}`}
@@ -642,7 +742,7 @@ export function ChatApp() {
 
               <div
                 ref={scrollRef}
-                className="flex-1 space-y-3 overflow-y-auto px-6 py-4"
+                className="flex-1 space-y-3 overflow-y-auto px-3 py-4 sm:px-6"
               >
                 {messages.length === 0 && (
                   <div className="pt-12 text-center text-sm text-slate-500">
@@ -659,7 +759,7 @@ export function ChatApp() {
                       className={`flex ${mine ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-lg rounded-2xl px-4 py-2 shadow ${
+                        className={`max-w-[85%] rounded-2xl px-4 py-2 shadow md:max-w-lg ${
                           mine
                             ? "bg-amber-600 text-slate-950"
                             : "bg-slate-800 text-slate-100"
@@ -669,7 +769,7 @@ export function ChatApp() {
                           {m.body}
                         </div>
                         <div
-                          className={`mt-1 flex items-center gap-2 text-[10px] ${
+                          className={`mt-1 flex flex-wrap items-center gap-2 text-[10px] ${
                             mine ? "text-slate-900/70" : "text-slate-400"
                           }`}
                         >
@@ -689,6 +789,19 @@ export function ChatApp() {
                           {m.error && (
                             <span className="text-rose-800">— {m.error}</span>
                           )}
+                          <button
+                            onClick={() => void deleteMessage(m)}
+                            disabled={deletingIds[m.id]}
+                            className={`ml-auto rounded px-1.5 py-0.5 transition disabled:opacity-50 ${
+                              mine
+                                ? "text-slate-900/70 hover:bg-slate-950/10 hover:text-slate-950"
+                                : "text-slate-500 hover:bg-slate-700 hover:text-rose-300"
+                            }`}
+                            title="Apagar mensagem"
+                            aria-label="Apagar mensagem"
+                          >
+                            {deletingIds[m.id] ? "..." : "🗑"}
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -696,7 +809,7 @@ export function ChatApp() {
                 })}
               </div>
 
-              <div className="border-t border-slate-800 bg-slate-900/60 p-3">
+              <div className="border-t border-slate-800 bg-slate-900/60 p-2.5 sm:p-3">
                 <div className="flex items-end gap-2">
                   <textarea
                     value={draft}

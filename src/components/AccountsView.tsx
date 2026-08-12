@@ -53,7 +53,7 @@ export function AccountsView() {
 
   return (
     <div className="min-h-screen">
-      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-6 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-700 font-black text-slate-900 shadow">
             📡
@@ -83,9 +83,9 @@ export function AccountsView() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-6 py-6">
+      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
         {/* Summary cards */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
           <StatCard label="Total detectadas" value={windows.length} tone="slate" />
           <StatCard label="Online agora" value={online.length} tone="emerald" />
           <StatCard label="Offline" value={offline.length} tone="rose" />
@@ -115,9 +115,9 @@ export function AccountsView() {
           </span>
         </div>
 
-        {/* Table */}
-        <div className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/40">
-          <table className="w-full text-sm">
+        {/* Table (scrolls horizontally on small screens) */}
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
+          <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
                 <th className="px-4 py-3">Status</th>

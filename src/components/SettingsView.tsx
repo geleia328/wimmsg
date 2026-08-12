@@ -166,18 +166,18 @@ export function SettingsView() {
   ]);
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <Link href="/" className="text-xs text-amber-400 hover:underline">
             ← voltar ao chat
           </Link>
-          <h1 className="mt-2 text-3xl font-bold">Configurações</h1>
+          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Configurações</h1>
           <p className="mt-2 text-sm text-slate-400">
             Central para ajustar token do bridge e verificar banco/servidor.
           </p>
         </div>
-        <div className="text-4xl">⚙️</div>
+        <div className="hidden text-4xl sm:block">⚙️</div>
       </div>
 
       <section className="mt-8 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
@@ -186,7 +186,7 @@ export function SettingsView() {
           Use o <code>ADMIN_TOKEN</code> se configurou na Vercel. Caso contrário,
           use o <code>BRIDGE_TOKEN</code> atual.
         </p>
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <input
             value={adminToken}
             onChange={(e) => setAdminToken(e.target.value)}
@@ -196,7 +196,7 @@ export function SettingsView() {
           />
           <button
             onClick={() => void load()}
-            className="rounded bg-amber-500 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400"
+            className="w-full rounded bg-amber-500 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400 sm:w-auto"
           >
             Entrar
           </button>
@@ -326,7 +326,7 @@ export function SettingsView() {
               <button
                 onClick={() => void updateVercelEnv()}
                 disabled={saving || !vercelToken || !vercelProject || (!databaseUrl && !envBridgeToken)}
-                className="rounded bg-sky-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40"
+                className="w-full rounded bg-sky-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40 sm:w-auto"
               >
                 {saving ? "atualizando..." : "☁️ Atualizar variáveis na Vercel"}
               </button>
@@ -353,7 +353,7 @@ export function SettingsView() {
                 Token dinâmico do site: {settings.bridgeToken.dynamicConfigured ? settings.bridgeToken.dynamicMasked : "não configurado"}
               </div>
             </div>
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
               <input
                 value={bridgeToken}
                 onChange={(e) => setBridgeToken(e.target.value)}
@@ -364,7 +364,7 @@ export function SettingsView() {
               <button
                 onClick={() => void saveBridgeToken()}
                 disabled={saving || bridgeToken.length < 16}
-                className="rounded bg-fuchsia-500 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-400 disabled:opacity-40"
+                className="w-full rounded bg-fuchsia-500 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-400 disabled:opacity-40 sm:w-auto"
               >
                 {saving ? "salvando..." : "Salvar token"}
               </button>

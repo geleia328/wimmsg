@@ -8,18 +8,18 @@ const DIRECT_EXE_URL = `https://github.com/${GITHUB_REPO}/releases/latest/downlo
 
 export default function DownloadPage() {
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16">
+    <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
       <div className="text-center">
-        <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-yellow-500 to-amber-700 text-5xl shadow-2xl">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-yellow-500 to-amber-700 text-4xl shadow-2xl sm:h-20 sm:w-20 sm:text-5xl">
           🥐
         </div>
-        <h1 className="mt-4 text-4xl font-black">Bakers Whisper</h1>
+        <h1 className="mt-4 text-3xl font-black sm:text-4xl">Bakers Whisper</h1>
         <p className="mt-2 text-slate-400">
           Receba e responda whispers do WoW pelo navegador
         </p>
       </div>
 
-      <div className="mt-10 rounded-2xl border border-emerald-500/40 bg-emerald-500/5 p-8 text-center">
+      <div className="mt-10 rounded-2xl border border-emerald-500/40 bg-emerald-500/5 p-6 text-center sm:p-8">
         <div className="text-6xl">⬇️</div>
         <h2 className="mt-4 text-2xl font-bold">Baixar para Windows</h2>
         <p className="mt-2 text-sm text-slate-400">
@@ -29,7 +29,7 @@ export default function DownloadPage() {
         </p>
         <a
           href={DIRECT_EXE_URL}
-          className="mt-6 inline-block rounded-xl bg-emerald-500 px-8 py-4 text-lg font-bold text-slate-950 shadow-lg hover:bg-emerald-400"
+          className="mt-6 inline-block w-full rounded-xl bg-emerald-500 px-6 py-4 text-lg font-bold text-slate-950 shadow-lg hover:bg-emerald-400 sm:w-auto sm:px-8"
         >
           📥 Baixar BakersWhisper.exe
         </a>
@@ -254,22 +254,22 @@ export default function DownloadPage() {
         </div>
       </div>
 
-      <div className="mt-10 flex flex-wrap gap-3">
+      <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
         <Link
           href="/"
-          className="rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-200 hover:bg-slate-700"
+          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-center text-sm text-slate-200 hover:bg-slate-700 sm:w-auto"
         >
           🥐 Abrir painel de whispers
         </Link>
         <a
           href={RELEASES_URL}
-          className="rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-200 hover:bg-slate-700"
+          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-center text-sm text-slate-200 hover:bg-slate-700 sm:w-auto"
         >
           📦 Ver todas as versões
         </a>
         <Link
           href="/setup"
-          className="rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-200 hover:bg-slate-700"
+          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-center text-sm text-slate-200 hover:bg-slate-700 sm:w-auto"
         >
           ⚙ Setup avançado
         </Link>

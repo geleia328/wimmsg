@@ -97,3 +97,31 @@ export async function POST(
 
   return NextResponse.json({ message: inserted, warning: realmWarning });
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ character: string; player: string }> },
+) {
+  const { character: rawChar, player: rawPlayer } = await context.params;
+  const character = decodeURIComponent(rawChar).trim();
+  const player = decodeURIComponent(rawPlayer).trim();
+
+  if (!character || !player) {
+    return NextResponse.json(
+      { error: "character and player required" },
+      { status: 400 },
+    );
+  }
+
+  const deleted = await db
+    .delete(messages)
+    .where(and(eq(messages.character, character), eq(messages.player, player)))
+    .returning({ id: messages.id });
+
+  return NextResponse.json({
+    ok: true,
+    character,
+    player,
+    deletedCount: deleted.length,
+  });
+}

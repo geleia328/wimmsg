@@ -166,7 +166,7 @@ export function GseView() {
 
   return (
     <div className="min-h-screen">
-      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-6 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-700 font-black text-white shadow">
             ⚙
@@ -201,9 +201,9 @@ export function GseView() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl px-6 py-6">
+      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
         {/* Global controls */}
-        <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+        <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
           <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
             Controle global
           </div>
@@ -335,18 +335,18 @@ export function GseView() {
             )}
           </div>
 
-          <div className="mt-4 flex flex-wrap gap-3">
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             <button
               onClick={() => void bulk("startAll")}
               disabled={characters.length === 0 || !controls.gseMasterEnabled}
-              className="rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400 disabled:opacity-40"
+              className="w-full rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400 disabled:opacity-40 sm:w-auto"
             >
               ▶ Iniciar TODOS ({characters.length})
             </button>
             <button
               onClick={() => void bulk("stopAll")}
               disabled={characters.length === 0}
-              className="rounded-lg bg-rose-500 px-6 py-3 text-sm font-bold text-white shadow hover:bg-rose-400 disabled:opacity-40"
+              className="w-full rounded-lg bg-rose-500 px-6 py-3 text-sm font-bold text-white shadow hover:bg-rose-400 disabled:opacity-40 sm:w-auto"
             >
               ⏹ Parar TODOS
             </button>
@@ -358,9 +358,9 @@ export function GseView() {
           </p>
         </div>
 
-        {/* Per-character table */}
-        <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/40">
-          <table className="w-full text-sm">
+        {/* Per-character table (scrolls horizontally on small screens) */}
+        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
+          <table className="w-full min-w-[680px] text-sm">
             <thead>
               <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
                 <th className="px-4 py-3">Personagem</th>
