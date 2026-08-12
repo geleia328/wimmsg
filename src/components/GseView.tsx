@@ -40,6 +40,12 @@ export function GseView() {
     whisperAfterSendDelayMs: 500,
     queuePollMs: 1500,
   });
+  const [delayDraft, setDelayDraft] = useState({
+    whisperFocusDelayMs: "500",
+    whisperAfterSendDelayMs: "500",
+    queuePollMs: "1500",
+  });
+  const [delayDirty, setDelayDirty] = useState(false);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
 
@@ -56,12 +62,20 @@ export function GseView() {
         map[s.character] = s;
       }
       setStates(map);
-      setControls((c as { controls: Controls }).controls);
+      const nextControls = (c as { controls: Controls }).controls;
+      setControls(nextControls);
+      if (!delayDirty) {
+        setDelayDraft({
+          whisperFocusDelayMs: String(nextControls.whisperFocusDelayMs),
+          whisperAfterSendDelayMs: String(nextControls.whisperAfterSendDelayMs),
+          queuePollMs: String(nextControls.queuePollMs),
+        });
+      }
       setBridgeUp(true);
     } catch {
       setBridgeUp(false);
     }
-  }, []);
+  }, [delayDirty]);
 
   useEffect(() => {
     void refresh();
@@ -131,6 +145,24 @@ export function GseView() {
     },
     [refresh],
   );
+
+  const saveDelays = useCallback(async () => {
+    const patch = {
+      whisperFocusDelayMs: Number(delayDraft.whisperFocusDelayMs),
+      whisperAfterSendDelayMs: Number(delayDraft.whisperAfterSendDelayMs),
+      queuePollMs: Number(delayDraft.queuePollMs),
+    };
+    if (
+      !Number.isFinite(patch.whisperFocusDelayMs) ||
+      !Number.isFinite(patch.whisperAfterSendDelayMs) ||
+      !Number.isFinite(patch.queuePollMs)
+    ) {
+      alert("Preencha todos os delays com números válidos.");
+      return;
+    }
+    await updateControls(patch);
+    setDelayDirty(false);
+  }, [delayDraft, updateControls]);
 
   return (
     <div className="min-h-screen">
@@ -232,13 +264,18 @@ export function GseView() {
               Delay antes de digitar whisper
               <input
                 type="number"
-                value={controls.whisperFocusDelayMs}
-                onChange={(e) =>
-                  setControls((c) => ({ ...c, whisperFocusDelayMs: Number(e.target.value) }))
-                }
-                onBlur={(e) =>
-                  void updateControls({ whisperFocusDelayMs: Number(e.target.value) })
-                }
+                min={100}
+                max={5000}
+                step={100}
+                value={delayDraft.whisperFocusDelayMs}
+                onFocus={() => setDelayDirty(true)}
+                onChange={(e) => {
+                  setDelayDirty(true);
+                  setDelayDraft((d) => ({
+                    ...d,
+                    whisperFocusDelayMs: e.target.value,
+                  }));
+                }}
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
               />
             </label>
@@ -246,13 +283,18 @@ export function GseView() {
               Delay depois de enviar whisper
               <input
                 type="number"
-                value={controls.whisperAfterSendDelayMs}
-                onChange={(e) =>
-                  setControls((c) => ({ ...c, whisperAfterSendDelayMs: Number(e.target.value) }))
-                }
-                onBlur={(e) =>
-                  void updateControls({ whisperAfterSendDelayMs: Number(e.target.value) })
-                }
+                min={100}
+                max={5000}
+                step={100}
+                value={delayDraft.whisperAfterSendDelayMs}
+                onFocus={() => setDelayDirty(true)}
+                onChange={(e) => {
+                  setDelayDirty(true);
+                  setDelayDraft((d) => ({
+                    ...d,
+                    whisperAfterSendDelayMs: e.target.value,
+                  }));
+                }}
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
               />
             </label>
@@ -260,16 +302,37 @@ export function GseView() {
               Poll da fila de whisper
               <input
                 type="number"
-                value={controls.queuePollMs}
-                onChange={(e) =>
-                  setControls((c) => ({ ...c, queuePollMs: Number(e.target.value) }))
-                }
-                onBlur={(e) =>
-                  void updateControls({ queuePollMs: Number(e.target.value) })
-                }
+                min={500}
+                max={10000}
+                step={100}
+                value={delayDraft.queuePollMs}
+                onFocus={() => setDelayDirty(true)}
+                onChange={(e) => {
+                  setDelayDirty(true);
+                  setDelayDraft((d) => ({ ...d, queuePollMs: e.target.value }));
+                }}
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
               />
             </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => void saveDelays()}
+              disabled={!delayDirty}
+              className="rounded bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40"
+            >
+              💾 Salvar delays
+            </button>
+            {delayDirty ? (
+              <span className="text-xs text-amber-300">
+                alterações pendentes — clique em Salvar delays
+              </span>
+            ) : (
+              <span className="text-xs text-slate-500">
+                delays salvos: {controls.whisperFocusDelayMs}ms /{" "}
+                {controls.whisperAfterSendDelayMs}ms / {controls.queuePollMs}ms
+              </span>
+            )}
           </div>
 
           <div className="mt-4 flex flex-wrap gap-3">
