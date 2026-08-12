@@ -19,6 +19,8 @@ type Controls = {
   whisperChatOpenDelayMs: number;
   whisperKeystrokeDelayMs: number;
   whisperChatSendDelayMs: number;
+  whisperCloseChatEnabled: boolean;
+  whisperChatCloseDelayMs: number;
   queuePollMs: number;
 };
 
@@ -37,6 +39,8 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 3000),
     whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 10, 500),
     whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
+    whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
+    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
@@ -116,6 +120,18 @@ export async function POST(request: NextRequest) {
     pairs.push({
       key: "whisper_chat_send_delay_ms",
       value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatSendDelayMs)))),
+    });
+  }
+  if (typeof payload.whisperCloseChatEnabled === "boolean") {
+    pairs.push({
+      key: "whisper_close_chat_enabled",
+      value: payload.whisperCloseChatEnabled ? "yes" : "no",
+    });
+  }
+  if (typeof payload.whisperChatCloseDelayMs === "number") {
+    pairs.push({
+      key: "whisper_chat_close_delay_ms",
+      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatCloseDelayMs)))),
     });
   }
   if (typeof payload.queuePollMs === "number") {

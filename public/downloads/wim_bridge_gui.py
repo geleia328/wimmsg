@@ -36,6 +36,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
@@ -492,6 +493,48 @@ def post_key_to_hwnd(hwnd: int, vk: int) -> bool:
         return False
 
 
+def set_clipboard_text(text: str) -> bool:
+    """
+    Copy `text` to the Windows clipboard (pywin32 is already a dependency for
+    window enumeration). Used by the whisper sender to paste the command
+    atomically instead of typing char-by-char — this fixes "cut" messages
+    where the first keystrokes were eaten because the chat box wasn't ready.
+    """
+    try:
+        import win32clipboard  # type: ignore
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    except Exception:
+        return False
+
+
+def paste_ctrl_v() -> bool:
+    """Press Ctrl+V (paste) with whichever input library is available."""
+    try:
+        if HAS_PYDIRECTINPUT:
+            pydirectinput.keyDown("ctrl")
+            pydirectinput.press("v")
+            pydirectinput.keyUp("ctrl")
+        else:
+            pyautogui.hotkey("ctrl", "v")
+        return True
+    except Exception:
+        return False
+
+
+def press_key(name: str) -> None:
+    """Press a single key with the active input library."""
+    if HAS_PYDIRECTINPUT:
+        pydirectinput.press(name)
+    else:
+        pyautogui.press(name)
+
+
 # --------------------------------------------------------------------------
 # GSE spammer — one thread per character, pausable during whisper sends
 # --------------------------------------------------------------------------
@@ -548,9 +591,20 @@ class GseSpammer:
 # =============================================================================
 # Whisper log parser
 # =============================================================================
-TIMESTAMP_RE = re.compile(r"^\d+/\d+\s+\d+:\d+:\d+\.\d+\s+")
+# Tolerant timestamp: retail writes "10/8 12:34:56.789", older clients may
+# omit the milliseconds (or even the year).
+TIMESTAMP_RE = re.compile(r"^\d+/\d+(?:/\d+)?\s+\d+:\d+:\d+(?:\.\d+)?\s+")
 ADDON_RE = re.compile(
     r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?P<body>.*)$"
+)
+# WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
+# as long as /chatlog is on):
+#   10/8 12:34:56.789  [W From] [Sender-Realm]: message
+#   10/8 12:34:56.789  [W To]   [Recipient-Realm]: message
+# Older clients may omit the brackets around the name.
+NATIVE_TAG_RE = re.compile(r"^\[W (?P<kind>From|To)\]\s+(?P<rest>.*)$")
+NATIVE_NAME_RE = re.compile(
+    r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$"
 )
 FALLBACKS = [
     re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$"),
@@ -558,19 +612,57 @@ FALLBACKS = [
 ]
 
 
-def parse_whisper(line: str, own_default: str) -> Optional[tuple[str, str, str]]:
+def _strip_wow_markup(text: str) -> str:
+    """Remove WoW color codes / item links so bodies stay readable."""
+    clean = re.sub(r"\|c[0-9a-fA-F]{8}", "", text)
+    clean = re.sub(r"\|H[^|]*\|h", "", clean)
+    clean = clean.replace("|h", "").replace("|r", "")
+    return clean.strip()
+
+
+def parse_whisper(line: str, own_default: str) -> Optional[tuple[str, str, str, str]]:
+    """
+    Returns (direction, character, player, body) or None.
+      direction  : "incoming" (window received) | "outgoing" (window sent)
+      character  : YOUR character (the window that owns this log line)
+      player     : the other side
+      body       : message text (markup stripped)
+    """
     raw = line.rstrip("\r\n")
     stripped = TIMESTAMP_RE.sub("", raw).strip()
-    m = ADDON_RE.match(stripped)
+    if not stripped:
+        return None
+
+    m = ADDON_RE.match(_strip_wow_markup(stripped))
     if m:
-        return m.group("own").strip(), m.group("from").strip(), m.group("body").strip()
-    clean = re.sub(r"\|c[0-9a-fA-F]{8}", "", stripped)
-    clean = re.sub(r"\|H[^|]*\|h", "", clean)
-    clean = clean.replace("|h", "").replace("|r", "").replace("[", "").replace("]", "")
+        own = m.group("own").strip() or own_default
+        return (
+            "incoming",
+            own,
+            m.group("from").strip(),
+            m.group("body").strip(),
+        )
+
+    clean = _strip_wow_markup(stripped)
+
+    tag = NATIVE_TAG_RE.match(clean)
+    if tag:
+        name_m = NATIVE_NAME_RE.match(tag.group("rest"))
+        if name_m:
+            other = (name_m.group("name") or name_m.group("name2") or "").strip()
+            body = name_m.group("body").strip()
+            if other:
+                if tag.group("kind") == "From":
+                    return "incoming", own_default, other, body
+                return "outgoing", own_default, other, body
+
+    # Legacy fallbacks: some logs/chat addons print "Name whispers: body".
+    # Strip brackets so "[Name-Realm] whispers: body" also matches.
+    clean_nobrackets = clean.replace("[", "").replace("]", "")
     for pat in FALLBACKS:
-        m = pat.match(clean)
+        m = pat.match(clean_nobrackets)
         if m:
-            return own_default, m.group("from").strip(), m.group("body").strip()
+            return "incoming", own_default, m.group("from").strip(), m.group("body").strip()
     return None
 
 
@@ -633,6 +725,11 @@ DEFAULT_CONTROLS = {
     "gseMasterEnabled": False,
     "whisperFocusDelayMs": 500,
     "whisperAfterSendDelayMs": 500,
+    "whisperChatOpenDelayMs": 300,
+    "whisperKeystrokeDelayMs": 50,
+    "whisperChatSendDelayMs": 200,
+    "whisperCloseChatEnabled": True,
+    "whisperChatCloseDelayMs": 200,
     "queuePollMs": 1500,
 }
 
@@ -658,6 +755,28 @@ class BridgeEngine:
         self.spammers_lock = threading.Lock()
         self.controls = DEFAULT_CONTROLS.copy()
         self.controls_lock = threading.Lock()
+        # Recent whisper triples (character, player, body, timestamp).
+        # Used to avoid double-ingesting the same whisper: the addon echo and
+        # the native [W From]/[W To] chat log lines describe the same event,
+        # and messages the bridge itself typed are already recorded by the site.
+        self.recent_whispers: deque = deque(maxlen=400)
+        self.recent_whispers_lock = threading.Lock()
+
+    def _recent_dup(self, character: str, player: str, body: str) -> bool:
+        """True if this exact whisper was already processed in the last ~15s."""
+        now = time.time()
+        cutoff = now - 15.0
+        with self.recent_whispers_lock:
+            while self.recent_whispers and self.recent_whispers[0][3] < cutoff:
+                self.recent_whispers.popleft()
+            for (c, p, b, _t) in self.recent_whispers:
+                if c == character and p == player and b == body:
+                    return True
+        return False
+
+    def _remember_whisper(self, character: str, player: str, body: str) -> None:
+        with self.recent_whispers_lock:
+            self.recent_whispers.append((character, player, body, time.time()))
 
     def start(self, chars: list[RuntimeCharacter]) -> None:
         self.chars = chars
@@ -744,12 +863,18 @@ class BridgeEngine:
                         + ("ligado" if merged["gseMasterEnabled"] else "desligado")
                     )
                     last_gse_master = merged["gseMasterEnabled"]
-                    if not merged["gseMasterEnabled"]:
-                        self._stop_all_spammers("master GSE OFF")
+
+                if not merged["gseMasterEnabled"]:
+                    # Idempotent guard: stop spammers on EVERY cycle while the
+                    # master is off. Without this, the gse_syncer thread can
+                    # race us — it may restart a spammer with stale controls
+                    # right after we stopped it, so the key kept being pressed
+                    # even with "Master GSE" off on the site.
+                    self._stop_all_spammers("master GSE OFF")
             except Exception as e:
                 self.log(f"❌ control sync falhou: {e}")
 
-            for _ in range(10):
+            for _ in range(5):  # 0.5s cadence — reacts faster to master toggles
                 if self.stop_event.is_set():
                     return
                 time.sleep(0.1)
@@ -767,25 +892,49 @@ class BridgeEngine:
     def _incoming(self, ref: RuntimeCharacter) -> None:
         buffer: list[dict] = []
         last_flush = time.time()
+        lines_seen = 0
+        last_whisper_at: Optional[float] = None
+        hint_emitted = False
         for line in tail_file(ref.chat_log, self.stop_event, self.log):
             if not self._get_controls().get("bridgeReaderEnabled", True):
                 # Reader disabled from the site: keep the tailer alive, but do
                 # not parse/ingest messages until re-enabled.
                 time.sleep(0.2)
                 continue
+            lines_seen += 1
             parsed = parse_whisper(line, ref.character)
             if parsed:
-                own, sender, body = parsed
-                character = own or ref.character
-                self.log(f"← [{character}] {sender}: {body}")
+                direction, character, other, body = parsed
+                character = character or ref.character
+                if self._recent_dup(character, other, body):
+                    # Same whisper already captured (addon echo + native log
+                    # line, or a message the bridge itself typed).
+                    continue
+                arrow = "→" if direction == "outgoing" else "←"
+                self.log(f"{arrow} [{character}] {other}: {body}")
+                self._remember_whisper(character, other, body)
+                last_whisper_at = time.time()
+                hint_emitted = False
                 buffer.append(
                     {
-                        "externalId": make_ext_id(character, sender, body),
+                        "externalId": make_ext_id(character, other, body),
                         "character": character,
-                        "player": sender,
+                        "player": other,
                         "body": body,
+                        "direction": direction,
+                        "status": "sent" if direction == "outgoing" else "received",
                         "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     }
+                )
+            elif lines_seen > 30 and (last_whisper_at is None or time.time() - last_whisper_at > 180) and not hint_emitted:
+                # Watching the log but no whisper line was ever parsed. Surface
+                # the two most common setup mistakes instead of failing silently.
+                hint_emitted = True
+                self.log(
+                    "💡 Nenhum whisper detectado no chatlog desta janela ainda. "
+                    "Verifique: (1) digite /chatlog no jogo; "
+                    "(2) instale o addon WIMBridge (recomendado). "
+                    "O fallback nativo ([W From]/[W To]) também funciona só com /chatlog."
                 )
             if buffer and (len(buffer) >= 10 or time.time() - last_flush > 1.5):
                 try:
@@ -838,47 +987,66 @@ class BridgeEngine:
         if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
             raise RuntimeError("pyautogui/pydirectinput não disponíveis")
 
-        # Pause this character's GSE spammer during the type sequence so the
-        # simulated keys don't collide with GSE's rotation. Other characters
-        # keep spamming — their spammers write to their own windows via
-        # PostMessage in background.
-        spammer = None
+        # Pause EVERY GSE spammer while we type: simulated keys must never
+        # interleave with GSE PostMessages, otherwise characters get eaten
+        # (the "testando" -> "ando" bug) and other windows stay untouched.
         with self.spammers_lock:
-            spammer = self.spammers.get(ref.character)
-        if spammer:
-            spammer.pause_event.set()
+            paused_spammers = list(self.spammers.values())
+        for s in paused_spammers:
+            s.pause_event.set()
 
         try:
             with _send_lock:
                 controls = self._get_controls()
                 focus_delay = int(controls.get("whisperFocusDelayMs", 500)) / 1000.0
+                open_delay = int(controls.get("whisperChatOpenDelayMs", 300)) / 1000.0
+                keystroke_delay = max(
+                    0.01, int(controls.get("whisperKeystrokeDelayMs", 50)) / 1000.0
+                )
+                send_delay = int(controls.get("whisperChatSendDelayMs", 200)) / 1000.0
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", True))
+                close_delay = int(controls.get("whisperChatCloseDelayMs", 200)) / 1000.0
                 after_delay = int(controls.get("whisperAfterSendDelayMs", 500)) / 1000.0
                 if not focus_hwnd(ref.hwnd):
                     raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
                 # Delay de estabilidade: dá tempo para o foco e mensagens em
                 # background terminarem antes de digitar o /w.
                 time.sleep(max(0.1, min(5.0, focus_delay)))
-                if HAS_PYDIRECTINPUT:
-                    pydirectinput.press("enter")
-                else:
-                    pyautogui.press("enter")
-                time.sleep(0.08)
+                press_key("enter")  # abre o chat (funciona mesmo com o chat fechado)
+                # Delay para o campo de chat abrir antes de inserir o comando.
+                time.sleep(max(0.0, min(3.0, open_delay)))
                 cmd = f"/w {player} {body}"
-                if HAS_PYAUTOGUI:
-                    pyautogui.typewrite(cmd, interval=0.02)
-                else:
-                    for ch in cmd:
-                        pydirectinput.write(ch, interval=0.02)
-                time.sleep(0.05)
-                if HAS_PYDIRECTINPUT:
-                    pydirectinput.press("enter")
-                else:
-                    pyautogui.press("enter")
+                # Atomic paste via clipboard: the whole command arrives at
+                # once, so long messages are never "cut" in half.
+                pasted = False
+                if HAS_WIN32:
+                    pasted = set_clipboard_text(cmd) and paste_ctrl_v()
+                if not pasted:
+                    # Fallback: type character by character with the
+                    # configured keystroke delay.
+                    if HAS_PYAUTOGUI:
+                        pyautogui.typewrite(cmd, interval=keystroke_delay)
+                    else:
+                        for ch in cmd:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                # Delay antes de pressionar Enter para enviar a mensagem.
+                time.sleep(max(0.0, min(3.0, send_delay)))
+                press_key("enter")  # envia o whisper
+                # Remember what we just typed: the game echoes the sent whisper
+                # to the chat log as [W To] — skip it so the site doesn't show
+                # the same outgoing message twice.
+                self._remember_whisper(ref.character, player, body)
+                if close_enabled:
+                    # Fecha o campo de chat do jogo (Escape) para não
+                    # atrapalhar a rotação/GSE nem outras janelas. A próxima
+                    # mensagem da fila reabre o chat sozinha.
+                    time.sleep(max(0.0, min(3.0, close_delay)))
+                    press_key("esc")
                 # Delay de estabilidade antes de liberar o GSE de volta.
                 time.sleep(max(0.1, min(5.0, after_delay)))
         finally:
-            if spammer:
-                spammer.pause_event.clear()
+            for s in paused_spammers:
+                s.pause_event.clear()
 
     def _gse_syncer(self) -> None:
         """

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq, gt, sql, or } from "drizzle-orm";
+import { and, asc, eq, gt } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,10 +9,6 @@ export const dynamic = "force-dynamic";
 /**
  * GET  → messages between `character` (your window) and `player` (the other end).
  * POST → queues a new outgoing whisper to be typed in that specific window.
- *
- * The search is bidirectional so the chat behaves like a social network:
- * it shows all messages exchanged between the two parties regardless of
- * which side is the "owner" (character) or "other" (player).
  */
 export async function GET(
   request: NextRequest,
@@ -27,16 +23,8 @@ export async function GET(
   );
 
   const conditions = [
-    or(
-      and(
-        eq(messages.character, character),
-        eq(messages.player, player),
-      ),
-      and(
-        eq(messages.character, player),
-        eq(messages.player, character),
-      ),
-    ),
+    eq(messages.player, player),
+    eq(messages.character, character),
   ];
   if (Number.isFinite(since) && since > 0) {
     conditions.push(gt(messages.id, since));
@@ -127,12 +115,7 @@ export async function DELETE(
 
   const deleted = await db
     .delete(messages)
-    .where(
-      or(
-        and(eq(messages.character, character), eq(messages.player, player)),
-        and(eq(messages.character, player), eq(messages.player, character)),
-      ),
-    )
+    .where(and(eq(messages.character, character), eq(messages.player, player)))
     .returning({ id: messages.id });
 
   return NextResponse.json({

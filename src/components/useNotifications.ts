@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Prefs = {
   sound: boolean;
@@ -201,13 +201,19 @@ export function useNotifications() {
     [prefs],
   );
 
-  return {
-    prefs,
-    setSound,
-    setVolume,
-    setDesktop,
-    testChime,
-    notifyIncoming,
-    ready,
-  };
+  // Stable object identity: ChatApp's incoming poller effect depends on this
+  // object. Without useMemo the object would change on every render and the
+  // polling interval would be torn down/recreated constantly.
+  return useMemo(
+    () => ({
+      prefs,
+      setSound,
+      setVolume,
+      setDesktop,
+      testChime,
+      notifyIncoming,
+      ready,
+    }),
+    [prefs, ready, setSound, setVolume, setDesktop, testChime, notifyIncoming],
+  );
 }

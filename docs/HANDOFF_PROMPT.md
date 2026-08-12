@@ -30,6 +30,30 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
      * GseView: `min-h-dvh`, tabela scroll hint, grid timing responsivo `sm:grid-cols-2 lg:grid-cols-3`.
      * SettingsView: sections com padding responsivo `p-4 sm:p-5`, títulos `text-base sm:text-lg`.
      * Download/Setup: paddings e títulos responsivos.
+9. ✅ Bug fixes GSE v1.1.1:
+   - `charDirtyRef`: o poll de 2s não sobrescreve mais edições não salvas de keybind/intervalo dos personagens (antes o `setStates(map)` do refresh apagava os rascunhos).
+   - `updateControls` agora retorna boolean; `saveDelays` só limpa o flag dirty em caso de sucesso (antes um POST 401/erro limpava o dirty e o poll revertia os valores).
+   - Alertas claros para 401 (instruções de token admin em /settings) e erros de conexão, com valores preservados.
+   - `saveAllCharChanges` checa `res.ok` por personagem, limpa o dirty ANTES do refresh para sincronizar os valores salvos.
+   - Campo typing com `step={1}` e `inputMode="numeric"` para digitação fácil no mobile.
+10. ✅ Pipeline de whispers bidirecional v1.1.2 (fix crítico — mensagens recebidas se perdiam):
+   - Bridge (`wim_bridge_gui.py`):
+     * `DEFAULT_CONTROLS` agora inclui `whisperChatOpenDelayMs`, `whisperKeystrokeDelayMs`, `whisperChatSendDelayMs` (antes o `_control_syncer` filtrava e IGNORAVA os delays configurados no site).
+     * `_send` implementa a sequência: foco → Enter (abrir chat) → openDelay → digitar com keystrokeDelay → sendDelay → Enter (enviar) → afterDelay.
+     * Parser agora lê o chatlog NATIVO do WoW: `[W From]` → incoming, `[W To]` → outgoing (funciona SEM o addon, só com /chatlog). Timestamp tolerante (com/sem ms).
+     * `[W To]` captura respostas digitadas dentro do jogo → nunca mais se perdem.
+     * Dedup `recent_whispers` (janela 15s): addon echo + linha nativa do mesmo whisper não duplicam; mensagens digitadas pelo próprio bridge não são re-ingestadas.
+     * Diagnóstico: se 30+ linhas do log passarem sem nenhum whisper parseado por 3min, loga dica sobre /chatlog e addon.
+   - Site:
+     * `/api/ingest` aceita `direction` ("incoming"|"outgoing") e `status` por mensagem.
+     * `useNotifications` retorna objeto estável via useMemo (o poller de incoming não reinicia a cada render).
+     * Removido bug no `refreshTop` que marcava TODAS as conversas como não lidas quando a aba ficava oculta (quem marca é só o poller de `/api/incoming/recent`, corretamente por mensagem nova).
+11. ✅ Envio robusto + fechar chat v1.1.3:
+    - Mensagem "picada" (testando → ando) resolvida: envio usa PASTE atômico via clipboard (win32clipboard + Ctrl+V) — a mensagem inteira chega de uma vez. Fallback: digitação char-a-char com keystrokeDelay.
+    - `_send` pausa TODOS os spammers GSE durante o envio (antes só o do personagem alvo) — teclas simuladas nunca colidem com PostMessage do GSE.
+    - Fechar chat: novos controles `whisperCloseChatEnabled` (default yes) e `whisperChatCloseDelayMs` (default 200). Após enviar, o bridge pressiona ESC e fecha o campo de chat do jogo. A próxima mensagem da fila reabre o chat sozinha (Enter → paste /w player → Enter → ESC), então dá para conversar depois com fulano/lucas mesmo com o chat fechado.
+    - GSE master OFF: corrida corrigida — `_control_syncer` para TODOS os spammers a CADA ciclo (0.5s) enquanto master estiver OFF, mesmo se `_gse_syncer` tentar recriar com controles obsoletos.
+    - `whisperChatOpenDelayMs` default 300ms (chat aberto antes do paste).
 
 **Relatório completo (cole aqui):**
 

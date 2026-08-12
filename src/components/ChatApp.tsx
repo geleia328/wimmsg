@@ -150,21 +150,6 @@ export function ChatApp() {
       setStatusMap(map);
       setTotalWindowsOnline(onlineCount);
       setBridgeUp(true);
-
-      // Detect new conversations with incoming messages while tab is hidden
-      if (document.visibilityState !== "visible") {
-        setUnreadMap((prev) => {
-          const next = { ...prev };
-          for (const conv of newConvos) {
-            const key = `${conv.character}::${conv.player}`;
-            if (conv.incomingCount > 0 && !next[key]) {
-              // Check if this conversation is "new" to us (not previously known)
-              next[key] = true;
-            }
-          }
-          return next;
-        });
-      }
     } catch {
       setBridgeUp(false);
     }
@@ -838,9 +823,7 @@ export function ChatApp() {
                   </div>
                 )}
                 {messages.map((m) => {
-                  // With bidirectional searches, a message is "mine" if it was
-                  // sent by the currently selected character (the conversation owner).
-                  const mine = m.character === selected.character;
+                  const mine = m.direction === "outgoing";
                   const badge = statusBadge(m.status);
                   return (
                     <div

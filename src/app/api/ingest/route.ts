@@ -14,12 +14,22 @@ type IncomingPayload = {
     player: string;
     body: string;
     receivedAt?: string;
+    /**
+     * The bridge posts BOTH sides of the chat:
+     *  - "incoming" (default): a whisper RECEIVED in this window
+     *    (from the addon echo or the native `[W From]` chat log line).
+     *  - "outgoing": a whisper SENT from this window, e.g. typed in-game and
+     *    captured from the native `[W To]` chat log line. This makes sure
+     *    replies typed inside WoW are never lost and show up in the site.
+     */
+    direction?: "incoming" | "outgoing";
+    status?: string;
   }>;
 };
 
 /**
- * The Python bridge posts newly-seen whispers here. `character` identifies
- * WHICH of your WoW windows received the whisper. We upsert by external_id
+ * The Python bridge posts newly-seen chat lines here. `character` identifies
+ * WHICH of your WoW windows the message belongs to. We upsert by external_id
  * so re-posting is idempotent.
  */
 export async function POST(request: NextRequest) {
@@ -45,19 +55,24 @@ export async function POST(request: NextRequest) {
         typeof m.body === "string" &&
         typeof m.character === "string",
     )
-    .map((m) => ({
-      character: m.character.trim() || "unknown",
-      player: m.player.trim(),
-      body: m.body,
-      direction: "incoming" as const,
-      status: "received" as const,
-      externalId:
-        m.externalId ??
-        `${m.character}-${m.player}-${m.receivedAt ?? new Date().toISOString()}-${Math.random()
-          .toString(36)
-          .slice(2, 8)}`,
-      createdAt: m.receivedAt ? new Date(m.receivedAt) : new Date(),
-    }))
+    .map((m) => {
+      const isOutgoing = m.direction === "outgoing";
+      return {
+        character: m.character.trim() || "unknown",
+        player: m.player.trim(),
+        body: m.body,
+        direction: isOutgoing ? ("outgoing" as const) : ("incoming" as const),
+        status: isOutgoing
+          ? ((m.status ?? "sent") as "sent" | "failed")
+          : ("received" as const),
+        externalId:
+          m.externalId ??
+          `${m.character}-${m.player}-${m.receivedAt ?? new Date().toISOString()}-${Math.random()
+            .toString(36)
+            .slice(2, 8)}`,
+        createdAt: m.receivedAt ? new Date(m.receivedAt) : new Date(),
+      };
+    })
     .filter((r) => r.player.length > 0 && r.body.length > 0);
 
   if (rows.length === 0) {
