@@ -838,7 +838,9 @@ export function ChatApp() {
                   </div>
                 )}
                 {messages.map((m) => {
-                  const mine = m.direction === "outgoing";
+                  // With bidirectional searches, a message is "mine" if it was
+                  // sent by the currently selected character (the conversation owner).
+                  const mine = m.character === selected.character;
                   const badge = statusBadge(m.status);
                   return (
                     <div
