@@ -1,8 +1,0 @@
-## Interface: 110000
-## Title: WIM Bridge
-## Notes: Mirrors received whispers into the chat log with a [WIMBRIDGE] tag including own character name, for multi-window setups.
-## Author: WIM Bridge
-## Version: 2.0.0
-## SavedVariables: WIMBridgeDB
-
-WIMBridge.lua

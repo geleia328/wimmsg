@@ -19,12 +19,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          architecture: "x64"
+
+      - name: Show Python info
+        run: |
+          python --version
+          python -c "import sys; print(sys.version); print(sys.executable)"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install requests pydirectinput pyautogui pywin32 psutil
+          python -m pip install --upgrade pip setuptools wheel
+          pip install "pyinstaller==6.11.1"
+          pip install "requests>=2.31" "pydirectinput>=1.0.4" "pyautogui>=0.9.54" "pywin32>=306" "psutil>=5.9" "Pillow>=10.0"
+          pip install pywin32-ctypes
+          python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
+          python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
 
       - name: Inject build constants
         shell: pwsh
@@ -33,36 +42,73 @@ jobs:
           BRIDGE_TOKEN: ${{ secrets.BRIDGE_TOKEN }}
         run: |
           $src = "public/downloads/wim_bridge_gui.py"
-          $content = Get-Content $src -Raw
+          if (-not (Test-Path $src)) {
+            Write-Error "Source file not found: $src"
+            exit 1
+          }
+          # Read as UTF-8 (avoids UTF-16 corruption that PyInstaller would choke on)
+          $content = [System.IO.File]::ReadAllText((Resolve-Path $src), [System.Text.Encoding]::UTF8)
+
           if ($env:API_URL) {
-            $content = $content -replace 'API_URL = "https://wimmsg-lntm\.vercel\.app"', "API_URL = `"$env:API_URL`""
+            $content = $content -replace 'API_URL = "https://[^"]*"', ('API_URL = "' + $env:API_URL + '"')
+            Write-Host "✓ API_URL injected: $env:API_URL"
+          } else {
+            Write-Warning "API_URL secret not set — using default in source"
           }
+
           if ($env:BRIDGE_TOKEN) {
-            $content = $content -replace 'BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"', "BRIDGE_TOKEN = `"$env:BRIDGE_TOKEN`""
+            $content = $content -replace 'BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"', ('BRIDGE_TOKEN = "' + $env:BRIDGE_TOKEN + '"')
+            Write-Host "✓ BRIDGE_TOKEN injected (length: $($env:BRIDGE_TOKEN.Length))"
+          } else {
+            Write-Warning "BRIDGE_TOKEN secret not set — .exe will run without auth"
           }
-          Set-Content $src $content
-          Write-Host "API_URL and BRIDGE_TOKEN injected."
+
+          [System.IO.File]::WriteAllText((Resolve-Path $src), $content, [System.Text.UTF8Encoding]::new($false))
+          Write-Host "✓ Constants injected into $src"
+
+      - name: Sanity-check the injected source
+        shell: pwsh
+        run: |
+          python -c "import ast; ast.parse(open('public/downloads/wim_bridge_gui.py', encoding='utf-8').read()); print('Python syntax OK')"
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --noconsole --name "BakersWhisper" public/downloads/wim_bridge_gui.py
+          pyinstaller --onefile --noconsole --name "BakersWhisper" `
+            --collect-submodules pyautogui `
+            --collect-submodules pydirectinput `
+            --collect-submodules psutil `
+            --hidden-import win32gui `
+            --hidden-import win32con `
+            --hidden-import win32api `
+            --hidden-import win32process `
+            --hidden-import pywintypes `
+            --hidden-import pkg_resources.py2_warn `
+            public/downloads/wim_bridge_gui.py
 
       - name: Verify build
+        shell: pwsh
         run: |
           if (Test-Path dist/BakersWhisper.exe) {
-            Write-Host "Build successful: dist/BakersWhisper.exe"
-            Get-Item dist/BakersWhisper.exe | Select-Object Name, Length
+            Write-Host "✅ Build successful"
+            $item = Get-Item dist/BakersWhisper.exe
+            Write-Host "   File: $($item.FullName)"
+            Write-Host "   Size: $([math]::Round($item.Length / 1MB, 2)) MB"
           } else {
-            Write-Error "Build failed - executable not found"
+            Write-Host "❌ Build FAILED - executable not found"
+            Write-Host "Contents of dist/:"
+            Get-ChildItem dist -ErrorAction SilentlyContinue
+            Write-Host "Contents of build/:"
+            Get-ChildItem build -ErrorAction SilentlyContinue
             exit 1
           }
 
-      - name: Upload artifact (for manual runs)
+      - name: Upload artifact (available on every run)
         uses: actions/upload-artifact@v4
         with:
           name: BakersWhisper-Windows
           path: dist/BakersWhisper.exe
           retention-days: 30
+          if-no-files-found: error
 
       - name: Create Release (for tag pushes)
         if: startsWith(github.ref, 'refs/tags/')
@@ -74,15 +120,15 @@ jobs:
             ## 🥐 Bakers Whisper ${{ github.ref_name }}
 
             ### 📥 Download
-            Baixe o arquivo **BakersWhisper.exe** abaixo.
+            Baixe **BakersWhisper.exe** abaixo.
 
             ### 🚀 Como usar
-            1. Baixe e execute `BakersWhisper.exe` (Windows pode pedir permissão — clique em "Mais informações → Executar assim mesmo")
-            2. Abra o WoW em cada janela que quiser monitorar
-            3. Dentro do jogo, digite `/chatlog` em cada janela
-            4. No app, digite o nome do personagem ao lado de cada janela detectada
-            5. Clique em ▶ Iniciar
+            1. Execute o `.exe` — se o Windows bloquear, clique em **"Mais informações → Executar assim mesmo"**.
+            2. Abra o WoW em cada janela que quiser monitorar.
+            3. Dentro do jogo, digite `/chatlog` em cada janela.
+            4. No app, digite o nome do personagem (`Nome-Reino`) em cada linha.
+            5. Clique em **▶ Iniciar**.
 
-            Pronto! Todos os whispers vão aparecer no painel web.
+            Depois acesse o painel web e responda os whispers de qualquer lugar!
           draft: false
           prerelease: false
