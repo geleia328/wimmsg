@@ -78,7 +78,6 @@ function statusBadge(status: string): { label: string; classes: string } {
   }
 }
 
-// Deterministic-ish color for a character label based on its name.
 function charColor(name: string): string {
   const palette = [
     "bg-sky-500/20 text-sky-300 border-sky-500/40",
@@ -119,7 +118,14 @@ export function ChatApp() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const notif = useNotifications();
-  const lastIncomingIdRef = useRef<number>(-1); // -1 = "priming, don't fire"
+  const lastIncomingIdRef = useRef<number>(-1);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const maxMessageIdRef = useRef(0);
+  // Track which conversations have unseen incoming messages
+  const [unreadMap, setUnreadMap] = useState<Record<string, boolean>>({});
 
   const refreshTop = useCallback(async () => {
     try {
@@ -128,9 +134,9 @@ export function ChatApp() {
         fetch("/api/characters", { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/status", { cache: "no-store" }).then((r) => r.json()),
       ]);
-      setConversations(
-        (c1 as { conversations: Conversation[] }).conversations ?? [],
-      );
+      const newConvos =
+        (c1 as { conversations: Conversation[] }).conversations ?? [];
+      setConversations(newConvos);
       setCharacters((c2 as { characters: CharacterInfo[] }).characters ?? []);
       const wins =
         (c3 as { windows: Array<WindowStatus & { character: string }> })
@@ -144,6 +150,21 @@ export function ChatApp() {
       setStatusMap(map);
       setTotalWindowsOnline(onlineCount);
       setBridgeUp(true);
+
+      // Detect new conversations with incoming messages while tab is hidden
+      if (document.visibilityState !== "visible") {
+        setUnreadMap((prev) => {
+          const next = { ...prev };
+          for (const conv of newConvos) {
+            const key = `${conv.character}::${conv.player}`;
+            if (conv.incomingCount > 0 && !next[key]) {
+              // Check if this conversation is "new" to us (not previously known)
+              next[key] = true;
+            }
+          }
+          return next;
+        });
+      }
     } catch {
       setBridgeUp(false);
     }
@@ -156,7 +177,12 @@ export function ChatApp() {
         { cache: "no-store" },
       );
       const data = (await res.json()) as { messages: Message[] };
-      setMessages(data.messages ?? []);
+      const msgs = data.messages ?? [];
+      setMessages(msgs);
+      // Track the highest message id we've seen in this conversation
+      for (const m of msgs) {
+        if (m.id > maxMessageIdRef.current) maxMessageIdRef.current = m.id;
+      }
     },
     [],
   );
@@ -178,7 +204,7 @@ export function ChatApp() {
         const since = lastIncomingIdRef.current;
         const url =
           since < 0
-            ? "/api/incoming/recent" // priming call — just capture the max ID
+            ? "/api/incoming/recent"
             : `/api/incoming/recent?since=${since}`;
         const res = await fetch(url, { cache: "no-store" });
         const data = (await res.json()) as {
@@ -193,7 +219,6 @@ export function ChatApp() {
         if (cancelled) return;
 
         if (lastIncomingIdRef.current < 0) {
-          // First run: don't spam notifications for every historical message.
           lastIncomingIdRef.current = data.latestId ?? 0;
           return;
         }
@@ -206,10 +231,33 @@ export function ChatApp() {
               body: m.body,
             });
             lastIncomingIdRef.current = m.id;
+
+            const sel = selectedRef.current;
+            const isCurrentChat =
+              sel &&
+              sel.character === m.character &&
+              sel.player === m.player;
+
+            if (isCurrentChat) {
+              // Auto-refresh the messages in the currently-open conversation
+              // so the new whisper appears instantly without waiting for the
+              // regular /api/conversations polling cycle.
+              await fetchMessages(m.character, m.player);
+              // Scroll to bottom
+              setTimeout(() => {
+                if (scrollRef.current) {
+                  scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                }
+              }, 50);
+            } else {
+              // Mark as unread for the conversation list badge
+              const key = `${m.character}::${m.player}`;
+              setUnreadMap((prev) => ({ ...prev, [key]: true }));
+            }
           }
         }
       } catch {
-        /* silent — top-level polling will surface connection errors */
+        /* silent */
       }
     };
 
@@ -219,13 +267,21 @@ export function ChatApp() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [notif]);
+  }, [notif, fetchMessages]);
 
+  // When a conversation becomes selected, clear its unread badge
   useEffect(() => {
     if (!selected) {
       setMessages([]);
       return;
     }
+    const key = `${selected.character}::${selected.player}`;
+    setUnreadMap((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
     void fetchMessages(selected.character, selected.player);
     const id = setInterval(
       () => void fetchMessages(selected.character, selected.player),
@@ -255,7 +311,6 @@ export function ChatApp() {
       if (res.ok) {
         const data = (await res.json()) as { warning?: string };
         if (data.warning) {
-          // Non-blocking: message was queued, just inform the user.
           alert(`⚠ Aviso de servidor:\n\n${data.warning}`);
         }
         setDraft("");
@@ -335,7 +390,6 @@ export function ChatApp() {
     }
   }, [selected, refreshTop]);
 
-  // Compute realm mismatch warning for the currently selected conversation.
   const realmMismatch = useMemo(() => {
     if (!selected) return null;
     const cr = selected.character.includes("-")
@@ -381,6 +435,18 @@ export function ChatApp() {
     () => characters.reduce((s, c) => s + c.pendingOut, 0),
     [characters],
   );
+
+  // Clear unread badges when tab becomes visible
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        // Don't clear unreads immediately — let user see the badges.
+        // They clear when the user opens each conversation.
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   return (
     <div className="flex h-dvh w-full flex-col">
@@ -573,11 +639,11 @@ export function ChatApp() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar (on mobile it behaves as a drawer: hidden while a chat is open) */}
+        {/* Sidebar: full-width on mobile when no chat selected, responsive width on tablets/desktop */}
         <aside
           className={`${
             selected ? "hidden md:flex" : "flex"
-          } w-full flex-col border-r border-slate-800 bg-slate-900/40 md:w-96`}
+          } w-full flex-col border-r border-slate-800 bg-slate-900/40 md:w-80 lg:w-96`}
         >
           <div className="border-b border-slate-800 p-3">
             <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
@@ -625,27 +691,44 @@ export function ChatApp() {
               </div>
             )}
             {filteredConversations.map((c) => {
+              const convKey = `${c.character}::${c.player}`;
               const active =
                 selected?.character === c.character && selected?.player === c.player;
+              const hasUnread = unreadMap[convKey];
               return (
                 <button
-                  key={`${c.character}::${c.player}`}
+                  key={convKey}
                   onClick={() =>
                     setSelected({ character: c.character, player: c.player })
                   }
                   className={`flex w-full flex-col gap-1 border-b border-slate-800/60 px-4 py-3 text-left transition ${
                     active
                       ? "bg-amber-500/10 border-l-2 border-l-amber-500"
-                      : "hover:bg-slate-800/40"
+                      : hasUnread
+                        ? "bg-amber-500/5 border-l-2 border-l-amber-400/50"
+                        : "hover:bg-slate-800/40"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate font-semibold text-slate-100">
+                    <span
+                      className={`truncate ${
+                        hasUnread
+                          ? "font-bold text-amber-200"
+                          : "font-semibold text-slate-100"
+                      }`}
+                    >
                       {c.player}
                     </span>
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                      {timeAgo(c.lastAt)}
-                    </span>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {hasUnread && (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-slate-950">
+                          !
+                        </span>
+                      )}
+                      <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                        {timeAgo(c.lastAt)}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <span
@@ -653,7 +736,11 @@ export function ChatApp() {
                     >
                       {c.character}
                     </span>
-                    <span className="truncate text-xs text-slate-400">
+                    <span
+                      className={`truncate text-xs ${
+                        hasUnread ? "font-medium text-amber-300" : "text-slate-400"
+                      }`}
+                    >
                       {c.lastDirection === "outgoing" ? "→ " : ""}
                       {c.lastBody}
                     </span>
@@ -664,25 +751,26 @@ export function ChatApp() {
           </div>
         </aside>
 
-        {/* Message pane */}
+        {/* Message pane: full-width on mobile when chat selected */}
         <main
           className={`${
             selected ? "flex" : "hidden md:flex"
           } flex-1 flex-col bg-[radial-gradient(circle_at_top,rgba(120,80,20,0.15),transparent_60%)]`}
         >
           {!selected ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-slate-500">
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center text-slate-500">
               <div className="text-6xl">💬</div>
-              <div>Selecione uma conversa à esquerda</div>
+              <div>Selecione uma conversa</div>
               <div className="text-xs">
                 ou aguarde um whisper chegar em qualquer uma das suas janelas.
               </div>
             </div>
           ) : (
             <>
-              <div className="border-b border-slate-800 px-3 py-3 sm:px-6">
+              {/* Chat header */}
+              <div className="shrink-0 border-b border-slate-800 px-3 py-2.5 sm:px-6 sm:py-3">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
                     <button
                       onClick={() => setSelected(null)}
                       aria-label="Voltar para a lista de conversas"
@@ -690,11 +778,33 @@ export function ChatApp() {
                     >
                       ←
                     </button>
-                    <div className="min-w-0 text-sm text-slate-400">
-                      Whisper com{" "}
-                      <span className="truncate font-bold text-amber-300">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-amber-300">
                         {selected.player}
-                      </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] sm:text-xs">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono ${charColor(selected.character)}`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              statusMap[selected.character]?.online
+                                ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60"
+                                : "bg-slate-600"
+                            }`}
+                          />
+                          {selected.character}
+                        </span>
+                        {statusMap[selected.character]?.online ? (
+                          <span className="text-emerald-400">
+                            online
+                          </span>
+                        ) : (
+                          <span className="text-rose-400">
+                            offline — envio pode falhar
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <button
@@ -706,30 +816,6 @@ export function ChatApp() {
                     {clearingConversation ? "apagando..." : "🗑 Limpar"}
                   </button>
                 </div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                  <span className="text-slate-500">via</span>
-                  <span
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono ${charColor(selected.character)}`}
-                  >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        statusMap[selected.character]?.online
-                          ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60"
-                          : "bg-slate-600"
-                      }`}
-                    />
-                    {selected.character}
-                  </span>
-                  {statusMap[selected.character]?.online ? (
-                    <span className="text-emerald-400">
-                      janela detectada · pronto para enviar
-                    </span>
-                  ) : (
-                    <span className="text-rose-400">
-                      janela não detectada — o envio pode falhar
-                    </span>
-                  )}
-                </div>
                 {realmMismatch && (
                   <div className="mt-2 rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
                     ⚠ <b>Servidor diferente:</b> seu personagem está em{" "}
@@ -740,9 +826,10 @@ export function ChatApp() {
                 )}
               </div>
 
+              {/* Messages area */}
               <div
                 ref={scrollRef}
-                className="flex-1 space-y-3 overflow-y-auto px-3 py-4 sm:px-6"
+                className="flex-1 space-y-3 overflow-y-auto px-3 py-3 sm:px-6 sm:py-4"
               >
                 {messages.length === 0 && (
                   <div className="pt-12 text-center text-sm text-slate-500">
@@ -759,17 +846,17 @@ export function ChatApp() {
                       className={`flex ${mine ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-[85%] rounded-2xl px-4 py-2 shadow md:max-w-lg ${
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 shadow sm:max-w-lg sm:px-4 ${
                           mine
                             ? "bg-amber-600 text-slate-950"
                             : "bg-slate-800 text-slate-100"
                         }`}
                       >
-                        <div className="whitespace-pre-wrap break-words text-sm">
+                        <div className="whitespace-pre-wrap break-words text-[13px] sm:text-sm">
                           {m.body}
                         </div>
                         <div
-                          className={`mt-1 flex flex-wrap items-center gap-2 text-[10px] ${
+                          className={`mt-1 flex flex-wrap items-center gap-1.5 text-[10px] ${
                             mine ? "text-slate-900/70" : "text-slate-400"
                           }`}
                         >
@@ -781,7 +868,7 @@ export function ChatApp() {
                           </span>
                           {mine && badge.label && (
                             <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${badge.classes || "bg-slate-900/20"}`}
+                              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${badge.classes || "bg-slate-900/20"}`}
                             >
                               {badge.label}
                             </span>
@@ -809,7 +896,8 @@ export function ChatApp() {
                 })}
               </div>
 
-              <div className="border-t border-slate-800 bg-slate-900/60 p-2.5 sm:p-3">
+              {/* Input area */}
+              <div className="shrink-0 border-t border-slate-800 bg-slate-900/60 p-2.5 sm:p-3">
                 <div className="flex items-end gap-2">
                   <textarea
                     value={draft}
@@ -821,21 +909,22 @@ export function ChatApp() {
                       }
                     }}
                     rows={2}
-                    placeholder={`Responder ${selected.player} pela janela ${selected.character}...`}
-                    className="flex-1 resize-none rounded-lg bg-slate-800 px-3 py-2 text-sm placeholder-slate-500 outline-none focus:ring-2 focus:ring-amber-500/60"
+                    placeholder={`Responder ${selected.player}...`}
+                    className="flex-1 resize-none rounded-xl bg-slate-800 px-3 py-2.5 text-sm placeholder-slate-500 outline-none focus:ring-2 focus:ring-amber-500/60"
                   />
                   <button
                     onClick={() => void sendReply()}
                     disabled={sending || !draft.trim()}
-                    className="rounded-lg bg-amber-500 px-5 py-2 text-sm font-bold text-slate-950 shadow disabled:opacity-40 hover:bg-amber-400"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-lg font-bold text-slate-950 shadow disabled:opacity-40 hover:bg-amber-400"
+                    title="Enviar mensagem"
                   >
-                    {sending ? "..." : "Enviar"}
+                    {sending ? "..." : "➤"}
                   </button>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-                  <span>
-                    O Python bridge focará a janela{" "}
-                    <b>{selected.character}</b> e digitará <code>/w {selected.player}</code> ...
+                  <span className="hidden sm:inline">
+                    via <b>{selected.character}</b> ·{" "}
+                    <code>/w {selected.player}</code>
                   </span>
                   <span>{draft.length}/255</span>
                 </div>

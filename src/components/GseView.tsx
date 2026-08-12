@@ -25,6 +25,9 @@ type Controls = {
   gseMasterEnabled: boolean;
   whisperFocusDelayMs: number;
   whisperAfterSendDelayMs: number;
+  whisperChatOpenDelayMs: number;
+  whisperKeystrokeDelayMs: number;
+  whisperChatSendDelayMs: number;
   queuePollMs: number;
 };
 
@@ -38,16 +41,25 @@ export function GseView() {
     gseMasterEnabled: false,
     whisperFocusDelayMs: 500,
     whisperAfterSendDelayMs: 500,
+    whisperChatOpenDelayMs: 200,
+    whisperKeystrokeDelayMs: 50,
+    whisperChatSendDelayMs: 200,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
     whisperFocusDelayMs: "500",
     whisperAfterSendDelayMs: "500",
+    whisperChatOpenDelayMs: "200",
+    whisperKeystrokeDelayMs: "50",
+    whisperChatSendDelayMs: "200",
     queuePollMs: "1500",
   });
   const [delayDirty, setDelayDirty] = useState(false);
+  const [charDirty, setCharDirty] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const [savingChars, setSavingChars] = useState(false);
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
+  const [removing, setRemoving] = useState<Record<string, boolean>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -68,6 +80,9 @@ export function GseView() {
         setDelayDraft({
           whisperFocusDelayMs: String(nextControls.whisperFocusDelayMs),
           whisperAfterSendDelayMs: String(nextControls.whisperAfterSendDelayMs),
+          whisperChatOpenDelayMs: String(nextControls.whisperChatOpenDelayMs),
+          whisperKeystrokeDelayMs: String(nextControls.whisperKeystrokeDelayMs),
+          whisperChatSendDelayMs: String(nextControls.whisperChatSendDelayMs),
           queuePollMs: String(nextControls.queuePollMs),
         });
       }
@@ -84,8 +99,6 @@ export function GseView() {
   }, [refresh]);
 
   const characters = useMemo(() => {
-    // Any character that is either detected as an online window OR that
-    // already has a GSE row in the DB.
     const set = new Set<string>();
     for (const w of windows) if (w.character) set.add(w.character);
     for (const c of Object.keys(states)) set.add(c);
@@ -95,6 +108,11 @@ export function GseView() {
   const runningCount = useMemo(
     () => characters.filter((c) => states[c]?.running).length,
     [characters, states],
+  );
+
+  const hasCharDirty = useMemo(
+    () => Object.values(charDirty).some(Boolean),
+    [charDirty],
   );
 
   const updateOne = useCallback(
@@ -109,6 +127,53 @@ export function GseView() {
         await refresh();
       } finally {
         setBusy((b) => ({ ...b, [character]: false }));
+      }
+    },
+    [refresh],
+  );
+
+  const saveAllCharChanges = useCallback(async () => {
+    setSavingChars(true);
+    try {
+      for (const c of characters) {
+        if (!charDirty[c]) continue;
+        const st = states[c];
+        if (!st) continue;
+        await fetch(`/api/gse/${encodeURIComponent(c)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            keybind: st.keybind,
+            intervalMs: st.intervalMs,
+          }),
+        });
+      }
+      setCharDirty({});
+      await refresh();
+    } finally {
+      setSavingChars(false);
+    }
+  }, [characters, states, charDirty, refresh]);
+
+  const removeCharacter = useCallback(
+    async (character: string) => {
+      const ok = window.confirm(
+        `Remover ${character} da lista GSE?\n\nIsso apaga a configuração GSE deste personagem. O personagem volta à lista se for detectado novamente pelo bridge.`,
+      );
+      if (!ok) return;
+
+      setRemoving((r) => ({ ...r, [character]: true }));
+      try {
+        await fetch(`/api/gse/${encodeURIComponent(character)}`, {
+          method: "DELETE",
+        });
+        await refresh();
+      } finally {
+        setRemoving((r) => {
+          const n = { ...r };
+          delete n[character];
+          return n;
+        });
       }
     },
     [refresh],
@@ -150,11 +215,17 @@ export function GseView() {
     const patch = {
       whisperFocusDelayMs: Number(delayDraft.whisperFocusDelayMs),
       whisperAfterSendDelayMs: Number(delayDraft.whisperAfterSendDelayMs),
+      whisperChatOpenDelayMs: Number(delayDraft.whisperChatOpenDelayMs),
+      whisperKeystrokeDelayMs: Number(delayDraft.whisperKeystrokeDelayMs),
+      whisperChatSendDelayMs: Number(delayDraft.whisperChatSendDelayMs),
       queuePollMs: Number(delayDraft.queuePollMs),
     };
     if (
       !Number.isFinite(patch.whisperFocusDelayMs) ||
       !Number.isFinite(patch.whisperAfterSendDelayMs) ||
+      !Number.isFinite(patch.whisperChatOpenDelayMs) ||
+      !Number.isFinite(patch.whisperKeystrokeDelayMs) ||
+      !Number.isFinite(patch.whisperChatSendDelayMs) ||
       !Number.isFinite(patch.queuePollMs)
     ) {
       alert("Preencha todos os delays com números válidos.");
@@ -164,16 +235,42 @@ export function GseView() {
     setDelayDirty(false);
   }, [delayDraft, updateControls]);
 
+  function setDraftField(key: keyof typeof delayDraft, value: string) {
+    setDelayDirty(true);
+    setDelayDraft((d) => ({ ...d, [key]: value }));
+  }
+
+  function setCharField(
+    character: string,
+    field: "keybind" | "intervalMs",
+    value: string,
+  ) {
+    setStates((s) => ({
+      ...s,
+      [character]: {
+        ...(s[character] ?? {
+          character,
+          running: false,
+          keybind: "1",
+          intervalMs: 100,
+          updatedAt: new Date().toISOString(),
+        }),
+        [field]: field === "intervalMs" ? Number(value) : value,
+      },
+    }));
+    setCharDirty((d) => ({ ...d, [character]: true }));
+  }
+
   return (
-    <div className="min-h-screen">
+    <div className="min-h-dvh">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-700 font-black text-white shadow">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-700 font-black text-white shadow">
             ⚙
           </div>
-          <div>
+          <div className="min-w-0">
             <h1 className="text-lg font-bold leading-tight">Controle GSE</h1>
-            <p className="text-xs text-slate-400">
+            <p className="truncate text-xs text-slate-400">
               Ativa/desativa o macro GSE em cada janela
               {runningCount > 0 && (
                 <span className="ml-2 rounded-full bg-emerald-500/20 px-2 py-0.5 text-emerald-300">
@@ -211,7 +308,9 @@ export function GseView() {
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="font-bold text-slate-100">Leitor de janelas/whispers</div>
+                  <div className="font-bold text-slate-100">
+                    Leitor de janelas/whispers
+                  </div>
                   <div className="text-xs text-slate-500">
                     Mantém scan de contas + leitura do chat log ativa.
                   </div>
@@ -259,67 +358,98 @@ export function GseView() {
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {/* Timing controls grid */}
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <label className="text-xs text-slate-400">
-              Delay antes de digitar whisper
+              ⏱ Abrir chat no jogo
+              <span className="ml-1 text-slate-600">(abrir /w)</span>
+              <input
+                type="number"
+                min={0}
+                max={3000}
+                step={50}
+                value={delayDraft.whisperChatOpenDelayMs}
+                onChange={(e) =>
+                  setDraftField("whisperChatOpenDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              ⏱ Delay de foco antes de digitar
               <input
                 type="number"
                 min={100}
                 max={5000}
                 step={100}
                 value={delayDraft.whisperFocusDelayMs}
-                onFocus={() => setDelayDirty(true)}
-                onChange={(e) => {
-                  setDelayDirty(true);
-                  setDelayDraft((d) => ({
-                    ...d,
-                    whisperFocusDelayMs: e.target.value,
-                  }));
-                }}
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
+                onChange={(e) =>
+                  setDraftField("whisperFocusDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
             </label>
             <label className="text-xs text-slate-400">
-              Delay depois de enviar whisper
+              ⏱ Entre cada tecla digitada
+              <span className="ml-1 text-slate-600">(typing)</span>
+              <input
+                type="number"
+                min={10}
+                max={500}
+                step={10}
+                value={delayDraft.whisperKeystrokeDelayMs}
+                onChange={(e) =>
+                  setDraftField("whisperKeystrokeDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              ⏱ Enviar mensagem (Enter)
+              <input
+                type="number"
+                min={0}
+                max={3000}
+                step={50}
+                value={delayDraft.whisperChatSendDelayMs}
+                onChange={(e) =>
+                  setDraftField("whisperChatSendDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              ⏱ Depois de enviar whisper
               <input
                 type="number"
                 min={100}
                 max={5000}
                 step={100}
                 value={delayDraft.whisperAfterSendDelayMs}
-                onFocus={() => setDelayDirty(true)}
-                onChange={(e) => {
-                  setDelayDirty(true);
-                  setDelayDraft((d) => ({
-                    ...d,
-                    whisperAfterSendDelayMs: e.target.value,
-                  }));
-                }}
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
+                onChange={(e) =>
+                  setDraftField("whisperAfterSendDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
             </label>
             <label className="text-xs text-slate-400">
-              Poll da fila de whisper
+              ⏱ Poll da fila de whisper
               <input
                 type="number"
                 min={500}
                 max={10000}
                 step={100}
                 value={delayDraft.queuePollMs}
-                onFocus={() => setDelayDirty(true)}
-                onChange={(e) => {
-                  setDelayDirty(true);
-                  setDelayDraft((d) => ({ ...d, queuePollMs: e.target.value }));
-                }}
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1 text-sm text-slate-100"
+                onChange={(e) => setDraftField("queuePollMs", e.target.value)}
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
             </label>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <button
               onClick={() => void saveDelays()}
               disabled={!delayDirty}
-              className="rounded bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40"
+              className="w-full rounded bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40 sm:w-auto"
             >
               💾 Salvar delays
             </button>
@@ -329,13 +459,15 @@ export function GseView() {
               </span>
             ) : (
               <span className="text-xs text-slate-500">
-                delays salvos: {controls.whisperFocusDelayMs}ms /{" "}
-                {controls.whisperAfterSendDelayMs}ms / {controls.queuePollMs}ms
+                delays salvos: foco {controls.whisperFocusDelayMs}ms · digitar{" "}
+                {controls.whisperKeystrokeDelayMs}ms · enviar{" "}
+                {controls.whisperChatSendDelayMs}ms · pós-envio{" "}
+                {controls.whisperAfterSendDelayMs}ms
               </span>
             )}
           </div>
 
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             <button
               onClick={() => void bulk("startAll")}
               disabled={characters.length === 0 || !controls.gseMasterEnabled}
@@ -359,7 +491,9 @@ export function GseView() {
         </div>
 
         {/* Per-character table (scrolls horizontally on small screens) */}
-        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
+        <div className="relative overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
+          {/* Scroll hint on mobile */}
+          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/80 to-transparent sm:hidden" />
           <table className="w-full min-w-[680px] text-sm">
             <thead>
               <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
@@ -369,13 +503,14 @@ export function GseView() {
                 <th className="px-4 py-3">Tecla GSE</th>
                 <th className="px-4 py-3">Intervalo</th>
                 <th className="px-4 py-3">GSE</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {characters.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="px-4 py-10 text-center text-sm text-slate-500"
                   >
                     Nenhum personagem detectado. Abra o Bakers Whisper no seu
@@ -392,10 +527,19 @@ export function GseView() {
                   intervalMs: 100,
                   updatedAt: new Date().toISOString(),
                 };
+                const dirty = charDirty[c];
                 return (
                   <tr key={c} className="border-t border-slate-800/60">
                     <td className="px-4 py-3 font-mono text-sm text-emerald-300">
-                      {c}
+                      <span className="inline-flex items-center gap-1.5">
+                        {c}
+                        {dirty && (
+                          <span
+                            className="h-2 w-2 rounded-full bg-amber-400"
+                            title="Alteração não salva"
+                          />
+                        )}
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       {win?.slot ? (
@@ -409,10 +553,14 @@ export function GseView() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <span
-                          className={`h-2 w-2 rounded-full ${win?.online ? "bg-emerald-400" : "bg-slate-600"}`}
+                          className={`h-2 w-2 rounded-full ${
+                            win?.online ? "bg-emerald-400" : "bg-slate-600"
+                          }`}
                         />
                         <span
-                          className={`text-xs ${win?.online ? "text-emerald-300" : "text-slate-500"}`}
+                          className={`text-xs ${
+                            win?.online ? "text-emerald-300" : "text-slate-500"
+                          }`}
                         >
                           {win?.online ? "online" : "offline"}
                         </span>
@@ -421,15 +569,8 @@ export function GseView() {
                     <td className="px-4 py-3">
                       <input
                         value={state.keybind}
-                        onChange={(e) => {
-                          const v = e.target.value.slice(0, 8);
-                          setStates((s) => ({
-                            ...s,
-                            [c]: { ...state, keybind: v },
-                          }));
-                        }}
-                        onBlur={(e) =>
-                          void updateOne(c, { keybind: e.target.value })
+                        onChange={(e) =>
+                          setCharField(c, "keybind", e.target.value.slice(0, 8))
                         }
                         placeholder="1"
                         className="w-16 rounded bg-slate-800 px-2 py-1 text-center font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
@@ -443,17 +584,8 @@ export function GseView() {
                           max={2000}
                           step={10}
                           value={state.intervalMs}
-                          onChange={(e) => {
-                            const v = Number(e.target.value);
-                            setStates((s) => ({
-                              ...s,
-                              [c]: { ...state, intervalMs: v },
-                            }));
-                          }}
-                          onBlur={(e) =>
-                            void updateOne(c, {
-                              intervalMs: Number(e.target.value),
-                            })
+                          onChange={(e) =>
+                            setCharField(c, "intervalMs", e.target.value)
                           }
                           className="w-20 rounded bg-slate-800 px-2 py-1 text-right font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
                         />
@@ -465,7 +597,10 @@ export function GseView() {
                         onClick={() =>
                           void updateOne(c, { running: !state.running })
                         }
-                        disabled={busy[c] || (!controls.gseMasterEnabled && !state.running)}
+                        disabled={
+                          busy[c] ||
+                          (!controls.gseMasterEnabled && !state.running)
+                        }
                         title={
                           !controls.gseMasterEnabled && !state.running
                             ? "Ligue o Master GSE primeiro"
@@ -480,12 +615,39 @@ export function GseView() {
                         {state.running ? "⏹ parar" : "▶ iniciar"}
                       </button>
                     </td>
+                    <td className="px-2 py-3">
+                      <button
+                        onClick={() => void removeCharacter(c)}
+                        disabled={removing[c]}
+                        className="rounded p-1.5 text-slate-500 transition hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-50"
+                        title={`Remover ${c}`}
+                        aria-label={`Remover ${c}`}
+                      >
+                        {removing[c] ? "..." : "✕"}
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+
+        {/* Save all character changes */}
+        {hasCharDirty && (
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={() => void saveAllCharChanges()}
+              disabled={savingChars}
+              className="w-full rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-950 shadow hover:bg-amber-400 disabled:opacity-40 sm:w-auto"
+            >
+              {savingChars ? "salvando..." : "💾 Salvar alterações dos personagens"}
+            </button>
+            <span className="text-xs text-amber-300">
+              tecla/intervalo alterado(s) — salve para aplicar no bridge
+            </span>
+          </div>
+        )}
 
         <div className="mt-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-100">
           <b className="text-amber-300">Como configurar o GSE:</b>
@@ -503,7 +665,9 @@ export function GseView() {
               Configure a mesma tecla no campo <b>&quot;Tecla GSE&quot;</b>{" "}
               acima para cada personagem.
             </li>
-            <li>Clique ▶ iniciar. O Python vai spammar essa tecla em background.</li>
+            <li>
+              Clique ▶ iniciar. O Python vai spammar essa tecla em background.
+            </li>
           </ol>
         </div>
       </div>

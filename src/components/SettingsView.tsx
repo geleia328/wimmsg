@@ -180,8 +180,8 @@ export function SettingsView() {
         <div className="hidden text-4xl sm:block">⚙️</div>
       </div>
 
-      <section className="mt-8 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
-        <h2 className="text-lg font-bold text-amber-300">Acesso admin</h2>
+      <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:mt-8 sm:p-5">
+        <h2 className="text-base font-bold text-amber-300 sm:text-lg">Acesso admin</h2>
         <p className="mt-1 text-xs text-slate-500">
           Use o <code>ADMIN_TOKEN</code> se configurou na Vercel. Caso contrário,
           use o <code>BRIDGE_TOKEN</code> atual.
@@ -211,8 +211,8 @@ export function SettingsView() {
       {settings && (
         <>
           {!settings.tablesReady && (
-            <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-5">
-              <h2 className="text-lg font-bold text-amber-300">
+          <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5">
+            <h2 className="text-base font-bold text-amber-300 sm:text-lg">
                 Banco conectado, mas tabelas não existem
               </h2>
               <p className="mt-2 text-sm text-amber-100">
@@ -235,8 +235,8 @@ export function SettingsView() {
             </section>
           )}
 
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="text-lg font-bold text-emerald-300">Status</h2>
+          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
+            <h2 className="text-base font-bold text-emerald-300 sm:text-lg">Status</h2>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Stat label="Mensagens" value={settings.counts.messages} />
               <Stat label="Janelas" value={settings.counts.windows} />
@@ -244,8 +244,8 @@ export function SettingsView() {
             </div>
           </section>
 
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="text-lg font-bold text-sky-300">PostgreSQL / Neon</h2>
+          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
+            <h2 className="text-base font-bold text-sky-300 sm:text-lg">PostgreSQL / Neon</h2>
             <div className="mt-3 rounded bg-slate-950 p-3 font-mono text-xs text-slate-300">
               DATABASE_URL atual: {settings.database.maskedUrl || "não configurada"}
             </div>
@@ -339,8 +339,8 @@ export function SettingsView() {
             </div>
           </section>
 
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="text-lg font-bold text-fuchsia-300">Bridge Token</h2>
+          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
+            <h2 className="text-base font-bold text-fuchsia-300 sm:text-lg">Bridge Token</h2>
             <p className="mt-2 text-sm text-slate-400">
               Esse token é o que o BakersWhisper.exe usa para falar com o site.
               Você pode trocar aqui sem recompilar o instalador.

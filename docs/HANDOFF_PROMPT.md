@@ -14,6 +14,22 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
 5. O repositório é https://github.com/geleia328/wimmsg e o site é https://wimmsg-lntm.vercel.app . O nome do projeto é Bakers Whisper v1.0.7.
 6. ✅ Responsividade mobile concluída na v1.0.8: ChatApp com drawer (lista ↔ chat + botão voltar, `h-dvh`, header com nav rolável e dropdown de notificações sem clip), AccountsView e GseView com tabelas `overflow-x-auto`, SettingsView/Download/Setup com empilhamento responsivo.
 7. ✅ Exclusão de chat concluída na v1.0.9: `DELETE /api/messages/[id]` apaga mensagem individual; `DELETE /api/conversations/[character]/[player]` limpa a conversa inteira; ChatApp tem lixeira em cada balão e botão `🗑 Limpar` no cabeçalho da conversa, com confirmação e remoção automática da fila se a mensagem estava pending.
+8. ✅ Bug fixes v1.1.0:
+   - GSE: intervalo agora salva via botão "💾 Salvar alterações dos personagens" (não mais onBlur).
+   - GSE: remoção de personagem via `DELETE /api/gse/[character]` com botão ✕ em cada linha.
+   - GSE: 6 controles de timing: abrir chat, foco, digitar, enviar, pós-envio, poll fila.
+   - Chat: layout mobile redesenhado estilo WhatsApp/Telegram com drawer full-screen.
+   - Chat: badge de "!" amarelo em conversas com mensagens novas não lidas.
+   - Chat: auto-refresh instantâneo quando chega whisper na conversa atualmente aberta (sem esperar polling de 2s).
+   - Chat: botão ➤ de envio quadrado, espaçamento e tipografia mobile otimizados.
+   - Responsividade total para celular, iPad, tablet, notebook e desktop:
+     * layout.tsx: Viewport export com `viewport-fit=cover`, `theme-color`, `maximum-scale=1`.
+     * globals.css: safe-area-inset em body para notch devices.
+     * ChatApp: sidebar `md:w-80 lg:w-96`, nav scroll horizontal, header compacto.
+     * AccountsView: `min-h-dvh`, cards menores em mobile, tabela scroll hint gradiente.
+     * GseView: `min-h-dvh`, tabela scroll hint, grid timing responsivo `sm:grid-cols-2 lg:grid-cols-3`.
+     * SettingsView: sections com padding responsivo `p-4 sm:p-5`, títulos `text-base sm:text-lg`.
+     * Download/Setup: paddings e títulos responsivos.
 
 **Relatório completo (cole aqui):**
 
