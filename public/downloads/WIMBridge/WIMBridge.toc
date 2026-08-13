@@ -1,6 +1,6 @@
-## Interface: 120001, 110000
+## Interface: 110200
 ## Title: WIM Bridge
-## Notes: Bakers Whisper bridge: captures whispers, enables chat logging and persists history.
+## Notes: Captura whispers recebidos/enviados para Bakers Whisper e ativa /chatlog automaticamente.
 ## Author: WIM Bridge
 ## Version: 2.2.0
 ## SavedVariables: WIMBridgeDB

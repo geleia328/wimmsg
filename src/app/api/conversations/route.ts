@@ -8,27 +8,42 @@ export const dynamic = "force-dynamic";
 
 /**
  * One row per (character, player) pair with a preview + counters.
+ *
+ * IMPORTANT: grouping is case-insensitive. WoW/WIM often emits `Juper-Azralon`
+ * while the user typed/opened `juper-azralon` in the site. Without this, the
+ * same conversation appears split and incoming whispers seem to "not arrive".
  */
 export async function GET() {
   const rows = await db.execute(sql/* sql */ `
+    WITH normalized AS (
+      SELECT
+        lower(character) AS n_character,
+        lower(player) AS n_player,
+        character,
+        player,
+        direction,
+        body,
+        created_at
+      FROM ${messages}
+    )
     SELECT
-      character,
-      player,
+      n_character AS character,
+      n_player AS player,
       MAX(created_at) AS last_at,
       (
-        SELECT body FROM ${messages} m2
-        WHERE m2.player = m.player AND m2.character = m.character
+        SELECT body FROM normalized m2
+        WHERE m2.n_player = m.n_player AND m2.n_character = m.n_character
         ORDER BY created_at DESC LIMIT 1
       ) AS last_body,
       (
-        SELECT direction FROM ${messages} m3
-        WHERE m3.player = m.player AND m3.character = m.character
+        SELECT direction FROM normalized m3
+        WHERE m3.n_player = m.n_player AND m3.n_character = m.n_character
         ORDER BY created_at DESC LIMIT 1
       ) AS last_direction,
       COUNT(*) FILTER (WHERE direction = 'incoming')::int AS incoming_count,
       COUNT(*)::int AS total_count
-    FROM ${messages} m
-    GROUP BY character, player
+    FROM normalized m
+    GROUP BY n_character, n_player
     ORDER BY last_at DESC
     LIMIT 500
   `);
