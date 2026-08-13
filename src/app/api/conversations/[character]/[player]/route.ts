@@ -53,9 +53,12 @@ export async function POST(
   const character = decodeURIComponent(rawChar).trim();
   const player = decodeURIComponent(rawPlayer).trim();
 
-  let payload: { body?: string } = {};
+  let payload: { body?: string; mirrorToCharacter?: boolean } = {};
   try {
-    payload = (await request.json()) as { body?: string };
+    payload = (await request.json()) as {
+      body?: string;
+      mirrorToCharacter?: boolean;
+    };
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
@@ -110,6 +113,7 @@ export async function POST(
   let mirrored = false;
   let mirrorReason = "";
   const target = player.trim().toLowerCase();
+  const explicitlyOwn = payload.mirrorToCharacter === true;
   if (target !== character.toLowerCase()) {
     let known = new Set<string>();
     try {
@@ -118,7 +122,7 @@ export async function POST(
       /* mirror is best-effort — the outgoing row remains safe */
     }
 
-    if (known.has(target)) {
+    if (explicitlyOwn || known.has(target)) {
       await db
         .insert(messages)
         .values({
@@ -131,7 +135,9 @@ export async function POST(
         })
         .onConflictDoNothing({ target: messages.externalId });
       mirrored = true;
-      mirrorReason = "detected_own_character";
+      mirrorReason = explicitlyOwn
+        ? "ui_confirmed_own_character"
+        : "detected_own_character";
     }
   }
 

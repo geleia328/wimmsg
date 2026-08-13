@@ -1,8 +1,8 @@
 ## Interface: 110000
 ## Title: WIM Bridge
-## Notes: Mirrors received whispers into the chat log with a [WIMBRIDGE] tag including own character name, for multi-window setups.
+## Notes: Mirrors received whispers into the chat log, auto-enables chat logging, persists history and relays incoming whispers for the Bakers Whisper bridge.
 ## Author: WIM Bridge
-## Version: 2.0.0
+## Version: 2.1.0
 ## SavedVariables: WIMBridgeDB
 
 WIMBridge.lua

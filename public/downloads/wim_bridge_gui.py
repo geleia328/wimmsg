@@ -613,6 +613,13 @@ ADDON_RE = re.compile(
     r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><(?P<kind>FROM|TO):(?P<other>[^>]+)>"
     r"(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
 )
+# Transport emitted by the addon to the same character. It is a real whisper
+# (therefore present in the native chat log) but is converted back to the
+# original incoming message below.
+RELAY_RE = re.compile(
+    r"^\[WIMRELAY\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>"
+    r"<TS:(?P<ts>[^>]+)>(?P<body>.*)$"
+)
 # WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
 # as long as /chatlog is on):
 #   10/8 12:34:56.789  [W From] [Sender-Realm]: message
@@ -621,6 +628,11 @@ ADDON_RE = re.compile(
 NATIVE_TAG_RE = re.compile(r"^\[W (?P<kind>From|To)\]\s+(?P<rest>.*)$")
 NATIVE_NAME_RE = re.compile(
     r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$"
+)
+NATIVE_WHISPER_RE = re.compile(
+    r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+))\s+"
+    r"(?:whispers?|sussurra)\s*:?\s*(?P<body>.*)$",
+    re.IGNORECASE,
 )
 FALLBACKS = [
     re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$"),
@@ -708,13 +720,38 @@ def parse_whisper(
 
     clean = _strip_wow_markup(stripped)
 
+    # Addon relay: the native log line is usually [W To] own: [WIMRELAY]...;
+    # convert it into the original incoming friend → own message.
+    relay = RELAY_RE.match(clean)
+    if relay:
+        return (
+            "incoming",
+            relay.group("own").strip() or own_default,
+            relay.group("from").strip(),
+            relay.group("body").strip(),
+            relay.group("ts").strip(),
+        )
+
     tag = NATIVE_TAG_RE.match(clean)
     if tag:
         name_m = NATIVE_NAME_RE.match(tag.group("rest"))
+        if not name_m:
+            # Some WoW/WIM versions write "[W From] [Name] whispers: body"
+            # instead of "[W From] [Name]: body".
+            name_m = NATIVE_WHISPER_RE.match(tag.group("rest"))
         if name_m:
             other = (name_m.group("name") or name_m.group("name2") or "").strip()
             body = name_m.group("body").strip()
             if other:
+                relay_body = RELAY_RE.match(body)
+                if relay_body:
+                    return (
+                        "incoming",
+                        relay_body.group("own").strip() or own_default,
+                        relay_body.group("from").strip(),
+                        relay_body.group("body").strip(),
+                        relay_body.group("ts").strip(),
+                    )
                 if tag.group("kind") == "From":
                     return "incoming", own_default, other, body, log_ts
                 return "outgoing", own_default, other, body, log_ts
@@ -1077,7 +1114,15 @@ class BridgeEngine:
                 )
             if buffer and (len(buffer) >= 10 or time.time() - last_flush > 1.5):
                 try:
-                    self.api.ingest(buffer)
+                    batch_size = len(buffer)
+                    inserted = self.api.ingest(buffer)
+                    if inserted == 0:
+                        self.log(
+                            f"ℹ {batch_size} whisper(s) lido(s) do jogo, "
+                            "mas já existiam no site (duplicata evitada)."
+                        )
+                    else:
+                        self.log(f"☁ {inserted} whisper(s) enviado(s) ao site em tempo real.")
                     buffer.clear()
                     last_flush = time.time()
                 except Exception as e:
@@ -1126,10 +1171,6 @@ class BridgeEngine:
         if not chunk:
             return end_offset
 
-        # If the addon was writing echoes to this file, native [W From] lines
-        # are duplicates of the addon lines — skip them to avoid double rows.
-        has_addon = "[WIMBRIDGE]" in chunk
-
         buffer: list[dict] = []
         last_flush = time.time()
         restored = 0
@@ -1145,20 +1186,37 @@ class BridgeEngine:
                 self.log(f"❌ replay do histórico falhou: {e}")
             buffer.clear()
 
+        # Parse the whole replay first. The addon echo and native [W From]
+        # line may both exist for one whisper. Prefer the addon record when it
+        # exists, but NEVER discard native lines merely because some unrelated
+        # old [WIMBRIDGE] line exists in the same 2MB file.
+        parsed_records: list[tuple[tuple[str, str, str, str, str], bool]] = []
+        addon_incoming_keys: set[tuple[str, str, str]] = set()
         for line in chunk.splitlines():
             parsed = parse_whisper(line, ref.character)
             if not parsed:
                 continue
             direction, character, other, body, ts = parsed
             character = self._canonical_char(character or ref.character)
+            is_addon = "[WIMBRIDGE]" in line
+            record = (direction, character, other, body, ts)
+            parsed_records.append((record, is_addon))
+            if is_addon and direction == "incoming":
+                addon_incoming_keys.add(
+                    (character.lower(), other.lower(), body)
+                )
+
+        for (direction, character, other, body, ts), is_addon in parsed_records:
+            if direction == "incoming" and not is_addon:
+                # Only skip the corresponding native line, not all native
+                # lines in the file.
+                if (character.lower(), other.lower(), body) in addon_incoming_keys:
+                    continue
             if direction == "outgoing":
                 # Skip [W To] echoes of messages the BRIDGE itself sent: the
                 # site already has those rows from the queue ack.
                 if self._was_bridge_sent(character, other, body):
                     continue
-            elif has_addon:
-                # Addon echo already covers this received whisper.
-                continue
             buffer.append(
                 {
                     "externalId": make_ext_id(character, other, body, ts),

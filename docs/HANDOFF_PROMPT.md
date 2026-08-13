@@ -90,6 +90,11 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - `/api/ingest` também espelha `direction=outgoing` digitado DIRETAMENTE NO JOGO: A→B insere outgoing em A/B e incoming em B/A na mesma requisição. Assim não depende de o log do destinatário ser lido a tempo.
     - Echo `[W From]` posterior é deduplicado; o mesmo externalId pode ser reprocessado sem duplicar. Testado: site→jogo, jogo→site, matched=no, echo posterior e reenvio idempotente.
     - `/api/characters` inclui personagens conhecidos pelo bridge mesmo sem mensagens, mantendo as duas contas disponíveis desde o início.
+19. ✅ Fix captura do amigo no personagem certo v1.1.11 (caso cbsies-azralon → juper-azralon):
+    - WIMBridge addon v2.1: ativa `LoggingChat(1)` automaticamente em PLAYER_LOGIN/PLAYER_ENTERING_WORLD; registra `CHAT_MSG_WHISPER_INFORM`; cria relay interno `[WIMRELAY]<OWN:juper><FROM:cbsies><TS:...>mensagem` enviado ao próprio personagem para garantir uma linha no chatlog nativo; marcador é filtrado visualmente e convertido pelo bridge em `incoming` real.
+    - Parser GUI: aceita `[W From] [Name]: body`, `[W From] Name: body`, `[W From] [Name] whispers: body`, relay nativo `[W To] [Own]: [WIMRELAY]...`, timestamps e markup. O replay não ignora mais todas as linhas nativas só porque existe uma linha addon antiga — deduplica por mensagem específica.
+    - Bridge loga `☁ N whisper(s) enviado(s) ao site em tempo real` ou informa duplicata; instalação nova precisa do addon WIMBridge 2.1 + BakersWhisper.exe novo.
+    - UI envia `mirrorToCharacter: true` quando o player selecionado está na lista de personagens conhecidos; servidor retorna `mirrorReason: ui_confirmed_own_character`, eliminando dependência de detectar janela no meio do rescan.
 
 **Relatório completo (cole aqui):**
 

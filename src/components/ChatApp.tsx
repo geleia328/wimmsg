@@ -290,7 +290,17 @@ export function ChatApp() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ body: draft.trim() }),
+          body: JSON.stringify({
+            body: draft.trim(),
+            // The UI already knows which WoW characters belong to this setup.
+            // Send that explicit fact so A→B self-character messages are
+            // mirrored even while the bridge is rescanning a window.
+            mirrorToCharacter: characters.some(
+              (c) =>
+                c.character.trim().toLowerCase() ===
+                selected.player.trim().toLowerCase(),
+            ),
+          }),
         },
       );
       if (res.ok) {
@@ -308,7 +318,7 @@ export function ChatApp() {
     } finally {
       setSending(false);
     }
-  }, [selected, draft, fetchMessages, refreshTop]);
+  }, [selected, draft, characters, fetchMessages, refreshTop]);
 
   const deleteMessage = useCallback(
     async (message: Message) => {
