@@ -149,11 +149,18 @@ f:SetScript("OnEvent", function(_, event, msg, sender)
     relayReceived(from, msg, t)
 end)
 
+-- Register multiple aliases: if /wimbridge is claimed by another addon,
+-- /wim and /wbridge still provide a reliable way to test this addon.
 SLASH_WIMBRIDGE1 = "/wimbridge"
-SlashCmdList["WIMBRIDGE"] = function(cmd)
+SLASH_WIMBRIDGE2 = "/wim"
+SLASH_WIMBRIDGE3 = "/wbridge"
+SlashCmdList["WIMBRIDGE"] = function(raw)
+    local cmd = tostring(raw or "")
+    cmd = cmd:match("^%s*(.-)%s*$"):lower()
     if cmd == "test" then
         computeOwnName()
         echoLine("TestPlayer-TestRealm", "hello world", time())
+        print("|cffffcc00WIMBridge|r teste emitido no chatlog.")
     elseif cmd == "dump" then
         -- Re-print the whole stored history with the SAME <TS> values, so the
         -- bridge can ingest them idempotently (no duplicates on re-dump).
@@ -167,10 +174,17 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
         print(string.format("|cffffcc00WIMBridge|r dump concluido (%d mensagens)", n))
     elseif cmd == "who" then
         computeOwnName()
+        ensureChatLog()
         print("|cffffcc00WIMBridge|r own = " .. ownName)
+        print("|cffffcc00WIMBridge|r addon carregado; chatlog = ativado/tentado.")
+    elseif cmd == "help" or cmd == "" then
+        print("|cffffcc00WIMBridge|r OK. Use: /wimbridge who | /wimbridge test | /wimbridge dump")
+        print("|cffffcc00WIMBridge|r aliases: /wim who, /wbridge who")
     else
-        print("|cffffcc00WIMBridge|r ativo. Comandos: /wimbridge test | /wimbridge who | /wimbridge dump")
+        print("|cffffcc00WIMBridge|r comando desconhecido. Use /wimbridge help")
     end
 end
 
-print("|cffffcc00WIMBridge|r carregado. Whispers serao ecoados com tag [WIMBRIDGE].")
+-- Global flag makes troubleshooting via /run WIMBridgeLoaded possible.
+WIMBridgeLoaded = true
+print("|cffffcc00WIMBridge|r v2.2 carregado! Use /wimbridge who (ou /wim who).")

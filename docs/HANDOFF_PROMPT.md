@@ -95,6 +95,10 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - Parser GUI: aceita `[W From] [Name]: body`, `[W From] Name: body`, `[W From] [Name] whispers: body`, relay nativo `[W To] [Own]: [WIMRELAY]...`, timestamps e markup. O replay não ignora mais todas as linhas nativas só porque existe uma linha addon antiga — deduplica por mensagem específica.
     - Bridge loga `☁ N whisper(s) enviado(s) ao site em tempo real` ou informa duplicata; instalação nova precisa do addon WIMBridge 2.1 + BakersWhisper.exe novo.
     - UI envia `mirrorToCharacter: true` quando o player selecionado está na lista de personagens conhecidos; servidor retorna `mirrorReason: ui_confirmed_own_character`, eliminando dependência de detectar janela no meio do rescan.
+20. ✅ Addon não carregava /wimbridge v2.2.0:
+    - TOC agora aceita Retail Midnight atual `Interface: 120001, 110000` (antes só `110000`, então o WoW atual podia desativá-lo como versão antiga).
+    - Slash aliases registrados: `/wimbridge`, `/wim`, `/wbridge`; `/wimbridge help` e `/wimbridge who` exibem diagnóstico; global `WIMBridgeLoaded=true` para `/run print(WIMBridgeLoaded)`.
+    - Setup atualizado sem link ZIP quebrado: instalação manual exige exatamente `Interface/AddOns/WIMBridge/WIMBridge.toc` + `WIMBridge.lua`; inclui instrução `Load out of date AddOns` e mensagem esperada `WIMBridge v2.2 carregado!`.
 
 **Relatório completo (cole aqui):**
 

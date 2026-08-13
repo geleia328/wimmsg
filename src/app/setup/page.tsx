@@ -205,64 +205,71 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             3. Instalar o addon WIMBridge
           </h2>
           <p className="mt-2 text-sm text-slate-300">
-            Baixe o pacote completo:
+            Baixe os dois arquivos abaixo e coloque-os manualmente na pasta do
+            addon:
           </p>
-          <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
+          <ul className="mt-3 list-disc space-y-2 pl-6 text-sm">
             <li>
+              Crie exatamente esta pasta (sem uma segunda pasta WIMBridge dentro
+              dela):{" "}
+              <code>World of Warcraft/_retail_/Interface/AddOns/WIMBridge/</code>
+            </li>
+            <li>
+              Dentro dela, salve os arquivos{" "}
               <a
-                href="/api/download/WIMBridge.zip"
+                href="/api/download/WIMBridge.toc"
                 className="text-amber-400 hover:underline"
                 download
               >
-                📦 WIMBridge.zip
+                WIMBridge.toc
               </a>{" "}
-              — descompacte em{" "}
-              <code>World of Warcraft/_retail_/Interface/AddOns/</code>
+              e{" "}
+              <a
+                href="/api/download/WIMBridge.lua"
+                className="text-amber-400 hover:underline"
+                download
+              >
+                WIMBridge.lua
+              </a>
+              . O caminho final precisa ser exatamente:
+              <pre className={`${CODE_BLOCK} mt-2`}>{`.../Interface/AddOns/WIMBridge/WIMBridge.toc
+.../Interface/AddOns/WIMBridge/WIMBridge.lua`}</pre>
             </li>
           </ul>
 
-          <div className="mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
-            <b className="text-amber-300">O download do .zip não funciona?</b>
-            <p className="mt-1">
-              Alguns navegadores/antivírus bloqueiam .zip vindos de sites
-              desconhecidos. Baixe os 2 arquivos avulsos abaixo:
-            </p>
+          <div className="mt-3 rounded border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-slate-300">
+            <b className="text-rose-300">Se /wimbridge disser &quot;comando desconhecido&quot;</b>
             <ol className="mt-2 list-decimal space-y-1 pl-5">
               <li>
-                Crie uma pasta chamada exatamente{" "}
-                <code>WIMBridge</code> dentro de{" "}
-                <code>World of Warcraft/_retail_/Interface/AddOns/</code>
+                Na tela de seleção de personagem, clique no ícone de addons e
+                marque <b>Load out of date AddOns / Carregar addons antigos</b>.
               </li>
               <li>
-                Baixe e coloque estes dois arquivos dentro dela:
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <a
-                    href="/api/download/WIMBridge.toc"
-                    download
-                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
-                  >
-                    ⬇ WIMBridge.toc
-                  </a>
-                  <a
-                    href="/api/download/WIMBridge.lua"
-                    download
-                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
-                  >
-                    ⬇ WIMBridge.lua
-                  </a>
-                </div>
+                Confira que a pasta tem exatamente dois arquivos, sem dupla
+                pasta: <code>AddOns/WIMBridge/WIMBridge.toc</code> e{" "}
+                <code>AddOns/WIMBridge/WIMBridge.lua</code>.
+              </li>
+              <li>
+                Entre no personagem e use <code>/reload</code>. Veja no chat a
+                mensagem <b>WIMBridge v2.2 carregado!</b>.
+              </li>
+              <li>
+                Teste qualquer alias: <code>/wimbridge who</code>,{" "}
+                <code>/wim who</code> ou <code>/wbridge who</code>.
               </li>
             </ol>
             <p className="mt-2 text-slate-400">
-              Se o navegador abrir o arquivo como texto em vez de baixar,
-              clique com o <b>botão direito → &quot;Salvar link como…&quot;</b>.
+              Se ainda não aparecer a mensagem de carregamento, o arquivo está
+              na pasta errada ou o addon está desmarcado — o problema acontece
+              antes do parser/bridge.
             </p>
           </div>
 
           <p className="mt-3 text-sm text-slate-300">
             Depois de copiar os arquivos, faça <code>/reload</code> em cada
-            janela do WoW. Teste com <code>/wimbridge test</code> — deve
-            imprimir uma linha com o marcador.
+            janela do WoW. Teste com <code>/wimbridge who</code> (ou o alias{" "}
+            <code>/wim who</code>) — deve mostrar o personagem próprio e
+            confirmar que o addon carregou.
           </p>
         </section>
 

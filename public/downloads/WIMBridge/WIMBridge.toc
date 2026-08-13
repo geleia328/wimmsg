@@ -1,8 +1,8 @@
-## Interface: 110000
+## Interface: 120001, 110000
 ## Title: WIM Bridge
-## Notes: Mirrors received whispers into the chat log, auto-enables chat logging, persists history and relays incoming whispers for the Bakers Whisper bridge.
+## Notes: Bakers Whisper bridge: captures whispers, enables chat logging and persists history.
 ## Author: WIM Bridge
-## Version: 2.1.0
+## Version: 2.2.0
 ## SavedVariables: WIMBridgeDB
 
 WIMBridge.lua
