@@ -53,49 +53,67 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - `_send` pausa TODOS os spammers GSE durante o envio (antes só o do personagem alvo) — teclas simuladas nunca colidem com PostMessage do GSE.
     - Fechar chat: novos controles `whisperCloseChatEnabled` (default yes) e `whisperChatCloseDelayMs` (default 200). Após enviar, o bridge pressiona ESC e fecha o campo de chat do jogo. A próxima mensagem da fila reabre o chat sozinha (Enter → paste /w player → Enter → ESC), então dá para conversar depois com fulano/lucas mesmo com o chat fechado.
     - GSE master OFF: corrida corrigida — `_control_syncer` para TODOS os spammers a CADA ciclo (0.5s) enquanto master estiver OFF, mesmo se `_gse_syncer` tentar recriar com controles obsoletos.
-    - `whisperChatOpenDelayMs` default 800ms (chat aberto antes do paste).
-    - `whisperChatSendDelayMs` default 500ms (antes de apertar Enter para enviar).
-    - `whisperChatCloseDelayMs` default 600ms (antes de apertar Escape para fechar).
-    - Delays aumentados drasticamente (1.5s entre abrir chat e colar comando) para evitar que o WoW "bugue" e abra outras janelas.
-14. ✅ Sequência exata de envio v1.1.6 (ordem especificada pelo usuário):
-    - 1️⃣ Focar janela → aguardar **2.0 segundos**
-    - 2️⃣ Pressionar **Enter** → aguardar **1.0 segundo**
-    - 3️⃣ Colar `/w nome-server` → aguardar **1.5 segundos** (chat abre aqui)
-    - 4️⃣ Colar **mensagem** → aguardar **1.0 segundo**
-    - 5️⃣ Pressionar **Enter** → aguardar **1.0 segundo**
-    - 🔒 Fechar chat com **Escape** (opcional)
-    - Separar o comando `/w` da mensagem garante que o WoW processa cada parte corretamente, evitando mensagens picotadas.
-15. ✅ Chat em tempo real bidirecional v1.1.8:
-    - `/api/conversations/bidirectional?charA=X&charB=Y` agora NORMALIZA direção pela perspectiva do viewer (`charA`): se B enviou para A, aparece como `incoming` quando A está vendo a conversa.
-    - Dedup de espelhos: se existe A outgoing "salve" e B incoming "salve" em até 15s, vira um único balão (sem duplicar).
-    - ChatApp cria conversas espelhadas no client quando `player` também é um personagem/janela conhecida: conversa B↔A aparece mesmo se só existe row A→B.
-    - Polling de conversa aberta 500ms + global 1s.
-    - Addon `WIMBridge.lua` agora captura também `CHAT_MSG_WHISPER_INFORM` (mensagens ENVIADAS pelo WIM/jogo) e ecoa `[WIMBRIDGE]<OWN:me><TO:target>body`.
-    - Parser Python entende `<TO:...>` como `outgoing`, além de `<FROM:...>` como `incoming` e chatlog nativo `[W To]/[W From]`.
-    - Resultado: comportamento de mensageiro normal — se taldoglaidon manda "salve" para madelina, o site de madelina mostra "salve" como mensagem recebida em tempo real.
-16. ✅ Fix incoming externo v1.1.9:
-    - Conversas agora são case-insensitive: WoW/WIM pode emitir `Juper-Azralon`/`Cbsies-Azralon` enquanto o site abriu `juper-azralon`/`cbsies-azralon`.
-    - `/api/conversations/bidirectional` compara `lower(character/player)` e normaliza a direção pela perspectiva do viewer sem depender de caixa.
-    - `/api/conversations/[character]/[player]` também compara case-insensitive (fallback e limpeza).
-    - `/api/conversations` e `/api/characters` agrupam por `lower(...)` para não dividir conversa em maiúscula/minúscula.
-    - `ChatApp` compara seleção/conversas/unread sem diferenciar caixa.
-    - Bridge Python `_find_char_by_name` também procura personagem sem diferenciar caixa.
-    - Testado: ingest `Juper-Azralon` + `Cbsies-Azralon` aparece em chat aberto como `juper-azralon`/`cbsies-azralon` com `direction=incoming`.
-13. ✅ Delays ultra-conservadores v1.1.5:
-    - `whisperFocusDelayMs` 800ms (antes de começar)
-    - `whisperChatOpenDelayMs` 1500ms (CRÍTICO: tempo entre abrir chat e colar comando)
-    - `whisperKeystrokeDelayMs` 100ms (entre cada caractere no fallback)
-    - `whisperChatSendDelayMs` 800ms (antes de apertar Enter)
-    - `whisperChatCloseDelayMs` 600ms (antes de apertar Escape)
-    - `_send` reescrito com logging passo-a-passo para diagnóstico
-    - Delay extra de 300ms após paste para garantir que o texto chegou ao campo
-    - Verificação de comprimento do comando enviado
-    - Fallback de digitação mais lento e robusto
-12. ✅ Sincronização de histórico v1.1.4:
-    - Bridge: `_sync_historical_messages` lê as últimas 100 linhas do WoWChatLog.txt quando inicia e envia pro site via `/api/sync` — captura mensagens de antes do bridge abrir.
-    - Nova API `/api/sync` (POST para receber histórico do bridge, GET para buscar histórico no site).
-    - Botão "🔄 Sincronizar" no header de cada conversa — força recarregar as últimas 50 mensagens do banco.
-    - ApiClient do bridge: método `sync()` para enviar histórico.
+    - `whisperChatOpenDelayMs` default 300ms (chat aberto antes do paste).
+12. ✅ Tempos de envio mais lentos v1.1.4 (chat do jogo não buga mais):
+    - Novos defaults: foco 800ms, abrir chat 600ms, typing 80ms, enviar (após colar) 500ms, fechar chat (ESC) 400ms, pós-envio 800ms.
+    - PISOS mínimos no bridge `_send`: foco/abrir/enviar/fechar nunca ficam abaixo de 0.3s (typing 0.02s) mesmo se configurados para menos — o jogo sempre termina a ação anterior antes da próxima tecla.
+    - Faixas do site ampliadas: abrir/enviar/fechar até 5000ms, foco/pós até 10000ms, typing até 1000ms; mínimos 200ms.
+    - Atualizados: schema, /api/control (GET+POST), seed init-db, GseView (defaults + inputs) e DEFAULT_CONTROLS do bridge.
+13. ✅ Histórico completo do chat v1.1.5 (extrai o que já estava escrito no jogo):
+    - REPLAY do WoWChatLog.txt: ao abrir uma janela, o bridge relê os últimos ~2MB do log e ingere TODOS os whispers já escritos (recebidos via addon/native, enviados no jogo via [W To]) com `receivedAt` real — a conversa aparece no site em ordem cronológica. Se o arquivo tem linhas [WIMBRIDGE], as nativas [W From] são puladas (o addon já cobre) para não duplicar.
+    - ADDON: echo agora inclui `<TS:epoch>` (idempotência), guarda whispers recebidos em SavedVariables (WIMBridgeDB, máx 300) e o comando `/wimbridge dump` re-imprime o histórico com os MESMOS TS. O bridge roda o dump automaticamente uma vez por janela/sessão (`_history_syncer` + `_type_command`), recuperando whispers que aconteceram antes do /chatlog ou do bridge abrir.
+    - `make_ext_id` determinístico (hash character|player|body|ts): replay, dump e rotação de log são idempotentes — nunca duplicam no site.
+    - Sent-history persistido (`%APPDATA%/BakersWhisper/sent_history.json`): durante replay, [W To] de mensagens que o PRÓPRIO bridge enviou são pulados (site já tem essas linhas do ack da fila).
+    - `_canonical_char` normaliza o OWN do addon (case-insensitive) — conversas não se dividem por variação de maiúsculas/minúsculas.
+    - `_type_command` refatorado: mesma rotina segura (foco→Enter→paste→Enter→ESC) usada para whispers E para o dump.
+14. ✅ Envio lento e seguro v1.1.6 (fim da mensagem picada e do jogo bugando):
+    - CAUSA do "jogo buga": o bridge pressionava ESC após enviar, mas o WoW JÁ fecha o campo de chat sozinho — ESC com chat fechado ABRE O MENU do jogo. Agora `whisperCloseChatEnabled` é default OFF (toggle com aviso no site).
+    - Nova sequência do `_type_command`: foco (1000ms) → Enter → **2000ms esperando o chat abrir 100%** → Ctrl+A (limpa texto residual) → espera 250ms → cola o comando inteiro (clipboard) → **800ms** antes do Enter de envio → pós-envio 800ms.
+    - Pisos no bridge: foco ≥0.5s, abrir chat ≥0.5s, enviar ≥0.4s, typing ≥0.05s/tecla — impossível digitar antes do campo estar pronto.
+    - Fallback de digitação prefere pydirectinput (melhor para jogos) com 100ms/tecla.
+    - Site: label explicativo "se a mensagem chega picada, AUMENTE este valor"; faixas até 10000ms para abrir/enviar/foco/pós.
+15. ✅ ORDEM OFICIAL DE ENVIO v1.1.7 (definida pelo usuário):
+    - Sequência em duas etapas: foco (2000ms) → Enter → 1000ms → colar `/w Nome-Server` → **1500ms** (jogo abre o modo whisper) → colar a mensagem → 1000ms → Enter envia → 1000ms pós-envio.
+    - Novo controle `whisperWReadyDelayMs` (whisper_w_ready_delay_ms, default 1500) — o tempo entre colar o /w e colar a mensagem.
+    - `_send` reescrito com a ordem exata (Ctrl+A de segurança só no início); defaults atualizados em schema, /api/control, init-db, GseView e DEFAULT_CONTROLS do bridge.
+16. ✅ FIX ESPAÇO v1.1.8 — o WoW exige espaço após /w Nome:
+    - Nova ordem: foco (2s) → Enter → 1s → colar `/w Nome-Server` → 1s → **press_key("space")** → 1s → colar mensagem → 1s → Enter → 1s.
+    - Novo controle `whisperSpaceDelayMs` (whisper_space_delay_ms, default 1000); `whisperWReadyDelayMs` agora é "antes do espaço" (default 1000).
+    - Atualizados: schema, /api/control, init-db, GseView (labels + campo novo) e bridge (_send + DEFAULT_CONTROLS).
+17. ✅ Chat em tempo real v1.1.9 (espelhamento entre contas próprias):
+    - POST /api/conversations/[character]/[player]: se o DESTINATÁRIO é outro personagem seu (client_windows matched OU gse_state OU character em messages), o site insere IMEDIATAMENTE a linha incoming espelhada na conversa do destinatário (`externalId` = `mirror-<outId>`, `mirrored: true` na resposta) — sem esperar o bridge ler o log.
+    - Dedupe no /api/ingest: linhas incoming que batem com um `mirror-*` dos últimos 120s (mesmo character/player/body) são ignoradas — o echo do jogo NÃO duplica a mensagem espelhada (testado: inserted 0).
+    - ChatApp: POLL_MS 2000 → 1000 (lista, conversa aberta e poller de notificações) + refresh imediato no `focus`/`visibilitychange` (mensagens chegadas enquanto a aba estava oculta aparecem na hora).
+18. ✅ Messenger bidirecional definitivo v1.1.10:
+    - Criado `src/lib/ownCharacters.ts` com descoberta centralizada de personagens próprios usando TODOS os `client_windows.character` não vazios (sem exigir matched=yes), `gse_state` e `messages.character`.
+    - `/api/conversations` usa o helper: envio do site A→B cria outgoing em A/B + incoming imediato em B/A, mesmo durante rescan (`matched=no`). Retorna `mirrored: true` e `mirrorReason` para diagnóstico.
+    - `/api/ingest` também espelha `direction=outgoing` digitado DIRETAMENTE NO JOGO: A→B insere outgoing em A/B e incoming em B/A na mesma requisição. Assim não depende de o log do destinatário ser lido a tempo.
+    - Echo `[W From]` posterior é deduplicado; o mesmo externalId pode ser reprocessado sem duplicar. Testado: site→jogo, jogo→site, matched=no, echo posterior e reenvio idempotente.
+    - `/api/characters` inclui personagens conhecidos pelo bridge mesmo sem mensagens, mantendo as duas contas disponíveis desde o início.
+19. ✅ Fix captura do amigo no personagem certo v1.1.11 (caso cbsies-azralon → juper-azralon):
+    - WIMBridge addon v2.1: ativa `LoggingChat(1)` automaticamente em PLAYER_LOGIN/PLAYER_ENTERING_WORLD; registra `CHAT_MSG_WHISPER_INFORM`; cria relay interno `[WIMRELAY]<OWN:juper><FROM:cbsies><TS:...>mensagem` enviado ao próprio personagem para garantir uma linha no chatlog nativo; marcador é filtrado visualmente e convertido pelo bridge em `incoming` real.
+    - Parser GUI: aceita `[W From] [Name]: body`, `[W From] Name: body`, `[W From] [Name] whispers: body`, relay nativo `[W To] [Own]: [WIMRELAY]...`, timestamps e markup. O replay não ignora mais todas as linhas nativas só porque existe uma linha addon antiga — deduplica por mensagem específica.
+    - Bridge loga `☁ N whisper(s) enviado(s) ao site em tempo real` ou informa duplicata; instalação nova precisa do addon WIMBridge 2.1 + BakersWhisper.exe novo.
+    - UI envia `mirrorToCharacter: true` quando o player selecionado está na lista de personagens conhecidos; servidor retorna `mirrorReason: ui_confirmed_own_character`, eliminando dependência de detectar janela no meio do rescan.
+20. ✅ Addon não carregava /wimbridge v2.2.0:
+    - TOC agora aceita Retail Midnight atual `Interface: 120001, 110000` (antes só `110000`, então o WoW atual podia desativá-lo como versão antiga).
+    - Slash aliases registrados: `/wimbridge`, `/wim`, `/wbridge`; `/wimbridge help` e `/wimbridge who` exibem diagnóstico; global `WIMBridgeLoaded=true` para `/run print(WIMBridgeLoaded)`.
+    - Setup atualizado sem link ZIP quebrado: instalação manual exige exatamente `Interface/AddOns/WIMBridge/WIMBridge.toc` + `WIMBridge.lua`; inclui instrução `Load out of date AddOns` e mensagem esperada `WIMBridge v2.2 carregado!`.
+21. ✅ Fix final captura amigo v1.1.12:
+    - Relay usa o nome curto do próprio personagem no `SendChatMessage` (mais compatível que `Name-Realm`) e faz retry após 500ms; `/wimbridge test` agora testa o pipeline real, não apenas `ChatFrame:AddMessage`.
+    - Parser GUI e CLI aceitam formato nativo `To Name: body`, `Name whispers: body`, `[W From] Name: body`, `[W From] [Name] whispers: body` e relay `[WIMRELAY]`; ambos bridges compilam.
+    - Replay deduplica addon/native por mensagem específica (character/player/body), nunca descarta todo o restante do log por haver uma linha WIMBRIDGE antiga.
+    - Addon autoativa `LoggingChat(1)` em login/entrando no mundo; WIMBridge 2.2 precisa ser reinstalado junto com BakersWhisper.exe novo.
+23. ✅ Fix histórico só aparecer ao fechar o WoW v1.1.14:
+    - Causa confirmada: Blizzard mantém `WoWChatLog.txt` em buffer e normalmente só grava no logout/fechamento; o bridge não pode ler bytes ainda não escritos.
+    - WIMBridge v2.3 adiciona `forceChatLogFlush()`: após cada `CHAT_MSG_WHISPER`, alterna LoggingChat(0) → aguarda 250ms → LoggingChat(1), forçando o arquivo a ser fechado/flushado/reaberto enquanto o WoW continua aberto. Bursts são coalescidos; `/wimbridge flush` permite testar manualmente.
+    - Addon v2.3: TOC, ZIP atualizado, `/wimbridge test` executa o relay real + flush; setup explica a limitação do buffer e mostra o caminho observado pelo bridge.
+    - GUI bridge testa automaticamente `World of Warcraft/Logs/WoWChatLog.txt` e `_retail_/Logs/WoWChatLog.txt`, loga candidatos/existente e aguarda o caminho correto em vez de esperar silenciosamente pelo local errado.
+22. ✅ Diagnóstico final de captura e instalação v1.1.13:
+    - `/setup` antes apontava primeiro para `wim_bridge.py` legado; corrigido para recomendar `wim_bridge_gui.py` (mesmo código do BakersWhisper.exe) e marcar o CLI como legado.
+    - `/api/download/[file]` agora libera `wim_bridge_gui.py` (200 OK, ~85KB), além do addon atualizado.
+    - Addon relay usa nome curto no self-whisper + retry 500ms; comando `/wimbridge test` testa pipeline real.
+    - Parser aceita formatos nativos/legacy/relay e replay não descarta linhas nativas por causa de addon antigo.
 
 **Relatório completo (cole aqui):**
 

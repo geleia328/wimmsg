@@ -41,12 +41,8 @@ type Message = {
   sentAt: string | null;
 };
 
-const POLL_MS = 1000; // Polling mais rápido para tempo real
+const POLL_MS = 1000; // tempo real — lista, conversa aberta e notificações
 const ALL = "__ALL__";
-
-function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
-  return (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
-}
 
 function timeAgo(iso: string): string {
   const d = new Date(iso).getTime();
@@ -115,7 +111,6 @@ export function ChatApp() {
   const [sending, setSending] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Record<number, boolean>>({});
   const [clearingConversation, setClearingConversation] = useState(false);
-  const [syncingHistory, setSyncingHistory] = useState(false);
   const [newCharacter, setNewCharacter] = useState("");
   const [newPlayer, setNewPlayer] = useState("");
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
@@ -139,10 +134,10 @@ export function ChatApp() {
         fetch("/api/characters", { cache: "no-store" }).then((r) => r.json()),
         fetch("/api/status", { cache: "no-store" }).then((r) => r.json()),
       ]);
-      const rawConvos =
+      const newConvos =
         (c1 as { conversations: Conversation[] }).conversations ?? [];
-      const nextCharacters =
-        (c2 as { characters: CharacterInfo[] }).characters ?? [];
+      setConversations(newConvos);
+      setCharacters((c2 as { characters: CharacterInfo[] }).characters ?? []);
       const wins =
         (c3 as { windows: Array<WindowStatus & { character: string }> })
           .windows ?? [];
@@ -152,37 +147,6 @@ export function ChatApp() {
         if (w.online) onlineCount += 1;
         if (w.character) map[w.character] = w;
       }
-      const knownOwnCharacters = new Set<string>([
-        ...nextCharacters.map((c) => c.character),
-        ...wins.map((w) => w.character).filter(Boolean),
-      ]);
-      const convMap = new Map<string, Conversation>();
-      for (const c of rawConvos) {
-        convMap.set(`${c.character}::${c.player}`, c);
-        // Messenger behavior for your own characters: if the other side is
-        // also one of your windows, create the mirror conversation so opening
-        // taldoglaidon↔madelina shows the same chat in reverse perspective.
-        if (knownOwnCharacters.has(c.player)) {
-          const mirrorKey = `${c.player}::${c.character}`;
-          if (!convMap.has(mirrorKey)) {
-            convMap.set(mirrorKey, {
-              character: c.player,
-              player: c.character,
-              lastAt: c.lastAt,
-              lastBody: c.lastBody,
-              lastDirection:
-                c.lastDirection === "outgoing" ? "incoming" : "outgoing",
-              incomingCount: c.lastDirection === "outgoing" ? 1 : c.incomingCount,
-              totalCount: c.totalCount,
-            });
-          }
-        }
-      }
-      const newConvos = Array.from(convMap.values()).sort(
-        (a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime(),
-      );
-      setConversations(newConvos);
-      setCharacters(nextCharacters);
       setStatusMap(map);
       setTotalWindowsOnline(onlineCount);
       setBridgeUp(true);
@@ -191,7 +155,6 @@ export function ChatApp() {
     }
   }, []);
 
-  // Fetch unidirectional (original)
   const fetchMessages = useCallback(
     async (character: string, player: string) => {
       const res = await fetch(
@@ -201,37 +164,12 @@ export function ChatApp() {
       const data = (await res.json()) as { messages: Message[] };
       const msgs = data.messages ?? [];
       setMessages(msgs);
+      // Track the highest message id we've seen in this conversation
       for (const m of msgs) {
         if (m.id > maxMessageIdRef.current) maxMessageIdRef.current = m.id;
       }
     },
     [],
-  );
-
-  // Fetch BIDIRECTIONAL - mostra mensagens de ambos os lados (A→B e B→A)
-  const fetchBidirectionalMessages = useCallback(
-    async (charA: string, charB: string) => {
-      try {
-        const res = await fetch(
-          `/api/conversations/bidirectional?charA=${encodeURIComponent(charA)}&charB=${encodeURIComponent(charB)}`,
-          { cache: "no-store" },
-        );
-        if (!res.ok) {
-          // Fallback para unidirecional se API der erro
-          return fetchMessages(charA, charB);
-        }
-        const data = (await res.json()) as { messages: Message[] };
-        const msgs = data.messages ?? [];
-        setMessages(msgs);
-        for (const m of msgs) {
-          if (m.id > maxMessageIdRef.current) maxMessageIdRef.current = m.id;
-        }
-      } catch {
-        // Fallback
-        fetchMessages(charA, charB);
-      }
-    },
-    [fetchMessages],
   );
 
   useEffect(() => {
@@ -282,12 +220,15 @@ export function ChatApp() {
             const sel = selectedRef.current;
             const isCurrentChat =
               sel &&
-              ((sel.character === m.character && sel.player === m.player) ||
-                (sel.character === m.player && sel.player === m.character));
+              sel.character === m.character &&
+              sel.player === m.player;
 
-            if (isCurrentChat && sel) {
-              // Auto-refresh usando bidirecional para mostrar mensagens de ambos os lados
-              await fetchBidirectionalMessages(sel.character, sel.player);
+            if (isCurrentChat) {
+              // Auto-refresh the messages in the currently-open conversation
+              // so the new whisper appears instantly without waiting for the
+              // regular /api/conversations polling cycle.
+              await fetchMessages(m.character, m.player);
+              // Scroll to bottom
               setTimeout(() => {
                 if (scrollRef.current) {
                   scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -326,15 +267,13 @@ export function ChatApp() {
       delete next[key];
       return next;
     });
-    // Usar API bidirecional para mostrar conversa completa (A→B e B→A)
-    void fetchBidirectionalMessages(selected.character, selected.player);
-    // Polling mais rápido quando conversa está aberta (500ms)
+    void fetchMessages(selected.character, selected.player);
     const id = setInterval(
-      () => void fetchBidirectionalMessages(selected.character, selected.player),
-      500,
+      () => void fetchMessages(selected.character, selected.player),
+      POLL_MS,
     );
     return () => clearInterval(id);
-  }, [selected, fetchBidirectionalMessages]);
+  }, [selected, fetchMessages]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -351,7 +290,17 @@ export function ChatApp() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ body: draft.trim() }),
+          body: JSON.stringify({
+            body: draft.trim(),
+            // The UI already knows which WoW characters belong to this setup.
+            // Send that explicit fact so A→B self-character messages are
+            // mirrored even while the bridge is rescanning a window.
+            mirrorToCharacter: characters.some(
+              (c) =>
+                c.character.trim().toLowerCase() ===
+                selected.player.trim().toLowerCase(),
+            ),
+          }),
         },
       );
       if (res.ok) {
@@ -369,7 +318,7 @@ export function ChatApp() {
     } finally {
       setSending(false);
     }
-  }, [selected, draft, fetchMessages, refreshTop]);
+  }, [selected, draft, characters, fetchMessages, refreshTop]);
 
   const deleteMessage = useCallback(
     async (message: Message) => {
@@ -436,28 +385,6 @@ export function ChatApp() {
     }
   }, [selected, refreshTop]);
 
-  const syncHistory = useCallback(async () => {
-    if (!selected) return;
-    setSyncingHistory(true);
-    try {
-      const res = await fetch(
-        `/api/sync?character=${encodeURIComponent(selected.character)}&player=${encodeURIComponent(selected.player)}&limit=50`,
-        { cache: "no-store" },
-      );
-      if (!res.ok) {
-        alert("Erro ao sincronizar histórico");
-        return;
-      }
-      const data = (await res.json()) as { messages: Message[] };
-      if (data.messages.length > 0) {
-        setMessages(data.messages);
-        void refreshTop();
-      }
-    } finally {
-      setSyncingHistory(false);
-    }
-  }, [selected, refreshTop]);
-
   const realmMismatch = useMemo(() => {
     if (!selected) return null;
     const cr = selected.character.includes("-")
@@ -496,7 +423,7 @@ export function ChatApp() {
 
   const filteredConversations = useMemo(() => {
     if (characterFilter === ALL) return conversations;
-    return conversations.filter((c) => sameName(c.character, characterFilter));
+    return conversations.filter((c) => c.character === characterFilter);
   }, [conversations, characterFilter]);
 
   const totalPendingOut = useMemo(
@@ -504,17 +431,20 @@ export function ChatApp() {
     [characters],
   );
 
-  // Clear unread badges when tab becomes visible
+  // Refresh immediately when the tab/window regains focus or visibility —
+  // messages that arrived while you were away show up instantly.
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        // Don't clear unreads immediately — let user see the badges.
-        // They clear when the user opens each conversation.
-      }
+    const onVis = () => {
+      if (document.visibilityState === "visible") void refreshTop();
     };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
+    const onFocus = () => void refreshTop();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshTop]);
 
   return (
     <div className="flex h-dvh w-full flex-col">
@@ -875,14 +805,6 @@ export function ChatApp() {
                       </div>
                     </div>
                   </div>
-                  <button
-                    onClick={() => void syncHistory()}
-                    disabled={syncingHistory}
-                    className="shrink-0 rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/50 disabled:text-slate-500 sm:px-3 sm:text-xs"
-                    title="Sincronizar histórico do arquivo de log"
-                  >
-                    {syncingHistory ? "🔄 Sincronizando..." : "🔄 Sincronizar"}
-                  </button>
                   <button
                     onClick={() => void clearConversation()}
                     disabled={clearingConversation || messages.length === 0}

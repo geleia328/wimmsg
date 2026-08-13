@@ -19,6 +19,7 @@ export const dynamic = "force-dynamic";
 const ALLOWED = new Set([
   "WIMBridge.zip",
   "wim_bridge.py",
+  "wim_bridge_gui.py",
   "requirements.txt",
   "config.example.ini",
   "WIMBridge.lua",
