@@ -99,6 +99,16 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - TOC agora aceita Retail Midnight atual `Interface: 120001, 110000` (antes só `110000`, então o WoW atual podia desativá-lo como versão antiga).
     - Slash aliases registrados: `/wimbridge`, `/wim`, `/wbridge`; `/wimbridge help` e `/wimbridge who` exibem diagnóstico; global `WIMBridgeLoaded=true` para `/run print(WIMBridgeLoaded)`.
     - Setup atualizado sem link ZIP quebrado: instalação manual exige exatamente `Interface/AddOns/WIMBridge/WIMBridge.toc` + `WIMBridge.lua`; inclui instrução `Load out of date AddOns` e mensagem esperada `WIMBridge v2.2 carregado!`.
+21. ✅ Fix final captura amigo v1.1.12:
+    - Relay usa o nome curto do próprio personagem no `SendChatMessage` (mais compatível que `Name-Realm`) e faz retry após 500ms; `/wimbridge test` agora testa o pipeline real, não apenas `ChatFrame:AddMessage`.
+    - Parser GUI e CLI aceitam formato nativo `To Name: body`, `Name whispers: body`, `[W From] Name: body`, `[W From] [Name] whispers: body` e relay `[WIMRELAY]`; ambos bridges compilam.
+    - Replay deduplica addon/native por mensagem específica (character/player/body), nunca descarta todo o restante do log por haver uma linha WIMBRIDGE antiga.
+    - Addon autoativa `LoggingChat(1)` em login/entrando no mundo; WIMBridge 2.2 precisa ser reinstalado junto com BakersWhisper.exe novo.
+22. ✅ Diagnóstico final de captura e instalação v1.1.13:
+    - `/setup` antes apontava primeiro para `wim_bridge.py` legado; corrigido para recomendar `wim_bridge_gui.py` (mesmo código do BakersWhisper.exe) e marcar o CLI como legado.
+    - `/api/download/[file]` agora libera `wim_bridge_gui.py` (200 OK, ~85KB), além do addon atualizado.
+    - Addon relay usa nome curto no self-whisper + retry 500ms; comando `/wimbridge test` testa pipeline real.
+    - Parser aceita formatos nativos/legacy/relay e replay não descarta linhas nativas por causa de addon antigo.
 
 **Relatório completo (cole aqui):**
 

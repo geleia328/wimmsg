@@ -634,6 +634,10 @@ NATIVE_WHISPER_RE = re.compile(
     r"(?:whispers?|sussurra)\s*:?\s*(?P<body>.*)$",
     re.IGNORECASE,
 )
+NATIVE_TO_LEGACY_RE = re.compile(
+    r"^To\s+(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$",
+    re.IGNORECASE,
+)
 FALLBACKS = [
     re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$"),
     re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+sussurra:\s+(?P<body>.+)$"),
@@ -755,6 +759,23 @@ def parse_whisper(
                 if tag.group("kind") == "From":
                     return "incoming", own_default, other, body, log_ts
                 return "outgoing", own_default, other, body, log_ts
+
+    # Older clients use "To Name: body" for a sent whisper.
+    legacy_to = NATIVE_TO_LEGACY_RE.match(clean)
+    if legacy_to:
+        other = (legacy_to.group("name") or legacy_to.group("name2") or "").strip()
+        body = legacy_to.group("body").strip()
+        relay = RELAY_RE.match(body)
+        if relay:
+            return (
+                "incoming",
+                relay.group("own").strip() or own_default,
+                relay.group("from").strip(),
+                relay.group("body").strip(),
+                relay.group("ts").strip(),
+            )
+        if other:
+            return "outgoing", own_default, other, body, log_ts
 
     # Legacy fallbacks: some logs/chat addons print "Name whispers: body".
     # Strip brackets so "[Name-Realm] whispers: body" also matches.

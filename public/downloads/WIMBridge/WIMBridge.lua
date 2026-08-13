@@ -90,8 +90,10 @@ local function relayReceived(from, msg, when)
     -- marker to the SAME character; the bridge reads that logged line and
     -- converts it back into the original incoming whisper. The UI filter
     -- below hides this transport marker from the player.
-    local own = UnitName("player")
-    if not own or not SendChatMessage then return end
+    -- IMPORTANT: whisper the short character name, not Name-Realm. Some WoW
+    -- clients reject a self-whisper addressed with the realm suffix.
+    local ownShort = UnitName("player")
+    if not ownShort or not SendChatMessage then return end
     local ts = math.floor(when or time() or 0)
     local payload = string.format(
         "%s<OWN:%s><FROM:%s><TS:%d>%s",
@@ -100,9 +102,17 @@ local function relayReceived(from, msg, when)
     -- Keep room for WoW's whisper size limit. Normal whispers are well below
     -- this; the regular CHAT_MSG event/log remains the fallback for longer.
     if #payload > 240 then payload = payload:sub(1, 240) end
-    pcall(function()
-        SendChatMessage(payload, "WHISPER", nil, own)
-    end)
+    local function sendRelay()
+        pcall(function()
+            SendChatMessage(payload, "WHISPER", nil, ownShort)
+        end)
+    end
+    sendRelay()
+    -- A small retry handles the client refusing a self-whisper while it is
+    -- still dispatching CHAT_MSG_WHISPER. Same TS makes it idempotent.
+    if C_Timer and C_Timer.After then
+        C_Timer.After(0.5, sendRelay)
+    end
 end
 
 local function hideRelay(_, event, message)
@@ -159,8 +169,12 @@ SlashCmdList["WIMBRIDGE"] = function(raw)
     cmd = cmd:match("^%s*(.-)%s*$"):lower()
     if cmd == "test" then
         computeOwnName()
-        echoLine("TestPlayer-TestRealm", "hello world", time())
-        print("|cffffcc00WIMBridge|r teste emitido no chatlog.")
+        local t = time()
+        echoLine("TestPlayer-TestRealm", "hello world", t)
+        -- Test the REAL external pipeline too: this produces a native whisper
+        -- log line for the Python bridge, not just a visual ChatFrame line.
+        relayReceived("TestPlayer-TestRealm", "hello world", t)
+        print("|cffffcc00WIMBridge|r teste visual + relay emitido; confira o log do bridge.")
     elseif cmd == "dump" then
         -- Re-print the whole stored history with the SAME <TS> values, so the
         -- bridge can ingest them idempotently (no duplicates on re-dump).

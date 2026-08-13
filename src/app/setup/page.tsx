@@ -278,16 +278,26 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             4. Instalar o Python bridge
           </h2>
           <p className="mt-2 text-sm text-slate-300">
-            Baixe:
+            Para o bridge completo com interface, scanner de janelas, GSE,
+            histórico e captura em tempo real, use o arquivo GUI abaixo:
           </p>
           <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
             <li>
               <a
-                href="/api/download/wim_bridge.py"
-                className="text-amber-400 hover:underline"
+                href="/api/download/wim_bridge_gui.py"
+                className="text-emerald-400 hover:underline"
                 download
               >
-                wim_bridge.py
+                wim_bridge_gui.py (recomendado)
+              </a>
+            </li>
+            <li>
+              <a
+                href="/api/download/wim_bridge.py"
+                className="text-slate-400 hover:underline"
+                download
+              >
+                wim_bridge.py (legado, sem os recursos novos)
               </a>
             </li>
             <li>
@@ -312,6 +322,11 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
           </ul>
 
           <pre className={CODE_BLOCK}>{`pip install -r requirements.txt`}</pre>
+
+          <p className="mt-3 text-sm text-emerald-200">
+            Depois rode o GUI recomendado:
+          </p>
+          <pre className={CODE_BLOCK}>{`python wim_bridge_gui.py`}</pre>
 
           <p className="mt-3 text-sm text-slate-300">
             Edite <code>config.ini</code> e adicione UM bloco por janela:
