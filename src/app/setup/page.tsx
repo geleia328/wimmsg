@@ -149,13 +149,12 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
               .
             </li>
             <li>
-              O addon ativa o chatlog automaticamente. O WoW normalmente mantém
-              o arquivo em buffer; o WIMBridge força o flush após cada whisper
-              para o bridge conseguir ler sem fechar a janela.
+              Ative <code>/chatlog</code> em cada janela — isso grava tudo em{" "}
+              <code>_retail_/Logs/WoWChatLog.txt</code>.
             </li>
             <li>
               O script Python observa esses arquivos em paralelo e envia os
-              whispers para este site em tempo real.
+              whispers para este site.
             </li>
             <li>
               Você lê tudo aqui num só painel, filtra por personagem, e
@@ -196,16 +195,9 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             </li>
           </ul>
           <p className="mt-2 text-sm text-slate-300">
-            O addon tenta ativar o logger sozinho. Para conferir manualmente,
-            use <code>/wimbridge who</code>; o status do bridge mostrará o caminho
-            do arquivo e se ele foi encontrado.
+            Depois, em cada janela, dentro do jogo, ative:
           </p>
           <pre className={CODE_BLOCK}>/chatlog</pre>
-          <p className="mt-2 text-xs text-slate-500">
-            Se você usar <code>/chatlog</code> manualmente, observe a mensagem do
-            WoW: o comando alterna entre ligado/desligado. Não execute duas
-            vezes seguidas sem conferir o estado.
-          </p>
         </section>
 
         <section>
@@ -213,78 +205,64 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             3. Instalar o addon WIMBridge
           </h2>
           <p className="mt-2 text-sm text-slate-300">
-            Baixe o pacote pronto abaixo (ele já contém a pasta WIMBridge
-            correta) ou baixe os dois arquivos manualmente:
+            Baixe o pacote completo:
           </p>
-          <a
-            href="/api/download/WIMBridge.zip"
-            className="mt-3 inline-block rounded-lg border border-emerald-500/50 bg-emerald-500/10 px-4 py-2 text-sm font-bold text-emerald-300 hover:bg-emerald-500/20"
-            download
-          >
-            📦 Baixar WIMBridge.zip atualizado
-          </a>
-          <ul className="mt-3 list-disc space-y-2 pl-6 text-sm">
+          <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
             <li>
-              Crie exatamente esta pasta (sem uma segunda pasta WIMBridge dentro
-              dela):{" "}
-              <code>World of Warcraft/_retail_/Interface/AddOns/WIMBridge/</code>
-            </li>
-            <li>
-              Dentro dela, salve os arquivos{" "}
               <a
-                href="/api/download/WIMBridge.toc"
+                href="/api/download/WIMBridge.zip"
                 className="text-amber-400 hover:underline"
                 download
               >
-                WIMBridge.toc
+                📦 WIMBridge.zip
               </a>{" "}
-              e{" "}
-              <a
-                href="/api/download/WIMBridge.lua"
-                className="text-amber-400 hover:underline"
-                download
-              >
-                WIMBridge.lua
-              </a>
-              . O caminho final precisa ser exatamente:
-              <pre className={`${CODE_BLOCK} mt-2`}>{`.../Interface/AddOns/WIMBridge/WIMBridge.toc
-.../Interface/AddOns/WIMBridge/WIMBridge.lua`}</pre>
+              — descompacte em{" "}
+              <code>World of Warcraft/_retail_/Interface/AddOns/</code>
             </li>
           </ul>
 
-          <div className="mt-3 rounded border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-slate-300">
-            <b className="text-rose-300">Se /wimbridge disser &quot;comando desconhecido&quot;</b>
+          <div className="mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
+            <b className="text-amber-300">O download do .zip não funciona?</b>
+            <p className="mt-1">
+              Alguns navegadores/antivírus bloqueiam .zip vindos de sites
+              desconhecidos. Baixe os 2 arquivos avulsos abaixo:
+            </p>
             <ol className="mt-2 list-decimal space-y-1 pl-5">
               <li>
-                Na tela de seleção de personagem, clique no ícone de addons e
-                marque <b>Load out of date AddOns / Carregar addons antigos</b>.
+                Crie uma pasta chamada exatamente{" "}
+                <code>WIMBridge</code> dentro de{" "}
+                <code>World of Warcraft/_retail_/Interface/AddOns/</code>
               </li>
               <li>
-                Confira que a pasta tem exatamente dois arquivos, sem dupla
-                pasta: <code>AddOns/WIMBridge/WIMBridge.toc</code> e{" "}
-                <code>AddOns/WIMBridge/WIMBridge.lua</code>.
-              </li>
-              <li>
-                Entre no personagem e use <code>/reload</code>. Veja no chat a
-                mensagem <b>WIMBridge v2.3 carregado!</b>.
-              </li>
-              <li>
-                Teste qualquer alias: <code>/wimbridge who</code>,{" "}
-                <code>/wim who</code> ou <code>/wbridge who</code>.
+                Baixe e coloque estes dois arquivos dentro dela:
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <a
+                    href="/api/download/WIMBridge.toc"
+                    download
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
+                  >
+                    ⬇ WIMBridge.toc
+                  </a>
+                  <a
+                    href="/api/download/WIMBridge.lua"
+                    download
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
+                  >
+                    ⬇ WIMBridge.lua
+                  </a>
+                </div>
               </li>
             </ol>
             <p className="mt-2 text-slate-400">
-              Se ainda não aparecer a mensagem de carregamento, o arquivo está
-              na pasta errada ou o addon está desmarcado — o problema acontece
-              antes do parser/bridge.
+              Se o navegador abrir o arquivo como texto em vez de baixar,
+              clique com o <b>botão direito → &quot;Salvar link como…&quot;</b>.
             </p>
           </div>
 
           <p className="mt-3 text-sm text-slate-300">
             Depois de copiar os arquivos, faça <code>/reload</code> em cada
-            janela do WoW. Teste com <code>/wimbridge who</code> (ou o alias{" "}
-            <code>/wim who</code>) — deve mostrar o personagem próprio e
-            confirmar que o addon carregou.
+            janela do WoW. Teste com <code>/wimbridge test</code> — deve
+            imprimir uma linha com o marcador.
           </p>
         </section>
 
@@ -293,26 +271,16 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             4. Instalar o Python bridge
           </h2>
           <p className="mt-2 text-sm text-slate-300">
-            Para o bridge completo com interface, scanner de janelas, GSE,
-            histórico e captura em tempo real, use o arquivo GUI abaixo:
+            Baixe:
           </p>
           <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
             <li>
               <a
-                href="/api/download/wim_bridge_gui.py"
-                className="text-emerald-400 hover:underline"
-                download
-              >
-                wim_bridge_gui.py (recomendado)
-              </a>
-            </li>
-            <li>
-              <a
                 href="/api/download/wim_bridge.py"
-                className="text-slate-400 hover:underline"
+                className="text-amber-400 hover:underline"
                 download
               >
-                wim_bridge.py (legado, sem os recursos novos)
+                wim_bridge.py
               </a>
             </li>
             <li>
@@ -337,11 +305,6 @@ token   = <o mesmo BRIDGE_TOKEN>`}</pre>
           </ul>
 
           <pre className={CODE_BLOCK}>{`pip install -r requirements.txt`}</pre>
-
-          <p className="mt-3 text-sm text-emerald-200">
-            Depois rode o GUI recomendado:
-          </p>
-          <pre className={CODE_BLOCK}>{`python wim_bridge_gui.py`}</pre>
 
           <p className="mt-3 text-sm text-slate-300">
             Edite <code>config.ini</code> e adicione UM bloco por janela:

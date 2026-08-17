@@ -145,11 +145,9 @@ export const DEFAULT_APP_CONTROLS = {
   whisper_focus_delay_ms: "2000",
   whisper_after_send_delay_ms: "1000",
   whisper_chat_open_delay_ms: "1000",
-  whisper_w_ready_delay_ms: "1000",
-  whisper_space_delay_ms: "1000",
   whisper_keystroke_delay_ms: "100",
   whisper_chat_send_delay_ms: "1000",
-  whisper_close_chat_enabled: "no",
-  whisper_chat_close_delay_ms: "400",
+  whisper_close_chat_enabled: "yes",
+  whisper_chat_close_delay_ms: "500",
   queue_poll_ms: "1500",
 } as const;
