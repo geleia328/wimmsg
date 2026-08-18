@@ -27,6 +27,39 @@ type IncomingPayload = {
   }>;
 };
 
+type ParsedRelay = {
+  direction: "incoming" | "outgoing";
+  character: string;
+  player: string;
+  body: string;
+};
+
+function parseEmbeddedRelay(body: string): ParsedRelay | null {
+  const from = body.match(
+    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><FROM:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
+  );
+  if (from) {
+    return {
+      direction: "incoming",
+      character: from[1].trim(),
+      player: from[2].trim(),
+      body: from[3].trim(),
+    };
+  }
+  const to = body.match(
+    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><TO:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
+  );
+  if (to) {
+    return {
+      direction: "outgoing",
+      character: to[1].trim(),
+      player: to[2].trim(),
+      body: to[3].trim(),
+    };
+  }
+  return null;
+}
+
 /**
  * The Python bridge posts newly-seen chat lines here. `character` identifies
  * WHICH of your WoW windows the message belongs to. We upsert by external_id
@@ -56,18 +89,25 @@ export async function POST(request: NextRequest) {
         typeof m.character === "string",
     )
     .map((m) => {
-      const isOutgoing = m.direction === "outgoing";
+      // Defensive server-side parser: if an older bridge parsed the relay line
+      // incorrectly as body="WIMRELAY<OWN...>", fix it here before storing.
+      const relay = parseEmbeddedRelay(m.body);
+      const character = (relay?.character ?? m.character.trim()) || "unknown";
+      const player = relay?.player ?? m.player.trim();
+      const body = relay?.body ?? m.body;
+      const direction = relay?.direction ?? m.direction ?? "incoming";
+      const isOutgoing = direction === "outgoing";
       return {
-        character: m.character.trim() || "unknown",
-        player: m.player.trim(),
-        body: m.body,
+        character,
+        player,
+        body,
         direction: isOutgoing ? ("outgoing" as const) : ("incoming" as const),
         status: isOutgoing
           ? ((m.status ?? "sent") as "sent" | "failed")
           : ("received" as const),
         externalId:
           m.externalId ??
-          `${m.character}-${m.player}-${m.receivedAt ?? new Date().toISOString()}-${Math.random()
+          `${character}-${player}-${m.receivedAt ?? new Date().toISOString()}-${Math.random()
             .toString(36)
             .slice(2, 8)}`,
         createdAt: m.receivedAt ? new Date(m.receivedAt) : new Date(),

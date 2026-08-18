@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +23,8 @@ export async function GET(
   );
 
   const conditions = [
-    eq(messages.player, player),
-    eq(messages.character, character),
+    sql`lower(${messages.player}) = ${player.toLowerCase()}`,
+    sql`lower(${messages.character}) = ${character.toLowerCase()}`,
   ];
   if (Number.isFinite(since) && since > 0) {
     conditions.push(gt(messages.id, since));
@@ -115,7 +115,12 @@ export async function DELETE(
 
   const deleted = await db
     .delete(messages)
-    .where(and(eq(messages.character, character), eq(messages.player, player)))
+    .where(
+      and(
+        sql`lower(${messages.character}) = ${character.toLowerCase()}`,
+        sql`lower(${messages.player}) = ${player.toLowerCase()}`,
+      ),
+    )
     .returning({ id: messages.id });
 
   return NextResponse.json({

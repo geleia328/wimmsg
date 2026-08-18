@@ -482,7 +482,7 @@ O WoW grava mensagens reais de canal no `WoWChatLog.txt`, por isso o bridge cons
 
 ### Problema descoberto
 
-Em alguns clientes, o `WoWChatLog.txt` só atualiza quando fecha o WoW. Para contornar, o addon 2.5.0 faz multi-flush atrasado:
+Em alguns clientes, o `WoWChatLog.txt` só atualiza quando fecha o WoW. Causa raiz provável: no Windows o WoW mantém o arquivo TRAVADO para escrita enquanto está aberto, e o `open()` normal do Python vê conteúdo stale até o jogo liberar o handle (ao fechar). Para contornar, o addon 2.5.0 faz multi-flush atrasado:
 
 ```txt
 1.5s depois do relay
@@ -612,12 +612,17 @@ npx drizzle-kit push
    - Solução: `charDirtyRef`.
 7. `WIMRELAY` chegava no corpo da mensagem e salvava errado.
    - Solução: parser defensivo no `/api/ingest` e `/api/sync`.
+8. Mensagens só chegavam no bridge ao FECHAR o WoW (Windows trava o chatlog).
+   - Solução definitiva: leitura com acesso compartilhado via Win32 (`win32file.CreateFile` com `FILE_SHARE_READ|WRITE|DELETE`) nas funções `_read_shared`/`tail_file_shared` do bridge. `tail_file` usa essa leitura em `win32` quando `HAS_WIN32FILE`. Isso permite ler o log EM TEMPO REAL com o jogo aberto.
+   - NÃO usar text-to-speech/speech-to-text/OCR: o usuário cogitou áudio, mas TTS é o caminho inverso e STT/OCR seriam frágeis (nomes errados, latência). A trava de arquivo é a causa real.
 
 ---
 
 ## 17. Ponto crítico para próxima IA
 
-Se o usuário ainda disser que só recebe mensagem ao fechar o WoW, pedir o seguinte:
+Se o usuário ainda disser que só recebe mensagem ao fechar o WoW:
+- PRIMEIRO confirmar que ele está com o `.exe` MAIS NOVO (o que contém `_read_shared`/`tail_file_shared` com `win32file`). Se estiver com exe antigo, o addon 2.5.0 sozinho não resolve.
+- Depois pedir o seguinte:
 
 1. Confirmar addon versão 2.5.0:
 
