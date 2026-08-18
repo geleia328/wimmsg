@@ -57,6 +57,36 @@ except Exception:  # pragma: no cover - library optional
     sr = None  # type: ignore
     HAS_SPEECH = False
 
+# Loopback audio capture: records what the PC is PLAYING (the addon's TTS
+# narration) without needing a microphone at all (WASAPI loopback).
+try:
+    import soundcard as sc  # type: ignore
+    import numpy as np  # type: ignore
+
+    HAS_LOOPBACK = True
+except Exception:  # pragma: no cover
+    sc = None  # type: ignore
+    np = None  # type: ignore
+    HAS_LOOPBACK = False
+
+# Screen OCR fallback: screenshot the relay frame drawn by the addon and read
+# it with the Windows built-in OCR engine (winocr).
+try:
+    import mss  # type: ignore
+
+    HAS_MSS = True
+except Exception:  # pragma: no cover
+    mss = None  # type: ignore
+    HAS_MSS = False
+
+try:
+    import winocr  # type: ignore
+
+    HAS_WINOCR = True
+except Exception:  # pragma: no cover
+    winocr = None  # type: ignore
+    HAS_WINOCR = False
+
 try:
     import psutil  # type: ignore
     HAS_PSUTIL = True
@@ -320,54 +350,6 @@ def _log_from_exe(exe_path: str) -> str:
         return ""
     p = Path(exe_path).parent / "Logs" / "WoWChatLog.txt"
     return str(p)
-
-
-def resolve_wow_log_path(preferred: Path, filename: str) -> Path:
-    """
-    The Logs folder is not always where we expect (custom install paths,
-    psutil failing to read the exe path, different client). If the preferred
-    path doesn't exist, search common WoW install roots and honor the
-    WOW_LOGS_DIR environment variable override. Returns the first existing
-    file, or the preferred path when nothing is found (the tailer will keep
-    waiting and will pick it up the moment the game creates it).
-    """
-    if preferred and preferred.exists():
-        return preferred
-    candidates: list[Path] = []
-    env_dir = os.environ.get("WOW_LOGS_DIR", "").strip()
-    if env_dir:
-        candidates.append(Path(env_dir) / filename)
-    if preferred and str(preferred.parent) not in ("", "."):
-        candidates.append(preferred.parent / filename)
-    roots: list[Path] = []
-    for var in ("PROGRAMFILES(X86)", "PROGRAMFILES"):
-        v = os.environ.get(var)
-        if v:
-            roots.append(Path(v) / "World of Warcraft")
-    roots += [
-        Path("C:/World of Warcraft"),
-        Path("D:/World of Warcraft"),
-        Path("E:/World of Warcraft"),
-        Path("F:/World of Warcraft"),
-    ]
-    for root in roots:
-        try:
-            if not root.exists():
-                continue
-            for sub in root.iterdir():
-                try:
-                    if sub.is_dir():
-                        f = sub / "Logs" / filename
-                        if f.exists():
-                            candidates.append(f)
-                except OSError:
-                    continue
-        except OSError:
-            continue
-    for c in candidates:
-        if c.exists():
-            return c
-    return preferred
 
 
 def enum_wow_windows() -> list[DetectedWindow]:
@@ -1067,6 +1049,7 @@ DEFAULT_CONTROLS = {
     "whisperChatCloseDelayMs": 500,
     "voiceRelayEnabled": True,
     "combatRelayEnabled": True,
+    "ocrRelayEnabled": True,
     "queuePollMs": 1500,
 }
 
@@ -1217,11 +1200,7 @@ class BridgeEngine:
         for c in chars:
             if not c.chat_log:
                 continue
-            combat_path = resolve_wow_log_path(
-                c.chat_log.parent / "WoWCombatLog.txt", "WoWCombatLog.txt"
-            )
-            if combat_path.exists():
-                self._log(f"📂 combatlog localizado em: {combat_path}")
+            combat_path = c.chat_log.parent / "WoWCombatLog.txt"
             if combat_path in combat_seen:
                 continue
             combat_seen.add(combat_path)
@@ -1234,6 +1213,11 @@ class BridgeEngine:
             self.log(
                 "🗡 relay combatlog ativo: lendo WoWCombatLog.txt em tempo real."
             )
+
+        # Screen OCR relay: reads the addon's on-screen relay frame.
+        t8 = threading.Thread(target=self._ocr_loop, daemon=True)
+        t8.start()
+        self.threads.append(t8)
 
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
@@ -1505,13 +1489,47 @@ class BridgeEngine:
             for s in paused_spammers:
                 s.pause_event.clear()
 
+    def _handle_voice_text(self, text: str) -> None:
+        """Parse a transcribed narration line and POST it to the site."""
+        parsed = parse_voice_transcript(text)
+        if not parsed:
+            return
+        direction, own_raw, other, body = parsed
+        own = self._canonical_char(own_raw) or own_raw
+        if not own or not other or not body:
+            return
+        if self._recent_dup(own, other, body):
+            return
+        self._remember_whisper(own, other, body)
+        bucket = int(time.time() // 10)
+        try:
+            self.api.ingest(
+                [
+                    {
+                        "externalId": f"voice-{bucket}-{make_ext_id(own, other, body)}",
+                        "character": own,
+                        "player": other,
+                        "body": body,
+                        "direction": direction,
+                        "status": "sent" if direction == "outgoing" else "received",
+                        "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    }
+                ]
+            )
+            arrow = "→" if direction == "outgoing" else "←"
+            self.log(f"🎙 {arrow} voz [{own}] {other}: {body}")
+        except Exception as e:
+            self.log(f"🎙 ingest falhou: {e}")
+
     def _voice_listener(self) -> None:
         """
-        Speech-to-text relay. The addon speaks each whisper as:
+        Speech-to-text relay WITHOUT a microphone: captures the audio the PC
+        is PLAYING (WASAPI loopback) — i.e. the addon's own TTS narration —
+        and transcribes it. Falls back to a real microphone only if loopback
+        is unavailable. The addon speaks:
           "Wimbridge. Own <NATO name>. From/To <NATO name>. Message <body>. Endbridge."
-        We transcribe with the microphone and POST to /api/ingest. This path
-        does NOT depend on WoWChatLog.txt, so it works even on clients that
-        only flush the log file when closing the window.
+        Names are NATO-spelled so transcription is exact. Does NOT depend on
+        WoWChatLog.txt at all.
         """
         if not HAS_SPEECH:
             self.log(
@@ -1520,17 +1538,52 @@ class BridgeEngine:
                 "'pip install -r requirements.txt'."
             )
             return
+
+        rec = sr.Recognizer()
+
+        # ---- Preferred: loopback (internal PC audio, no microphone) ----
+        if HAS_LOOPBACK:
+            try:
+                spk = sc.default_speaker()
+                rate = 16000
+                with spk.recorder(samplerate=rate, channels=1) as recorder:
+                    self.log(
+                        "🎙 VOZ via LOOPBACK (sem microfone): transcrevendo a "
+                        "narração interna do PC em tempo real."
+                    )
+                    while not self.stop_event.is_set():
+                        if not self._get_controls().get("voiceRelayEnabled", True):
+                            time.sleep(0.5)
+                            continue
+                        data = recorder.record(num_frames=rate * 3)
+                        if data is None:
+                            continue
+                        peak = float(np.abs(data).max()) if data.size else 0.0
+                        if peak < 0.005:
+                            continue  # silence — skip STT call
+                        pcm = (np.clip(data, -1.0, 1.0) * 32767.0).astype(
+                            "<i2"
+                        ).tobytes()
+                        audio = sr.AudioData(pcm, rate, 2)
+                        try:
+                            text = rec.recognize_google(audio, language="en-US")
+                        except Exception:
+                            continue
+                        self._handle_voice_text(text)
+                    return
+            except Exception as e:
+                self.log(f"🎙 loopback falhou ({e}); tentando microfone...")
+
+        # ---- Fallback: physical microphone ----
         try:
             mic = sr.Microphone()
         except Exception as e:
             self.log(
-                f"🎙 microfone não encontrado, modo VOZ desativado: {e}. "
-                "Conecte um microfone perto do som do WoW para receber "
-                "whispers em tempo real. O resto do app funciona normalmente."
+                f"🎙 nem loopback nem microfone disponíveis: {e}. "
+                "O resto do app funciona normalmente."
             )
             return
 
-        rec = sr.Recognizer()
         rec.pause_threshold = 0.6
 
         def _on_audio(recognizer, audio) -> None:
@@ -1540,41 +1593,13 @@ class BridgeEngine:
                 text = recognizer.recognize_google(audio, language="en-US")
             except Exception:
                 return
-            parsed = parse_voice_transcript(text)
-            if not parsed:
-                return
-            direction, own_raw, other, body = parsed
-            own = self._canonical_char(own_raw) or own_raw
-            if self._recent_dup(own, other, body):
-                return
-            self._remember_whisper(own, other, body)
-            bucket = int(time.time() // 10)
-            try:
-                self.api.ingest(
-                    [
-                        {
-                            "externalId": f"voice-{bucket}-{make_ext_id(own, other, body)}",
-                            "character": own,
-                            "player": other,
-                            "body": body,
-                            "direction": direction,
-                            "status": "sent" if direction == "outgoing" else "received",
-                            "receivedAt": time.strftime(
-                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                            ),
-                        }
-                    ]
-                )
-                arrow = "→" if direction == "outgoing" else "←"
-                self.log(f"🎙 {arrow} voz [{own}] {other}: {body}")
-            except Exception as e:
-                self.log(f"🎙 ingest falhou: {e}")
+            self._handle_voice_text(text)
 
         try:
             stop_fn = rec.listen_in_background(mic, _on_audio, phrase_time_limit=12)
             self.log(
-                "🎙 modo VOZ ativo: ouvindo o addon falar os whispers "
-                "(nomes soletrados em alfabeto fonético)."
+                "🎙 modo VOZ ativo via MICROFONE (loopback indisponível): "
+                "aponte o microfone para o som do WoW."
             )
             while not self.stop_event.is_set():
                 time.sleep(0.5)
@@ -1584,6 +1609,79 @@ class BridgeEngine:
                 pass
         except Exception as e:
             self.log(f"🎙 listener de voz falhou: {e}")
+
+    def _ocr_loop(self) -> None:
+        """
+        Screen OCR fallback: the addon draws the relay payload in a fixed
+        high-contrast frame at the top-left of each WoW window. We screenshot
+        that strip every 1.5s and read it with the Windows built-in OCR
+        engine. This needs no log flushing, no microphone and no audio.
+        """
+        if not (HAS_MSS and HAS_WINOCR and HAS_WIN32):
+            self.log(
+                "📷 OCR de tela indisponível (requer mss + winocr no Windows)."
+            )
+            return
+        import asyncio
+
+        from PIL import Image
+
+        with mss.mss() as sct:
+            while not self.stop_event.is_set():
+                if not self._get_controls().get("ocrRelayEnabled", True):
+                    time.sleep(1)
+                    continue
+                for ref in list(self.chars):
+                    try:
+                        hwnd = ref.hwnd
+                        if not hwnd or not win32gui.IsWindow(hwnd):
+                            continue
+                        l, t, r, b = win32gui.GetWindowRect(hwnd)
+                        width = min(1500, max(0, r - l - 12))
+                        if width < 120:
+                            continue
+                        region = {"left": l + 6, "top": t + 28, "width": width, "height": 60}
+                        shot = sct.grab(region)
+                        pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                        result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
+                        text = getattr(result, "text", None) or str(result)
+                    except Exception:
+                        continue
+                    if "WIMRELAY" not in text and "BWRELAY" not in text:
+                        continue
+                    parsed = parse_whisper(text, ref.character)
+                    if not parsed:
+                        continue
+                    direction, own_raw, other, body = parsed
+                    own = self._canonical_char(own_raw) or own_raw
+                    if not own or not other or not body:
+                        continue
+                    if self._recent_dup(own, other, body):
+                        continue
+                    self._remember_whisper(own, other, body)
+                    try:
+                        self.api.ingest(
+                            [
+                                {
+                                    "externalId": make_ext_id(
+                                        own, other, body, f"ocr-{int(time.time() // 8)}"
+                                    ),
+                                    "character": own,
+                                    "player": other,
+                                    "body": body,
+                                    "direction": direction,
+                                    "status": "sent" if direction == "outgoing" else "received",
+                                    "receivedAt": time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                    ),
+                                }
+                            ]
+                        )
+                        arrow = "→" if direction == "outgoing" else "←"
+                        self.log(f"📷 {arrow} OCR [{own}] {other}: {body}")
+                    except Exception as e:
+                        self.log(f"📷 OCR ingest falhou: {e}")
+                time.sleep(1.5)
 
     def _combat_tail(self, path: Path) -> None:
         """
@@ -2300,10 +2398,6 @@ class App:
                 continue
             w: DetectedWindow = row["win"]
             log_path = Path(w.chat_log) if w.chat_log else Path()
-            resolved = resolve_wow_log_path(log_path, "WoWChatLog.txt")
-            if resolved != log_path:
-                self._log(f"📂 chatlog localizado em: {resolved}")
-                log_path = resolved
             chars.append(
                 RuntimeCharacter(
                     character=name,

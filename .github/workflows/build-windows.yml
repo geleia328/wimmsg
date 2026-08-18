@@ -32,12 +32,15 @@ jobs:
           pip install "pyinstaller==6.11.1"
           pip install "requests>=2.31" "pydirectinput>=1.0.4" "pyautogui>=0.9.54" "pywin32>=306" "psutil>=5.9" "Pillow>=10.0"
           # Voice relay deps — bundled into the .exe so users WITHOUT Python
-          # get real-time whisper reception via microphone + text-to-speech.
+          # get real-time whisper reception (loopback audio, no mic needed).
           pip install "SpeechRecognition>=3.10.0" "PyAudio>=0.2.14"
+          # Loopback capture (WASAPI) + screen OCR relay deps.
+          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0" "winocr>=0.3.0"
           pip install pywin32-ctypes
           python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
           python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
           python -c "import speech_recognition, pyaudio; print('voice deps OK')"
+          python -c "import soundcard, numpy, mss, winocr; print('loopback+OCR deps OK')"
 
       - name: Inject build constants
         shell: pwsh
@@ -82,8 +85,13 @@ jobs:
             --collect-submodules pydirectinput `
             --collect-submodules psutil `
             --collect-all speech_recognition `
+            --collect-all winocr `
             --hidden-import pyaudio `
             --hidden-import speech_recognition `
+            --hidden-import soundcard `
+            --hidden-import numpy `
+            --hidden-import mss `
+            --hidden-import winocr `
             --hidden-import win32gui `
             --hidden-import win32con `
             --hidden-import win32api `

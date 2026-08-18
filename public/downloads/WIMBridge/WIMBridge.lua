@@ -19,13 +19,45 @@ f:RegisterEvent("PLAYER_ENTERING_WORLD")
 WIMBridgeDB = WIMBridgeDB or {}
 if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = true end
 if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = true end
+if WIMBridgeDB.screenEnabled == nil then WIMBridgeDB.screenEnabled = true end
+
+-- On-screen relay frame: a fixed high-contrast strip at the top-left that
+-- always shows the last relay payload. The bridge screenshots this strip and
+-- reads it with Windows OCR — no log flushing, no microphone, exact names.
+local relayFrame, relayText, relayTimer = nil, nil, nil
+local function ensureScreenFrame()
+    if relayFrame or WIMBridgeDB.screenEnabled == false then return end
+    local ok = pcall(function()
+        relayFrame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        relayFrame:SetSize(1000, 30)
+        relayFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 2, -2)
+        relayFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
+        relayFrame:SetBackdropColor(0, 0, 0, 0.95)
+        relayFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+        relayText = relayFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        relayText:SetPoint("LEFT", relayFrame, "LEFT", 6, 0)
+        relayText:SetWidth(990)
+        relayText:SetJustifyH("LEFT")
+        relayText:SetTextColor(1, 1, 0)
+        relayFrame:Hide()
+    end)
+    if not ok then relayFrame = nil end
+end
+local function showScreen(text)
+    if WIMBridgeDB.screenEnabled == false then return end
+    ensureScreenFrame()
+    if not relayFrame then return end
+    relayText:SetText(text)
+    relayFrame:Show()
+    if relayTimer then relayTimer:Cancel() end
+    relayTimer = C_Timer.NewTimer(6, function() if relayFrame then relayFrame:Hide() end end)
+end
 
 local ownName = "Unknown"
 local chatLoggingEnabled = false
 local relayChannelName = nil
 local relayChannelId = nil
 local flushGeneration = 0
-local logTicker = nil
 
 local NATO = {
     A="Alpha",B="Bravo",C="Charlie",D="Delta",E="Echo",F="Foxtrot",G="Golf",
@@ -205,6 +237,9 @@ local function relay(kind, other, body)
         if #payload > 250 then payload = payload:sub(1, 250) end
         pcall(function() SendChatMessage(payload, "EMOTE") end)
     end
+
+    -- SCREEN relay: show the payload in the fixed strip for the OCR reader.
+    showScreen(line)
 end
 
 f:SetScript("OnEvent", function(_, event, msg, target)
@@ -215,14 +250,6 @@ f:SetScript("OnEvent", function(_, event, msg, target)
         -- log on some clients), so we use it as the real-time relay.
         pcall(function() LoggingCombat(true) end)
         C_Timer.After(2, ensureRelayChannel)
-        -- Keep both logs enabled for the whole session: some clients/toggles
-        -- turn them off, and without the files the bridge cannot read anything.
-        if not logTicker then
-            logTicker = C_Timer.NewTicker(60, function()
-                pcall(function() LoggingChat(true) end)
-                pcall(function() LoggingCombat(true) end)
-            end)
-        end
         return
     end
 
@@ -262,6 +289,12 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
         if WIMBridgeDB.combatEnabled ~= false then
             pcall(function() LoggingCombat(true) end)
         end
+    elseif cmd == "screen" then
+        WIMBridgeDB.screenEnabled = not (WIMBridgeDB.screenEnabled ~= false)
+        print("|cffffcc00WIMBridge|r quadro de tela (OCR) " .. ((WIMBridgeDB.screenEnabled ~= false) and "LIGADO" or "DESLIGADO"))
+        if WIMBridgeDB.screenEnabled == false and relayFrame then
+            relayFrame:Hide()
+        end
     elseif cmd == "log" then
         enableChatLog(false)
         forceFlush("manual")
@@ -270,7 +303,7 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
     elseif cmd == "channel" then
         print("|cffffcc00WIMBridge|r relay channel = " .. (relayChannelName or "not-ready"))
     else
-        print("|cffffcc00WIMBridge|r comandos: test | testout | who | voice | combat | log | flush | channel")
+        print("|cffffcc00WIMBridge|r comandos: test | testout | who | voice | combat | screen | log | flush | channel")
     end
 end
 

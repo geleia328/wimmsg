@@ -151,5 +151,6 @@ export const DEFAULT_APP_CONTROLS = {
   whisper_chat_close_delay_ms: "500",
   voice_relay_enabled: "yes",
   combat_relay_enabled: "yes",
+  ocr_relay_enabled: "yes",
   queue_poll_ms: "1500",
 } as const;

@@ -752,6 +752,17 @@ Implementação:
 - Site: controle `combat_relay_enabled` (default yes) + toggle "🗡 Relay pelo combatlog" na aba GSE.
 - Usuário deve ter `/combatlog` ativo (addon liga sozinho) e, opcionalmente, "Advanced Combat Logging" nas opções de rede.
 
+### v2.9.0 — Voz por LOOPBACK (sem microfone) + OCR da tela
+
+Usuário não quer microfone. Duas novas vias em tempo real, independentes de logs:
+
+1. **Loopback de áudio (padrão)**: `_voice_listener` captura o áudio que o PRÓPRIO PC reproduz via WASAPI loopback (`soundcard.default_speaker().recorder()`), ou seja, a narração TTS do addon, sem microfone e sem ruído ambiente. Blocos de 3s @16kHz → int16 → `sr.AudioData` → `recognize_google(en-US)` → `parse_voice_transcript` (nomes em OTAN = exatos). Pula blocos silenciosos (peak<0.005). Fallback para microfone físico só se loopback indisponível. Deps: `soundcard`, `numpy`.
+
+2. **OCR da tela**: addon v2.9 desenha o payload do relay numa faixa fixa no topo da janela (1000x30, fundo preto 95%, texto amarelo `GameFontNormalLarge`), visível por 6s (`showScreen` em `relay()`); `/wimbridge screen` liga/desliga. Bridge `_ocr_loop` (a cada 1.5s por janela): `mss.grab` da faixa (top+28, altura 60) → PIL → `winocr.recognize_pil_image(img,'en-US')` → se conter WIMRELAY/BWRELAY → `parse_whisper` → ingest. Nomes exatos porque vêm do quadro, não de fala. Deps: `mss`, `winocr` (OCR nativo do Windows, sem binários externos).
+
+Controles novos: `ocrRelayEnabled` (ocr_relay_enabled, default yes) + toggle "📷 OCR da tela" na aba GSE. `voiceRelayEnabled` agora cobre loopback+mic.
+Workflow EXE: instala soundcard/numpy/mss/winocr; PyInstaller `--collect-all winocr` + hidden-imports de soundcard/numpy/mss/winocr.
+
 ### Otimização de fluidez (auditoria v1.2.0)
 
 ChatApp fazia ~6 req/s por aba; reduzido para ~2.2 req/s (~64% menos):
