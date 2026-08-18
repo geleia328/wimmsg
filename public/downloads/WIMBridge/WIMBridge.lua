@@ -25,6 +25,7 @@ local chatLoggingEnabled = false
 local relayChannelName = nil
 local relayChannelId = nil
 local flushGeneration = 0
+local logTicker = nil
 
 local NATO = {
     A="Alpha",B="Bravo",C="Charlie",D="Delta",E="Echo",F="Foxtrot",G="Golf",
@@ -214,6 +215,14 @@ f:SetScript("OnEvent", function(_, event, msg, target)
         -- log on some clients), so we use it as the real-time relay.
         pcall(function() LoggingCombat(true) end)
         C_Timer.After(2, ensureRelayChannel)
+        -- Keep both logs enabled for the whole session: some clients/toggles
+        -- turn them off, and without the files the bridge cannot read anything.
+        if not logTicker then
+            logTicker = C_Timer.NewTicker(60, function()
+                pcall(function() LoggingChat(true) end)
+                pcall(function() LoggingCombat(true) end)
+            end)
+        end
         return
     end
 

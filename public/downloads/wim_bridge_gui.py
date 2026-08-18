@@ -322,6 +322,54 @@ def _log_from_exe(exe_path: str) -> str:
     return str(p)
 
 
+def resolve_wow_log_path(preferred: Path, filename: str) -> Path:
+    """
+    The Logs folder is not always where we expect (custom install paths,
+    psutil failing to read the exe path, different client). If the preferred
+    path doesn't exist, search common WoW install roots and honor the
+    WOW_LOGS_DIR environment variable override. Returns the first existing
+    file, or the preferred path when nothing is found (the tailer will keep
+    waiting and will pick it up the moment the game creates it).
+    """
+    if preferred and preferred.exists():
+        return preferred
+    candidates: list[Path] = []
+    env_dir = os.environ.get("WOW_LOGS_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir) / filename)
+    if preferred and str(preferred.parent) not in ("", "."):
+        candidates.append(preferred.parent / filename)
+    roots: list[Path] = []
+    for var in ("PROGRAMFILES(X86)", "PROGRAMFILES"):
+        v = os.environ.get(var)
+        if v:
+            roots.append(Path(v) / "World of Warcraft")
+    roots += [
+        Path("C:/World of Warcraft"),
+        Path("D:/World of Warcraft"),
+        Path("E:/World of Warcraft"),
+        Path("F:/World of Warcraft"),
+    ]
+    for root in roots:
+        try:
+            if not root.exists():
+                continue
+            for sub in root.iterdir():
+                try:
+                    if sub.is_dir():
+                        f = sub / "Logs" / filename
+                        if f.exists():
+                            candidates.append(f)
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    for c in candidates:
+        if c.exists():
+            return c
+    return preferred
+
+
 def enum_wow_windows() -> list[DetectedWindow]:
     if not HAS_WIN32:
         return []
@@ -1169,7 +1217,11 @@ class BridgeEngine:
         for c in chars:
             if not c.chat_log:
                 continue
-            combat_path = c.chat_log.parent / "WoWCombatLog.txt"
+            combat_path = resolve_wow_log_path(
+                c.chat_log.parent / "WoWCombatLog.txt", "WoWCombatLog.txt"
+            )
+            if combat_path.exists():
+                self._log(f"📂 combatlog localizado em: {combat_path}")
             if combat_path in combat_seen:
                 continue
             combat_seen.add(combat_path)
@@ -2248,6 +2300,10 @@ class App:
                 continue
             w: DetectedWindow = row["win"]
             log_path = Path(w.chat_log) if w.chat_log else Path()
+            resolved = resolve_wow_log_path(log_path, "WoWChatLog.txt")
+            if resolved != log_path:
+                self._log(f"📂 chatlog localizado em: {resolved}")
+                log_path = resolved
             chars.append(
                 RuntimeCharacter(
                     character=name,

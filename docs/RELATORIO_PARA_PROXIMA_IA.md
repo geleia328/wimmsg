@@ -8,6 +8,12 @@
 
 ---
 
+## 0. Limitação absoluta de arquitetura (leia antes de propor "addon que conecta no site")
+
+O Lua do WoW é sandboxado pela Blizzard: SEM HTTP, SEM sockets, SEM rede. Nenhum addon (nem WIM modificado) pode POSTar para um site. Toda integração WoW↔web usa um companion local (aqui: BakersWhisper.exe). Os únicos transportes addon→companion são: arquivo (chatlog/combatlog/SavedVariables-no-logout), áudio (TTS do addon → microfone → STT) ou tela (OCR). No cliente do usuário os logs NÃO dão flush em tempo real, então o transporte em tempo real é o MODO VOZ (v2.6+) e, como gatilho, o emote no combatlog (v2.8).
+
+AVISO CRÍTICO DE DEPLOY: o .exe é compilado pelo GitHub Actions a PARTIR DO REPOSITÓRIO GITHUB do usuário. As mudanças deste sandbox só chegam ao exe depois de `git push` para github.com/geleia328/wimmsg + disparar a Action (ou rodar do fonte: `pip install -r requirements.txt && python wim_bridge_gui.py`). Se o usuário baixa o exe sem ter dado push, ele recebe código ANTIGO e nada das correções funciona. A página /download agora lista links diretos para wim_bridge_gui.py, WIMBridge.zip e requirements.txt.
+
 ## 1. Estado atual esperado do projeto
 
 O projeto deve conter:
