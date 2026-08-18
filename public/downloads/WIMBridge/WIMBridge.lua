@@ -277,6 +277,7 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
     elseif cmd == "testout" then
         relay("out", "TestPlayer-TestRealm", "outgoing hello")
     elseif cmd == "who" then
+        print("|cffffcc00WIMBridge|r versao instalada = " .. (WIMBRIDGE_VERSION or "?"))
         print("|cffffcc00WIMBridge|r own = " .. ownName)
         print("|cffffcc00WIMBridge|r relay = " .. (relayChannelName or "not-ready"))
         print("|cffffcc00WIMBridge|r voz = " .. (WIMBridgeDB.voiceEnabled and "ligada" or "desligada"))
@@ -307,4 +308,5 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
     end
 end
 
-print("|cffffcc00WIMBridge|r v2.6.0 carregado. Relay canal + flush + VOZ ativos.")
+WIMBRIDGE_VERSION = "2.9.1"
+print("|cffffcc00WIMBridge|r v" .. WIMBRIDGE_VERSION .. " carregado. Relay canal + combatlog + tela + VOZ ativos.")

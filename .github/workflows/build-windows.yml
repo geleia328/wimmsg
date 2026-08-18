@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - main # compila um exe novo a cada push (artifact na aba Actions)
   workflow_dispatch: # permite disparar manualmente pela aba Actions
 
 jobs:
