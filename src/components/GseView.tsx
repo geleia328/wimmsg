@@ -33,6 +33,7 @@ type Controls = {
   voiceRelayEnabled: boolean;
   combatRelayEnabled: boolean;
   ocrRelayEnabled: boolean;
+  wimScreenOcrEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -54,6 +55,7 @@ export function GseView() {
     voiceRelayEnabled: true,
     combatRelayEnabled: true,
     ocrRelayEnabled: true,
+    wimScreenOcrEnabled: true,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
@@ -415,6 +417,38 @@ export function GseView() {
                   {controls.gseMasterEnabled ? "GSE ON" : "GSE OFF"}
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* WIM screen reader toggle */}
+          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-slate-950 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-100">
+                  🖥 Leitor da janela WIM (sem addon, sem log)
+                </div>
+                <div className="text-xs text-slate-500">
+                  Tira um print da janela do WoW a cada 2s e lê a conversa do
+                  WIM direto da tela com OCR. Só mensagens RECEBIDAS entram
+                  (a janela define seu personagem, o nome falado define o
+                  comprador) — roteamento sempre seguro. Útil quando o
+                  WoWChatLog/WoWCombatLog não são criados.
+                </div>
+              </div>
+              <button
+                onClick={() =>
+                  void updateControls({
+                    wimScreenOcrEnabled: !controls.wimScreenOcrEnabled,
+                  })
+                }
+                className={`rounded px-4 py-2 text-xs font-bold ${
+                  controls.wimScreenOcrEnabled
+                    ? "bg-emerald-500 text-slate-950"
+                    : "bg-slate-700 text-slate-300"
+                }`}
+              >
+                {controls.wimScreenOcrEnabled ? "WIM OCR ON" : "WIM OCR OFF"}
+              </button>
             </div>
           </div>
 

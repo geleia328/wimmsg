@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 # =============================================================================
 
 import hashlib
@@ -1050,6 +1050,7 @@ DEFAULT_CONTROLS = {
     "voiceRelayEnabled": True,
     "combatRelayEnabled": True,
     "ocrRelayEnabled": True,
+    "wimScreenOcrEnabled": True,
     "queuePollMs": 1500,
 }
 
@@ -1229,6 +1230,23 @@ class BridgeEngine:
         if ocr_seen:
             self.log(
                 f"📷 OCR individual por janela ativo ({len(ocr_seen)} janela(s))."
+            )
+
+        # WIM screen reader: OCR of the whole window, no addon/logs needed.
+        wim_seen: set[int] = set()
+        for c in chars:
+            if c.hwnd in wim_seen:
+                continue
+            wim_seen.add(c.hwnd)
+            t9 = threading.Thread(
+                target=self._wim_ocr_worker, args=(c,), daemon=True
+            )
+            t9.start()
+            self.threads.append(t9)
+        if wim_seen:
+            self.log(
+                f"🖥 leitor WIM por OCR ativo ({len(wim_seen)} janela(s)) — "
+                "funciona SEM addon e SEM arquivos de log."
             )
 
         self.log(
@@ -1772,6 +1790,101 @@ class BridgeEngine:
                     arrow = "→" if direction == "outgoing" else "←"
                     self.log(f"📷 {arrow} OCR [{own}] {other}: {body}")
                 time.sleep(1.2)
+
+    def _wim_ocr_worker(self, ref: "RuntimeCharacter") -> None:
+        """
+        OUT-OF-GAME reader: OCRs the whole WoW window and extracts the WIM
+        conversation lines ("HH:MM [Name]: text"). Works WITHOUT the addon and
+        WITHOUT any log file being created — it just reads what is on screen.
+        Only INCOMING lines (speaker != this window's character) are ingested,
+        so routing is always safe: the window defines the own character and
+        the speaker defines the buyer.
+        """
+        if not (HAS_MSS and HAS_WINOCR and HAS_WIN32):
+            self.log(
+                f"🖥 leitor WIM indisponível para {ref.character} (mss+winocr)."
+            )
+            return
+        import asyncio
+
+        from PIL import Image
+
+        line_re = re.compile(
+            r"^\s*(\d{1,2}:\d{2})\s*\[([^\]]{1,32})\]\s*[:\-]\s*(.{1,200})$"
+        )
+        own_base = (ref.character.split("-")[0] or "").strip().lower()
+        seen: dict = {}
+        time.sleep(0.3 * (abs(hash(ref.character)) % 5))
+        with mss.mss() as sct:
+            while not self.stop_event.is_set():
+                if not self._get_controls().get("wimScreenOcrEnabled", True):
+                    time.sleep(1)
+                    continue
+                try:
+                    if not self._heal_ref(ref):
+                        time.sleep(2)
+                        continue
+                    l, t, r, b = win32gui.GetWindowRect(ref.hwnd)
+                    w = max(0, r - l)
+                    h = max(0, b - t)
+                    if w < 200 or h < 200:
+                        time.sleep(1)
+                        continue
+                    shot = sct.grab({"left": l, "top": t, "width": w, "height": h})
+                    pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    result = asyncio.run(winocr.recognize_pil_image(pil, "pt-BR"))
+                    text = getattr(result, "text", None) or str(result)
+                except Exception:
+                    time.sleep(1.5)
+                    continue
+                now = time.time()
+                seen = {k: v for k, v in seen.items() if now - v < 300}
+                for raw in text.splitlines():
+                    m = line_re.match(raw.strip())
+                    if not m:
+                        continue
+                    name = m.group(2).strip()
+                    body = m.group(3).strip()
+                    low = name.lower()
+                    if (
+                        not name
+                        or not body
+                        or low in ("guild", "party", "raid", "system", "wim", "officer")
+                    ):
+                        continue
+                    name_base = name.split("-")[0].strip().lower()
+                    if name_base == own_base:
+                        continue  # outgoing — o site já sabe; evita rota errada
+                    key = ("in", name_base, body.lower())
+                    if key in seen:
+                        continue
+                    seen[key] = now
+                    if self._recent_dup(ref.character, name, body):
+                        continue
+                    self._remember_whisper(ref.character, name, body)
+                    bucket = int(now // 300)
+                    ok = self._ingest_retry(
+                        [
+                            {
+                                "externalId": make_ext_id(
+                                    ref.character, name, body, f"wim-{bucket}"
+                                ),
+                                "character": ref.character,
+                                "player": name,
+                                "body": body,
+                                "direction": "incoming",
+                                "status": "received",
+                                "receivedAt": time.strftime(
+                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                                ),
+                            }
+                        ]
+                    )
+                    if ok:
+                        self.log(
+                            f"🖥 ← WIM-OCR [{ref.character}] {name}: {body}"
+                        )
+                time.sleep(2.0)
 
     def _combat_tail(self, path: Path) -> None:
         """

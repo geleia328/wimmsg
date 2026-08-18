@@ -24,6 +24,7 @@ type Controls = {
   voiceRelayEnabled: boolean;
   combatRelayEnabled: boolean;
   ocrRelayEnabled: boolean;
+  wimScreenOcrEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -47,6 +48,7 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     voiceRelayEnabled: get("voice_relay_enabled") === "yes",
     combatRelayEnabled: get("combat_relay_enabled") === "yes",
     ocrRelayEnabled: get("ocr_relay_enabled") === "yes",
+    wimScreenOcrEnabled: get("wim_screen_ocr_enabled") === "yes",
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
@@ -156,6 +158,12 @@ export async function POST(request: NextRequest) {
     pairs.push({
       key: "ocr_relay_enabled",
       value: payload.ocrRelayEnabled ? "yes" : "no",
+    });
+  }
+  if (typeof payload.wimScreenOcrEnabled === "boolean") {
+    pairs.push({
+      key: "wim_screen_ocr_enabled",
+      value: payload.wimScreenOcrEnabled ? "yes" : "no",
     });
   }
   if (typeof payload.queuePollMs === "number") {
