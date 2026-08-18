@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 # =============================================================================
 
 import hashlib
@@ -1214,10 +1214,22 @@ class BridgeEngine:
                 "🗡 relay combatlog ativo: lendo WoWCombatLog.txt em tempo real."
             )
 
-        # Screen OCR relay: reads the addon's on-screen relay frame.
-        t8 = threading.Thread(target=self._ocr_loop, daemon=True)
-        t8.start()
-        self.threads.append(t8)
+        # Screen OCR relay: ONE dedicated worker PER WINDOW. With 20 windows
+        # this guarantees messages are never cross-attributed: each worker only
+        # screenshots its own hwnd and rejects payloads whose OWN tag does not
+        # match its window's character.
+        ocr_seen: set[int] = set()
+        for c in chars:
+            if c.hwnd in ocr_seen:
+                continue
+            ocr_seen.add(c.hwnd)
+            t8 = threading.Thread(target=self._ocr_worker, args=(c,), daemon=True)
+            t8.start()
+            self.threads.append(t8)
+        if ocr_seen:
+            self.log(
+                f"📷 OCR individual por janela ativo ({len(ocr_seen)} janela(s))."
+            )
 
         self.log(
             f"🥐 {APP_NAME} {APP_VERSION} — loopback + OCR + combatlog + voz. "
@@ -1386,20 +1398,38 @@ class BridgeEngine:
                     # Do NOT mark failed. If the buyer/whisper reply is queued
                     # while that WoW window is closed, keep it pending so it can
                     # be sent automatically when the character/window comes back.
-                    self.log(
-                        f"⏳ #{mid}: aguardando janela/personagem '{character}' abrir/mapeiar"
-                    )
+                    if not hasattr(self, "_wait_logged"):
+                        self._wait_logged = {}
+                    if time.time() - self._wait_logged.get(mid, 0) > 30:
+                        self._wait_logged[mid] = time.time()
+                        self.log(
+                            f"⏳ #{mid}: aguardando janela/personagem '{character}' abrir/mapear"
+                        )
                     continue
                 self.log(f"→ #{mid} [{character} → {player}]: {body}")
-                try:
-                    self._send(ref, player, body)
-                    self.api.ack(mid, "sent")
-                except Exception as e:
-                    self.log(f"❌ envio #{mid}: {e}")
+                sent = False
+                for attempt in range(1, 4):
                     try:
-                        self.api.ack(mid, "failed", error=str(e))
-                    except Exception:
-                        pass
+                        self._send(ref, player, body)
+                        self.api.ack(mid, "sent")
+                        sent = True
+                        break
+                    except Exception as e:
+                        self.log(
+                            f"⚠ envio #{mid} tentativa {attempt}/3 falhou: {e}"
+                        )
+                        if attempt >= 3:
+                            break
+                        # Self-heal: the window may have been recreated (new
+                        # hwnd) or lost focus. Re-resolve by stable title and
+                        # retry with growing backoff. Never drop the message.
+                        self._heal_ref(ref)
+                        time.sleep(1.5 * attempt)
+                if not sent:
+                    self.log(
+                        f"❌ envio #{mid} esgotou 3 tentativas; mantém na fila "
+                        "para nova rodada (não marca failed para não perder)."
+                    )
                 time.sleep(0.3)
             poll_ms = int(self._get_controls().get("queuePollMs", 1500))
             time.sleep(max(0.5, min(10.0, poll_ms / 1000.0)))
@@ -1507,24 +1537,22 @@ class BridgeEngine:
             return
         self._remember_whisper(own, other, body)
         bucket = int(time.time() // 10)
-        try:
-            self.api.ingest(
-                [
-                    {
-                        "externalId": f"voice-{bucket}-{make_ext_id(own, other, body)}",
-                        "character": own,
-                        "player": other,
-                        "body": body,
-                        "direction": direction,
-                        "status": "sent" if direction == "outgoing" else "received",
-                        "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    }
-                ]
-            )
+        ok = self._ingest_retry(
+            [
+                {
+                    "externalId": f"voice-{bucket}-{make_ext_id(own, other, body)}",
+                    "character": own,
+                    "player": other,
+                    "body": body,
+                    "direction": direction,
+                    "status": "sent" if direction == "outgoing" else "received",
+                    "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            ]
+        )
+        if ok:
             arrow = "→" if direction == "outgoing" else "←"
             self.log(f"🎙 {arrow} voz [{own}] {other}: {body}")
-        except Exception as e:
-            self.log(f"🎙 ingest falhou: {e}")
 
     def _voice_listener(self) -> None:
         """
@@ -1615,78 +1643,135 @@ class BridgeEngine:
         except Exception as e:
             self.log(f"🎙 listener de voz falhou: {e}")
 
-    def _ocr_loop(self) -> None:
+    def _heal_ref(self, ref: "RuntimeCharacter") -> bool:
         """
-        Screen OCR fallback: the addon draws the relay payload in a fixed
-        high-contrast frame at the top-left of each WoW window. We screenshot
-        that strip every 1.5s and read it with the Windows built-in OCR
-        engine. This needs no log flushing, no microphone and no audio.
+        Self-healing: if a window was recreated (new HWND) or disappeared,
+        re-resolve it by the stable renamed title (wow1, wow2...). Returns
+        True when the ref is usable again.
+        """
+        try:
+            if ref.hwnd and win32gui.IsWindow(ref.hwnd):
+                return True
+        except Exception:
+            pass
+        try:
+            for w in enum_wow_windows():
+                if ref.window_title and w.title == ref.window_title:
+                    ref.hwnd = w.hwnd
+                    self.log(
+                        f"🔧 janela '{ref.window_title}' re-resolvida "
+                        f"(hwnd {w.hwnd})."
+                    )
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _ingest_retry(self, payload: list) -> bool:
+        """POST /api/ingest with backoff so transient failures never lose data."""
+        for attempt in range(1, 4):
+            try:
+                self.api.ingest(payload)
+                return True
+            except Exception as e:
+                if attempt >= 3:
+                    self.log(f"❌ ingest falhou após 3 tentativas: {e}")
+                    return False
+                time.sleep(1.0 * attempt)
+        return False
+
+    def _ocr_worker(self, ref: "RuntimeCharacter") -> None:
+        """
+        Per-window screen OCR worker. Each WoW window gets its OWN thread that
+        only screenshots that window's relay strip, so with 20 windows there is
+        never cross-attribution: a payload is accepted ONLY if its OWN tag
+        matches this window's character (security against misrouting).
         """
         if not (HAS_MSS and HAS_WINOCR and HAS_WIN32):
             self.log(
-                "📷 OCR de tela indisponível (requer mss + winocr no Windows)."
+                f"📷 OCR indisponível para {ref.character} (requer mss+winocr)."
             )
             return
         import asyncio
 
         from PIL import Image
 
+        # Tiny stagger so 20 workers don't screenshot in the same instant.
+        time.sleep(0.15 * (abs(hash(ref.character)) % 7))
         with mss.mss() as sct:
             while not self.stop_event.is_set():
                 if not self._get_controls().get("ocrRelayEnabled", True):
                     time.sleep(1)
                     continue
-                for ref in list(self.chars):
-                    try:
-                        hwnd = ref.hwnd
-                        if not hwnd or not win32gui.IsWindow(hwnd):
-                            continue
-                        l, t, r, b = win32gui.GetWindowRect(hwnd)
-                        width = min(1500, max(0, r - l - 12))
-                        if width < 120:
-                            continue
-                        region = {"left": l + 6, "top": t + 28, "width": width, "height": 60}
-                        shot = sct.grab(region)
-                        pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                        result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
-                        text = getattr(result, "text", None) or str(result)
-                    except Exception:
+                try:
+                    if not self._heal_ref(ref):
+                        time.sleep(2)
                         continue
-                    if "WIMRELAY" not in text and "BWRELAY" not in text:
+                    l, t, r, b = win32gui.GetWindowRect(ref.hwnd)
+                    width = min(1500, max(0, r - l - 12))
+                    if width < 120:
+                        time.sleep(1)
                         continue
-                    parsed = parse_whisper(text, ref.character)
-                    if not parsed:
-                        continue
-                    direction, own_raw, other, body = parsed
-                    own = self._canonical_char(own_raw) or own_raw
-                    if not own or not other or not body:
-                        continue
-                    if self._recent_dup(own, other, body):
-                        continue
-                    self._remember_whisper(own, other, body)
-                    try:
-                        self.api.ingest(
-                            [
-                                {
-                                    "externalId": make_ext_id(
-                                        own, other, body, f"ocr-{int(time.time() // 8)}"
-                                    ),
-                                    "character": own,
-                                    "player": other,
-                                    "body": body,
-                                    "direction": direction,
-                                    "status": "sent" if direction == "outgoing" else "received",
-                                    "receivedAt": time.strftime(
-                                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                    ),
-                                }
-                            ]
-                        )
-                        arrow = "→" if direction == "outgoing" else "←"
-                        self.log(f"📷 {arrow} OCR [{own}] {other}: {body}")
-                    except Exception as e:
-                        self.log(f"📷 OCR ingest falhou: {e}")
-                time.sleep(1.5)
+                    region = {
+                        "left": l + 6,
+                        "top": t + 28,
+                        "width": width,
+                        "height": 60,
+                    }
+                    shot = sct.grab(region)
+                    pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
+                    text = getattr(result, "text", None) or str(result)
+                except Exception:
+                    time.sleep(1)
+                    continue
+                if "WIMRELAY" not in text and "BWRELAY" not in text:
+                    time.sleep(1.2)
+                    continue
+                parsed = parse_whisper(text, ref.character)
+                if not parsed:
+                    time.sleep(1.2)
+                    continue
+                direction, own_raw, other, body = parsed
+                # SECURITY: the payload must belong to THIS window. If the OWN
+                # tag names a different character, discard — it means we read a
+                # foreign frame and must never misroute a buyer's message.
+                if (
+                    own_raw
+                    and ref.character
+                    and own_raw.strip().lower() != ref.character.strip().lower()
+                ):
+                    time.sleep(1.2)
+                    continue
+                own = self._canonical_char(own_raw) or ref.character
+                if not own or not other or not body:
+                    time.sleep(1.2)
+                    continue
+                if self._recent_dup(own, other, body):
+                    time.sleep(1.2)
+                    continue
+                self._remember_whisper(own, other, body)
+                ok = self._ingest_retry(
+                    [
+                        {
+                            "externalId": make_ext_id(
+                                own, other, body, f"ocr-{int(time.time() // 8)}"
+                            ),
+                            "character": own,
+                            "player": other,
+                            "body": body,
+                            "direction": direction,
+                            "status": "sent" if direction == "outgoing" else "received",
+                            "receivedAt": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
+                        }
+                    ]
+                )
+                if ok:
+                    arrow = "→" if direction == "outgoing" else "←"
+                    self.log(f"📷 {arrow} OCR [{own}] {other}: {body}")
+                time.sleep(1.2)
 
     def _combat_tail(self, path: Path) -> None:
         """
@@ -1712,24 +1797,22 @@ class BridgeEngine:
                 continue
             self._remember_whisper(own, other, body)
             line_ts = log_ts_of(line)
-            try:
-                self.api.ingest(
-                    [
-                        {
-                            "externalId": make_ext_id(own, other, body, line_ts),
-                            "character": own,
-                            "player": other,
-                            "body": body,
-                            "direction": direction,
-                            "status": "sent" if direction == "outgoing" else "received",
-                            "receivedAt": ext_ts_to_iso(line_ts),
-                        }
-                    ]
-                )
+            ok = self._ingest_retry(
+                [
+                    {
+                        "externalId": make_ext_id(own, other, body, line_ts),
+                        "character": own,
+                        "player": other,
+                        "body": body,
+                        "direction": direction,
+                        "status": "sent" if direction == "outgoing" else "received",
+                        "receivedAt": ext_ts_to_iso(line_ts),
+                    }
+                ]
+            )
+            if ok:
                 arrow = "→" if direction == "outgoing" else "←"
                 self.log(f"{arrow} ⚡(combatlog) [{own}] {other}: {body}")
-            except Exception as e:
-                self.log(f"❌ combatlog ingest falhou: {e}")
 
     def _gse_syncer(self) -> None:
         """

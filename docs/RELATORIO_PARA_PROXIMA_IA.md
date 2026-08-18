@@ -761,7 +761,15 @@ Usuário não quer microfone. Duas novas vias em tempo real, independentes de lo
 2. **OCR da tela**: addon v2.9 desenha o payload do relay numa faixa fixa no topo da janela (1000x30, fundo preto 95%, texto amarelo `GameFontNormalLarge`), visível por 6s (`showScreen` em `relay()`); `/wimbridge screen` liga/desliga. Bridge `_ocr_loop` (a cada 1.5s por janela): `mss.grab` da faixa (top+28, altura 60) → PIL → `winocr.recognize_pil_image(img,'en-US')` → se conter WIMRELAY/BWRELAY → `parse_whisper` → ingest. Nomes exatos porque vêm do quadro, não de fala. Deps: `mss`, `winocr` (OCR nativo do Windows, sem binários externos).
 
 Controles novos: `ocrRelayEnabled` (ocr_relay_enabled, default yes) + toggle "📷 OCR da tela" na aba GSE. `voiceRelayEnabled` agora cobre loopback+mic.
-Workflow EXE: instala soundcard/numpy/mss/winocr; PyInstaller `--collect-all winocr` + hidden-imports de soundcard/numpy/mss/winocr.
+Workflow EXE: instala soundcard/numpy/mss/winocr; PyInstaller condicional para winocr (build nunca quebra por OCR); build dispara em push na main; exe se auto-identifica no log com `🥐 Bakers Whisper <APP_VERSION>`.
+
+### v1.3.0 — OCR por janela + autocura (segurança p/ 20 janelas)
+
+- OCR: UMA thread por janela (`_ocr_worker(ref)`), cada uma só fotografa o próprio hwnd. Validação de segurança: payload só é aceito se o tag OWN bater com o personagem daquela janela (case-insensitive); senão descarta — impossível trocar mensagem de comprador entre janelas. Stagger de 0-1s entre workers.
+- Autocura de envio: `_outgoing` tenta 3x com backoff (1.5s, 3s); entre tentativas chama `_heal_ref` (re-resolve hwnd pelo título estável wowN). NUNCA marca failed após esgotar — mantém na fila para a próxima rodada (não perde venda). Log de "aguardando janela" com throttle de 30s.
+- Autocura de recebimento: `_ingest_retry` (3 tentativas com backoff) em voz, OCR e combatlog; falha transitória de rede/API não perde mensagem.
+- `_heal_ref`: se hwnd sumiu (janela recriada), re-encontra por título e atualiza ref.
+- APP_VERSION 1.3.0.
 
 ### Otimização de fluidez (auditoria v1.2.0)
 

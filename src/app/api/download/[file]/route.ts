@@ -24,6 +24,7 @@ const ALLOWED = new Set([
   "config.example.ini",
   "WIMBridge.lua",
   "WIMBridge.toc",
+  "build-windows.yml",
 ]);
 
 const MIME: Record<string, string> = {
@@ -47,10 +48,11 @@ export async function GET(
   }
 
   // Some files are directly in downloads/, WIMBridge.lua/.toc are inside the
-  // WIMBridge/ subfolder.
+  // WIMBridge/ subfolder, and the workflow lives in .github/workflows/.
   const candidates = [
     path.join(process.cwd(), "public", "downloads", safe),
     path.join(process.cwd(), "public", "downloads", "WIMBridge", safe),
+    path.join(process.cwd(), ".github", "workflows", safe),
   ];
   const found = candidates.find((p) => existsSync(p));
   if (!found) {
