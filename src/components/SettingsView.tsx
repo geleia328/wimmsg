@@ -166,22 +166,22 @@ export function SettingsView() {
   ]);
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
-      <div className="flex items-center justify-between gap-4">
+    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-10">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <Link href="/" className="text-xs text-amber-400 hover:underline">
             ← voltar ao chat
           </Link>
-          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Configurações</h1>
+          <h1 className="mt-2 text-3xl font-bold">Configurações</h1>
           <p className="mt-2 text-sm text-slate-400">
             Central para ajustar token do bridge e verificar banco/servidor.
           </p>
         </div>
-        <div className="hidden text-4xl sm:block">⚙️</div>
+        <div className="text-4xl">⚙️</div>
       </div>
 
-      <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:mt-8 sm:p-5">
-        <h2 className="text-base font-bold text-amber-300 sm:text-lg">Acesso admin</h2>
+      <section className="mt-8 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+        <h2 className="text-lg font-bold text-amber-300">Acesso admin</h2>
         <p className="mt-1 text-xs text-slate-500">
           Use o <code>ADMIN_TOKEN</code> se configurou na Vercel. Caso contrário,
           use o <code>BRIDGE_TOKEN</code> atual.
@@ -196,7 +196,7 @@ export function SettingsView() {
           />
           <button
             onClick={() => void load()}
-            className="w-full rounded bg-amber-500 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400 sm:w-auto"
+            className="rounded bg-amber-500 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400"
           >
             Entrar
           </button>
@@ -211,8 +211,8 @@ export function SettingsView() {
       {settings && (
         <>
           {!settings.tablesReady && (
-          <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-amber-300 sm:text-lg">
+            <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-5">
+              <h2 className="text-lg font-bold text-amber-300">
                 Banco conectado, mas tabelas não existem
               </h2>
               <p className="mt-2 text-sm text-amber-100">
@@ -235,8 +235,8 @@ export function SettingsView() {
             </section>
           )}
 
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-emerald-300 sm:text-lg">Status</h2>
+          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+            <h2 className="text-lg font-bold text-emerald-300">Status</h2>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <Stat label="Mensagens" value={settings.counts.messages} />
               <Stat label="Janelas" value={settings.counts.windows} />
@@ -244,8 +244,8 @@ export function SettingsView() {
             </div>
           </section>
 
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-sky-300 sm:text-lg">PostgreSQL / Neon</h2>
+          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+            <h2 className="text-lg font-bold text-sky-300">PostgreSQL / Neon</h2>
             <div className="mt-3 rounded bg-slate-950 p-3 font-mono text-xs text-slate-300">
               DATABASE_URL atual: {settings.database.maskedUrl || "não configurada"}
             </div>
@@ -326,7 +326,7 @@ export function SettingsView() {
               <button
                 onClick={() => void updateVercelEnv()}
                 disabled={saving || !vercelToken || !vercelProject || (!databaseUrl && !envBridgeToken)}
-                className="w-full rounded bg-sky-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40 sm:w-auto"
+                className="rounded bg-sky-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40"
               >
                 {saving ? "atualizando..." : "☁️ Atualizar variáveis na Vercel"}
               </button>
@@ -339,8 +339,8 @@ export function SettingsView() {
             </div>
           </section>
 
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-fuchsia-300 sm:text-lg">Bridge Token</h2>
+          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-5">
+            <h2 className="text-lg font-bold text-fuchsia-300">Bridge Token</h2>
             <p className="mt-2 text-sm text-slate-400">
               Esse token é o que o BakersWhisper.exe usa para falar com o site.
               Você pode trocar aqui sem recompilar o instalador.
@@ -364,7 +364,7 @@ export function SettingsView() {
               <button
                 onClick={() => void saveBridgeToken()}
                 disabled={saving || bridgeToken.length < 16}
-                className="w-full rounded bg-fuchsia-500 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-400 disabled:opacity-40 sm:w-auto"
+                className="rounded bg-fuchsia-500 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-400 disabled:opacity-40"
               >
                 {saving ? "salvando..." : "Salvar token"}
               </button>

@@ -8,18 +8,17 @@ export const dynamic = "force-dynamic";
 
 /**
  * Distinct list of your characters (WoW windows) that have any activity.
- * Grouped case-insensitively to avoid split rows like Juper-Azralon/juper-azralon.
  */
 export async function GET() {
   const rows = await db.execute(sql/* sql */ `
     SELECT
-      lower(character) AS character,
+      character,
       COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE direction = 'incoming')::int AS incoming,
       COUNT(*) FILTER (WHERE direction = 'outgoing' AND status = 'pending')::int AS pending_out,
       MAX(created_at) AS last_at
     FROM ${messages}
-    GROUP BY lower(character)
+    GROUP BY character
     ORDER BY last_at DESC
   `);
   return NextResponse.json({

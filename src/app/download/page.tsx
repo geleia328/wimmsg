@@ -8,7 +8,7 @@ const DIRECT_EXE_URL = `https://github.com/${GITHUB_REPO}/releases/latest/downlo
 
 export default function DownloadPage() {
   return (
-    <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
+    <div className="mx-auto max-w-2xl px-4 py-10 sm:px-6 sm:py-16">
       <div className="text-center">
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-yellow-500 to-amber-700 text-4xl shadow-2xl sm:h-20 sm:w-20 sm:text-5xl">
           🥐
@@ -19,9 +19,9 @@ export default function DownloadPage() {
         </p>
       </div>
 
-      <div className="mt-10 rounded-2xl border border-emerald-500/40 bg-emerald-500/5 p-6 text-center sm:p-8">
-        <div className="text-6xl">⬇️</div>
-        <h2 className="mt-4 text-2xl font-bold">Baixar para Windows</h2>
+      <div className="mt-10 rounded-2xl border border-emerald-500/40 bg-emerald-500/5 p-5 text-center sm:p-8">
+        <div className="text-5xl sm:text-6xl">⬇️</div>
+        <h2 className="mt-4 text-xl font-bold sm:text-2xl">Baixar para Windows</h2>
         <p className="mt-2 text-sm text-slate-400">
           Aplicativo pronto pra usar — só baixar e abrir.
           <br />
@@ -29,7 +29,7 @@ export default function DownloadPage() {
         </p>
         <a
           href={DIRECT_EXE_URL}
-          className="mt-6 inline-block w-full rounded-xl bg-emerald-500 px-6 py-4 text-lg font-bold text-slate-950 shadow-lg hover:bg-emerald-400 sm:w-auto sm:px-8"
+          className="mt-6 inline-block w-full rounded-xl bg-emerald-500 px-6 py-4 text-base font-bold text-slate-950 shadow-lg hover:bg-emerald-400 sm:w-auto sm:px-8 sm:text-lg"
         >
           📥 Baixar BakersWhisper.exe
         </a>
@@ -254,22 +254,22 @@ export default function DownloadPage() {
         </div>
       </div>
 
-      <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+      <div className="mt-10 flex flex-wrap gap-3">
         <Link
           href="/"
-          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-center text-sm text-slate-200 hover:bg-slate-700 sm:w-auto"
+          className="rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-200 hover:bg-slate-700"
         >
           🥐 Abrir painel de whispers
         </Link>
         <a
           href={RELEASES_URL}
-          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-center text-sm text-slate-200 hover:bg-slate-700 sm:w-auto"
+          className="rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-200 hover:bg-slate-700"
         >
           📦 Ver todas as versões
         </a>
         <Link
           href="/setup"
-          className="w-full rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-center text-sm text-slate-200 hover:bg-slate-700 sm:w-auto"
+          className="rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-200 hover:bg-slate-700"
         >
           ⚙ Setup avançado
         </Link>

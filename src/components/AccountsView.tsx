@@ -52,46 +52,40 @@ export function AccountsView() {
   );
 
   return (
-    <div className="min-h-dvh">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-4 py-3 sm:px-6">
-        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-700 font-black text-slate-900 shadow sm:h-9 sm:w-9">
+    <div className="min-h-screen">
+      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-6 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-700 font-black text-slate-900 shadow">
             📡
           </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-bold leading-tight sm:text-lg">
+          <div>
+            <h1 className="text-lg font-bold leading-tight">
               Varredura de contas WoW
             </h1>
-            <p className="truncate text-[11px] text-slate-400 sm:text-xs">
+            <p className="text-xs text-slate-400">
               Detecta em tempo real quais janelas do WoW estão abertas no seu PC
             </p>
           </div>
         </div>
-        <nav className="order-last -mx-1 flex w-full items-center gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs md:order-none md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
+        <div className="flex items-center gap-3 text-xs">
           <Link
             href="/"
-            className="whitespace-nowrap rounded border border-slate-700 px-2.5 py-1 text-slate-300 hover:bg-slate-800 md:px-3"
+            className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
           >
             ← Chat
           </Link>
           <Link
-            href="/gse"
-            className="whitespace-nowrap rounded border border-fuchsia-500/50 bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-300 hover:bg-fuchsia-500/20 md:px-3"
-          >
-            ⚙ GSE
-          </Link>
-          <Link
             href="/setup"
-            className="whitespace-nowrap rounded border border-slate-700 px-2.5 py-1 text-slate-300 hover:bg-slate-800 md:px-3"
+            className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
           >
             Setup
           </Link>
-        </nav>
+        </div>
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-6">
+      <div className="mx-auto max-w-6xl px-6 py-6">
         {/* Summary cards */}
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <StatCard label="Total detectadas" value={windows.length} tone="slate" />
           <StatCard label="Online agora" value={online.length} tone="emerald" />
           <StatCard label="Offline" value={offline.length} tone="rose" />
@@ -121,11 +115,9 @@ export function AccountsView() {
           </span>
         </div>
 
-        {/* Table (scrolls horizontally on small screens) */}
-        <div className="relative mt-4 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
-          {/* Scroll hint on mobile */}
-          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/80 to-transparent sm:hidden" />
-          <table className="w-full min-w-[700px] text-sm">
+        {/* Table */}
+        <div className="mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/40">
+          <table className="w-full text-sm">
             <thead>
               <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
                 <th className="px-4 py-3">Status</th>
@@ -263,9 +255,9 @@ function StatCard({
     amber: "border-amber-500/40 bg-amber-500/10 text-amber-300",
   };
   return (
-    <div className={`rounded-lg border p-3 sm:rounded-xl sm:p-4 ${tones[tone]}`}>
-      <div className="text-xl font-bold sm:text-3xl">{value}</div>
-      <div className="mt-0.5 text-[10px] uppercase tracking-wider opacity-80 sm:mt-1 sm:text-xs">
+    <div className={`rounded-xl border p-4 ${tones[tone]}`}>
+      <div className="text-3xl font-bold">{value}</div>
+      <div className="mt-1 text-xs uppercase tracking-wider opacity-80">
         {label}
       </div>
     </div>
