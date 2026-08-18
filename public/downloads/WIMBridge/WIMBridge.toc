@@ -1,8 +1,8 @@
-## Interface: 110200
+## Interface: 120100
 ## Title: WIM Bridge
 ## Notes: Captura whispers para Bakers Whisper via canal relay, flush e VOZ (texto falado).
 ## Author: WIM Bridge
-## Version: 2.9.0
+## Version: 2.9.1
 ## SavedVariables: WIMBridgeDB
 
 WIMBridge.lua

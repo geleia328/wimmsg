@@ -291,6 +291,27 @@ export default function DownloadPage() {
           <code>pip install -r requirements.txt</code> e{" "}
           <code>python wim_bridge_gui.py</code>.
         </p>
+        <div className="mt-3 rounded border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
+          <b>⚠ O addon não carrega? (<code>/wimbridge</code> mostra ajuda)</b>
+          <ol className="mt-1 list-decimal space-y-1 pl-5">
+            <li>
+              Confira a pasta: deve ser{" "}
+              <code>_retail_\Interface\AddOns\WIMBridge\WIMBridge.toc</code> —
+              se ficou <code>WIMBridge\WIMBridge\WIMBridge.toc</code> (pasta
+              duplicada ao extrair o zip), o WoW não carrega.
+            </li>
+            <li>
+              Na <b>tela de seleção de personagens</b>, clique em{" "}
+              <b>AddOns</b> (canto inferior esquerdo) e marque{" "}
+              <b>&quot;Carregar AddOns desatualizados&quot;</b> — necessário
+              quando a versão do seu WoW é diferente da do addon.
+            </li>
+            <li>
+              Entre no jogo e digite <code>/wimbridge who</code> — deve
+              responder <code>own = SeuChar-Reino</code>.
+            </li>
+          </ol>
+        </div>
       </div>
 
       <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
