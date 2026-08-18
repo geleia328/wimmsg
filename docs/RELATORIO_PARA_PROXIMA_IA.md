@@ -711,6 +711,16 @@ O workflow `.github/workflows/build-windows.yml` instala e empacota o modo voz n
 
 NÃO remover essas flags do PyInstaller, senão o EXE perde o modo voz.
 
+### Fix "não consegui focar janela 'wow1'" (v1.1.1 do bridge)
+
+Causas: (a) `RuntimeCharacter.hwnd` era capturado só no início — quando o WoW recria a janela o HWND muda e o foco falha; (b) `SetForegroundWindow` simples é bloqueado pelo Windows.
+
+Correções em `wim_bridge_gui.py`:
+- `focus_hwnd()` robusto: `ShowWindow(SW_RESTORE)` se minimizada, `AttachThreadInput` no thread da janela em primeiro plano, truque da tecla Alt (`keybd_event VK_MENU`), `SetForegroundWindow`, `BringWindowToTop` e verificação com `GetForegroundWindow()` em até 12 tentativas.
+- `_find_char_by_win()`: o scanner agora casa a janela também pelo **título estável** (`wow1`, `wow2`...) e atualiza `c.hwnd` em tempo real — HWND nunca fica velho.
+- `_focus_ref()`: antes de enviar, tenta focar; se falhar, re-enumerar janelas, re-resolve pelo título e tenta de novo; só então lança erro com dica de "Executar como administrador" (UIPI: se o WoW roda como admin e o bridge não, o Windows não deixa focar).
+- `_send` usa `self._focus_ref(ref)`.
+
 ## 20. Fix do scroll do chat (v2.6.0)
 
 Bug: a cada poll a barra era puxada para o fim, impedindo ler o histórico.

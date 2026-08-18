@@ -374,13 +374,74 @@ def enum_wow_windows() -> list[DetectedWindow]:
 
 
 def focus_hwnd(hwnd: int) -> bool:
+    """
+    Robust focus. A plain SetForegroundWindow often fails because Windows only
+    allows the *foreground* process to steal focus, and because WoW windows are
+    recreated (new HWND) after restarts. We use the Alt-key trick + thread
+    input attach, restore if minimized, and verify with GetForegroundWindow.
+    """
     if not HAS_WIN32:
         return False
     try:
+        if not win32gui.IsWindow(hwnd):
+            return False
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        win32gui.SetForegroundWindow(hwnd)
-        return True
+
+        fore = win32gui.GetForegroundWindow()
+        if fore and fore != hwnd:
+            attached = False
+            fore_tid = 0
+            cur_tid = 0
+            try:
+                import win32api  # type: ignore
+                import win32process  # type: ignore
+
+                fore_tid = win32process.GetWindowThreadProcessId(fore)[0]
+                cur_tid = win32api.GetCurrentThreadId()
+                if fore_tid and fore_tid != cur_tid:
+                    attached = bool(
+                        win32process.AttachThreadInput(cur_tid, fore_tid, True)
+                    )
+            except Exception:
+                attached = False
+            try:
+                try:
+                    import win32api  # type: ignore
+
+                    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+                except Exception:
+                    pass
+                win32gui.SetForegroundWindow(hwnd)
+            finally:
+                try:
+                    import win32api  # type: ignore
+
+                    win32api.keybd_event(
+                        win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0
+                    )
+                except Exception:
+                    pass
+                if attached:
+                    try:
+                        import win32process  # type: ignore
+
+                        win32process.AttachThreadInput(cur_tid, fore_tid, False)
+                    except Exception:
+                        pass
+        else:
+            win32gui.SetForegroundWindow(hwnd)
+
+        try:
+            win32gui.BringWindowToTop(hwnd)
+        except Exception:
+            pass
+
+        for _ in range(12):
+            if win32gui.GetForegroundWindow() == hwnd:
+                return True
+            time.sleep(0.1)
+        return False
     except Exception:
         return False
 
@@ -1218,11 +1279,9 @@ class BridgeEngine:
                 # 2. Enter + aguardar 1s
                 # 3. Colar /w nome-server + aguardar 1.5s
                 # 4. Colar mensagem + aguardar 1s
-                # 5. Enter + aguardar 1s
-                
-                if not focus_hwnd(ref.hwnd):
-                    raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
-                
+                # Foca a janela (com retry e re-resolução de HWND stale).
+                self._focus_ref(ref)
+
                 # Passo 1: Focar janela e aguardar 2 segundos
                 self.log(f"   ⏳ [1/6] Focando janela (2.0s)...")
                 time.sleep(2.0)
@@ -1438,7 +1497,7 @@ class BridgeEngine:
                 wins = enum_wow_windows()
                 payload = []
                 for w in wins:
-                    matched = self._find_char_by_hwnd(w.hwnd)
+                    matched = self._find_char_by_win(w)
                     char_name = matched.character if matched else ""
                     payload.append(
                         {
@@ -1468,6 +1527,47 @@ class BridgeEngine:
             if c.hwnd == hwnd:
                 return c
         return None
+
+    def _find_char_by_win(self, w: "DetectedWindow") -> Optional[RuntimeCharacter]:
+        """
+        Match a detected window to a configured character. HWNDs change when
+        WoW restarts or a window is recreated, but the renamed title (wow1,
+        wow2...) is stable — so we also match by title and keep the stored
+        HWND fresh. This fixes "não consegui focar janela 'wow1'" after the
+        game has been open for a while / restarted.
+        """
+        by_hwnd = self._find_char_by_hwnd(w.hwnd)
+        if by_hwnd:
+            return by_hwnd
+        if w.title:
+            for c in self.chars:
+                if c.window_title and c.window_title == w.title:
+                    if c.hwnd != w.hwnd:
+                        c.hwnd = w.hwnd
+                    return c
+        return None
+
+    def _focus_ref(self, ref: "RuntimeCharacter") -> None:
+        """Focus the character's window, re-resolving a stale HWND by title."""
+        if focus_hwnd(ref.hwnd):
+            return
+        try:
+            for w in enum_wow_windows():
+                if (
+                    ref.window_title
+                    and w.title == ref.window_title
+                    and w.hwnd != ref.hwnd
+                ):
+                    ref.hwnd = w.hwnd
+                    if focus_hwnd(ref.hwnd):
+                        return
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"não consegui focar janela {ref.window_title!r}. "
+            "Se o WoW estiver sendo executado como administrador, feche o "
+            "BakersWhisper e abra novamente com 'Executar como administrador'."
+        )
 
 
 # =============================================================================
