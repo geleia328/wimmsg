@@ -736,6 +736,16 @@ Correções:
 - Bridge `tail_file`: se o arquivo cresce mas o handle não vê nada por >2s (Windows segura view bufferizada do arquivo que o WoW tem aberto), fecha e reabre o handle na última posição conhecida, logando "📄 ... reabrindo". Isso permite leitura em tempo real mesmo com o jogo segurando o arquivo.
 - Atualizar addon (2.7.0) E gerar novo .exe para valer.
 
+### Addon v2.8.0 + relay pelo COMBATLOG (tempo real de verdade)
+
+Descoberta: o WoW grava eventos `EMOTE` (com texto customizado) no `WoWCombatLog.txt`, e esse arquivo faz flush quase instantâneo — ao contrário do `WoWChatLog.txt` em alguns clientes. O addon NÃO consegue escrever texto arbitrário direto no combatlog, MAS `SendChatMessage(texto, "EMOTE")` gera um evento EMOTE que vai para o arquivo em tempo real.
+
+Implementação:
+- Addon: a cada whisper, além dos caminhos existentes, envia `SendChatMessage(payload, "EMOTE")` com o mesmo payload `WIMRELAY<OWN..><FROM/TO..><TS..>body` (truncado a 250). Liga `LoggingCombat(true)` sozinho no login. Toggle `/wimbridge combat`. AVISO: emotes são visíveis para jogadores próximos.
+- Bridge: thread `_combat_tail` por `WoWCombatLog.txt` (irmão do WoWChatLog.txt); ignora linhas sem BWRELAY/WIMRELAY; parse via `parse_whisper`; respeita controle `combatRelayEnabled`; dedupe via `_recent_dup` + externalId + dedupe de conteúdo no servidor (o mesmo whisper chega por combatlog e chatlog com timestamps de linha diferentes → o dedupe de conteúdo de 8s elimina o duplicado).
+- Site: controle `combat_relay_enabled` (default yes) + toggle "🗡 Relay pelo combatlog" na aba GSE.
+- Usuário deve ter `/combatlog` ativo (addon liga sozinho) e, opcionalmente, "Advanced Combat Logging" nas opções de rede.
+
 ## 20. Fix do scroll do chat (v2.6.0)
 
 Bug: a cada poll a barra era puxada para o fim, impedindo ler o histórico.

@@ -1018,6 +1018,7 @@ DEFAULT_CONTROLS = {
     "whisperCloseChatEnabled": True,
     "whisperChatCloseDelayMs": 500,
     "voiceRelayEnabled": True,
+    "combatRelayEnabled": True,
     "queuePollMs": 1500,
 }
 
@@ -1160,6 +1161,27 @@ class BridgeEngine:
         t6 = threading.Thread(target=self._voice_listener, daemon=True)
         t6.start()
         self.threads.append(t6)
+
+        # Combat-log relay: WoWCombatLog.txt flushes almost instantly, so the
+        # addon mirrors every whisper there via a custom emote (BWRELAY...).
+        # One tailer per combat log file.
+        combat_seen: set[Path] = set()
+        for c in chars:
+            if not c.chat_log:
+                continue
+            combat_path = c.chat_log.parent / "WoWCombatLog.txt"
+            if combat_path in combat_seen:
+                continue
+            combat_seen.add(combat_path)
+            t7 = threading.Thread(
+                target=self._combat_tail, args=(combat_path,), daemon=True
+            )
+            t7.start()
+            self.threads.append(t7)
+        if combat_seen:
+            self.log(
+                "🗡 relay combatlog ativo: lendo WoWCombatLog.txt em tempo real."
+            )
 
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
@@ -1510,6 +1532,49 @@ class BridgeEngine:
                 pass
         except Exception as e:
             self.log(f"🎙 listener de voz falhou: {e}")
+
+    def _combat_tail(self, path: Path) -> None:
+        """
+        Real-time relay via WoWCombatLog.txt. The addon mirrors every whisper
+        as a custom emote (SendChatMessage(..., "EMOTE")), and the combat log
+        writes EMOTE lines to disk almost instantly — even on clients where
+        WoWChatLog.txt only flushes on logout. The emote text carries the same
+        BWRELAY/WIMRELAY payload, so parse_whisper understands it.
+        """
+        for line in tail_file(path, self.stop_event, self.log):
+            if "BWRELAY" not in line and "WIMRELAY" not in line:
+                continue
+            if not self._get_controls().get("combatRelayEnabled", True):
+                continue
+            parsed = parse_whisper(line, "")
+            if not parsed:
+                continue
+            direction, own_raw, other, body = parsed
+            own = self._canonical_char(own_raw) or own_raw
+            if not own or not other or not body:
+                continue
+            if self._recent_dup(own, other, body):
+                continue
+            self._remember_whisper(own, other, body)
+            line_ts = log_ts_of(line)
+            try:
+                self.api.ingest(
+                    [
+                        {
+                            "externalId": make_ext_id(own, other, body, line_ts),
+                            "character": own,
+                            "player": other,
+                            "body": body,
+                            "direction": direction,
+                            "status": "sent" if direction == "outgoing" else "received",
+                            "receivedAt": ext_ts_to_iso(line_ts),
+                        }
+                    ]
+                )
+                arrow = "→" if direction == "outgoing" else "←"
+                self.log(f"{arrow} ⚡(combatlog) [{own}] {other}: {body}")
+            except Exception as e:
+                self.log(f"❌ combatlog ingest falhou: {e}")
 
     def _gse_syncer(self) -> None:
         """

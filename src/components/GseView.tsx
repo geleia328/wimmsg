@@ -31,6 +31,7 @@ type Controls = {
   whisperCloseChatEnabled: boolean;
   whisperChatCloseDelayMs: number;
   voiceRelayEnabled: boolean;
+  combatRelayEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -50,6 +51,7 @@ export function GseView() {
     whisperCloseChatEnabled: true,
     whisperChatCloseDelayMs: 500,
     voiceRelayEnabled: true,
+    combatRelayEnabled: true,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
@@ -411,6 +413,40 @@ export function GseView() {
                   {controls.gseMasterEnabled ? "GSE ON" : "GSE OFF"}
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* Combat-log relay toggle */}
+          <div className="mt-4 rounded-lg border border-amber-500/30 bg-slate-950 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-100">
+                  🗡 Relay pelo combatlog (tempo real)
+                </div>
+                <div className="text-xs text-slate-500">
+                  O addon espelha cada whisper como um emote no{" "}
+                  <code>WoWCombatLog.txt</code>, que grava no disco quase
+                  instantaneamente — resolve clientes onde o chatlog só atualiza
+                  ao fechar o jogo. Requer <code>/combatlog</code> ativo (o
+                  addon liga sozinho). ⚠ O emote fica visível para jogadores
+                  próximos; desative aqui ou com <code>/wimbridge combat</code>{" "}
+                  se incomodar.
+                </div>
+              </div>
+              <button
+                onClick={() =>
+                  void updateControls({
+                    combatRelayEnabled: !controls.combatRelayEnabled,
+                  })
+                }
+                className={`rounded px-4 py-2 text-xs font-bold ${
+                  controls.combatRelayEnabled
+                    ? "bg-amber-500 text-slate-950"
+                    : "bg-slate-700 text-slate-300"
+                }`}
+              >
+                {controls.combatRelayEnabled ? "COMBAT ON" : "COMBAT OFF"}
+              </button>
             </div>
           </div>
 

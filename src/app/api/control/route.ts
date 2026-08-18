@@ -22,6 +22,7 @@ type Controls = {
   whisperCloseChatEnabled: boolean;
   whisperChatCloseDelayMs: number;
   voiceRelayEnabled: boolean;
+  combatRelayEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -43,6 +44,7 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
     whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
     voiceRelayEnabled: get("voice_relay_enabled") === "yes",
+    combatRelayEnabled: get("combat_relay_enabled") === "yes",
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
@@ -140,6 +142,12 @@ export async function POST(request: NextRequest) {
     pairs.push({
       key: "voice_relay_enabled",
       value: payload.voiceRelayEnabled ? "yes" : "no",
+    });
+  }
+  if (typeof payload.combatRelayEnabled === "boolean") {
+    pairs.push({
+      key: "combat_relay_enabled",
+      value: payload.combatRelayEnabled ? "yes" : "no",
     });
   }
   if (typeof payload.queuePollMs === "number") {

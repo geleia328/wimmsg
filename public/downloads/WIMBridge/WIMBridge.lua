@@ -18,6 +18,7 @@ f:RegisterEvent("PLAYER_ENTERING_WORLD")
 
 WIMBridgeDB = WIMBridgeDB or {}
 if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = true end
+if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = true end
 
 local ownName = "Unknown"
 local chatLoggingEnabled = false
@@ -192,12 +193,26 @@ local function relay(kind, other, body)
         body or ""
     )
     speak(spoken)
+
+    -- COMBAT LOG path (real-time): a custom emote is written to
+    -- WoWCombatLog.txt almost instantly, so the bridge reads it in real time
+    -- even on clients where WoWChatLog.txt only flushes on logout.
+    -- NOTE: emotes are visible to nearby players — disable with
+    -- /wimbridge combat if you don't want that.
+    if WIMBridgeDB.combatEnabled ~= false then
+        local payload = line
+        if #payload > 250 then payload = payload:sub(1, 250) end
+        pcall(function() SendChatMessage(payload, "EMOTE") end)
+    end
 end
 
 f:SetScript("OnEvent", function(_, event, msg, target)
     if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         computeOwnName()
         enableChatLog(false)
+        -- The combat log flushes to disk almost instantly (unlike the chat
+        -- log on some clients), so we use it as the real-time relay.
+        pcall(function() LoggingCombat(true) end)
         C_Timer.After(2, ensureRelayChannel)
         return
     end
@@ -232,6 +247,12 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
     elseif cmd == "voice" then
         WIMBridgeDB.voiceEnabled = not WIMBridgeDB.voiceEnabled
         print("|cffffcc00WIMBridge|r voz " .. (WIMBridgeDB.voiceEnabled and "LIGADA" or "DESLIGADA"))
+    elseif cmd == "combat" then
+        WIMBridgeDB.combatEnabled = not (WIMBridgeDB.combatEnabled ~= false)
+        print("|cffffcc00WIMBridge|r relay combatlog " .. ((WIMBridgeDB.combatEnabled ~= false) and "LIGADO" or "DESLIGADO"))
+        if WIMBridgeDB.combatEnabled ~= false then
+            pcall(function() LoggingCombat(true) end)
+        end
     elseif cmd == "log" then
         enableChatLog(false)
         forceFlush("manual")
@@ -240,7 +261,7 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
     elseif cmd == "channel" then
         print("|cffffcc00WIMBridge|r relay channel = " .. (relayChannelName or "not-ready"))
     else
-        print("|cffffcc00WIMBridge|r comandos: test | testout | who | voice | log | flush | channel")
+        print("|cffffcc00WIMBridge|r comandos: test | testout | who | voice | combat | log | flush | channel")
     end
 end
 
