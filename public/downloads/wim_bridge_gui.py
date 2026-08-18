@@ -44,6 +44,18 @@ from typing import Optional
 
 import requests
 
+# Optional voice relay: the addon SPEAKS each whisper (names spelled with the
+# NATO phonetic alphabet so they are never misheard) and the bridge listens on
+# the microphone, transcribes and posts to the site — completely independent
+# from WoWChatLog.txt.
+try:
+    import speech_recognition as sr  # type: ignore
+
+    HAS_SPEECH = True
+except Exception:  # pragma: no cover - library optional
+    sr = None  # type: ignore
+    HAS_SPEECH = False
+
 try:
     import psutil  # type: ignore
     HAS_PSUTIL = True
@@ -71,13 +83,6 @@ try:
     HAS_WIN32 = True
 except Exception:
     HAS_WIN32 = False
-
-try:
-    import win32file  # type: ignore
-    import win32con  # type: ignore  # noqa: F811 (rebind ok)
-    HAS_WIN32FILE = True
-except Exception:
-    HAS_WIN32FILE = False
 
 
 # =============================================================================
@@ -745,99 +750,75 @@ def parse_whisper(line: str, own_default: str) -> Optional[tuple[str, str, str, 
     return None
 
 
-def _read_shared(path: Path, offset: int) -> tuple[str, int, int]:
-    """Read `path` from `offset` using Win32 CreateFile with FULL sharing.
+# =============================================================================
+# Voice relay parser (NATO phonetic alphabet)
+# =============================================================================
+# The addon speaks:
+#   "Wimbridge. Own <nato-name>. From <nato-name>. Message <body>. Endbridge."
+# Names are spelled with NATO words so speech-to-text never mangles them.
+NATO_TO_CHAR = {
+    "alpha": "a", "alfa": "a", "bravo": "b", "charlie": "c", "delta": "d",
+    "echo": "e", "eko": "e", "foxtrot": "f", "golf": "g", "hotel": "h",
+    "india": "i", "juliet": "j", "juliett": "j", "kilo": "k", "lima": "l",
+    "mike": "m", "november": "n", "oscar": "o", "papa": "p", "quebec": "q",
+    "romeo": "r", "sierra": "s", "tango": "t", "uniform": "u", "victor": "v",
+    "whiskey": "w", "xray": "x", "yankee": "y", "zulu": "z",
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+    "niner": "9", "dash": "-", "hyphen": "-",
+}
 
-    This is the KEY fix for "messages only appear after closing WoW": while
-    the game is running it keeps WoWChatLog.txt locked for writing, and a
-    normal Python open() either fails or sees stale content on Windows.
-    FILE_SHARE_READ|WRITE|DELETE lets us read the live file anyway.
 
-    Returns (text, new_offset, file_size). If the file rotated/shrunk, the
-    offset is reset to 0.
+def parse_voice_transcript(text: str) -> Optional[tuple[str, str, str, str]]:
     """
-    handle = win32file.CreateFile(
-        str(path),
-        win32con.GENERIC_READ,
-        win32con.FILE_SHARE_READ
-        | win32con.FILE_SHARE_WRITE
-        | win32con.FILE_SHARE_DELETE,
-        None,
-        win32con.OPEN_EXISTING,
-        win32con.FILE_ATTRIBUTE_NORMAL,
-        None,
-    )
-    try:
-        size = win32file.GetFileSize(handle)
-        if offset > size:
-            offset = 0
-        if offset > 0:
-            win32file.SetFilePointer(handle, offset, win32con.FILE_BEGIN)
-        chunks: list[bytes] = []
-        remaining = size - offset
-        while remaining > 0:
-            to_read = min(remaining, 65536)
-            _hr, data = win32file.ReadFile(handle, to_read)
-            if not data:
-                break
-            chunks.append(data)
-            remaining -= len(data)
-        new_offset = offset + sum(len(c) for c in chunks)
-        text = b"".join(chunks).decode("utf-8", errors="replace")
-        return text, new_offset, size
-    finally:
-        handle.Close()
-
-
-def tail_file_shared(
-    path: Path,
-    stop_event: threading.Event,
-    log_cb,
-    start_offset: Optional[int] = None,
-):
-    """Yield new lines forever using shared Win32 access. Handles rotation."""
-    while not path.exists() and not stop_event.is_set():
-        log_cb(f"⏳ Aguardando {path.name} — digite /chatlog no jogo.")
-        for _ in range(10):
-            if stop_event.is_set():
-                return
-            time.sleep(1)
-    if stop_event.is_set():
-        return
-    try:
-        offset = path.stat().st_size
-    except OSError:
-        offset = 0
-    if start_offset is not None and start_offset > 0:
-        offset = start_offset
-    pending = ""
-    while not stop_event.is_set():
-        try:
-            text, offset, _size = _read_shared(path, offset)
-        except Exception:
-            time.sleep(1)
-            continue
-        if text:
-            pending += text
-            parts = pending.split("\n")
-            pending = parts[-1]
-            for line in parts[:-1]:
-                yield line
-        else:
-            time.sleep(0.4)
-
-
-def tail_file(path: Path, stop_event: threading.Event, log_cb, start_offset=None):
-    """Yield new lines forever. Handles rotation.
-
-    On Windows we use the shared-access reader so the bridge can see new
-    lines IN REAL TIME even while WoW keeps the log file open (otherwise
-    everything only shows up after the game window is closed).
+    Returns (direction, own, other, body) from a spoken relay line, or None.
     """
-    if HAS_WIN32FILE and sys.platform == "win32":
-        yield from tail_file_shared(path, stop_event, log_cb, start_offset)
-        return
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    if not words:
+        return None
 
+    def idx_after(start: int, markers: set) -> int:
+        for i in range(start, len(words)):
+            if words[i] in markers:
+                return i
+        return -1
+
+    head = idx_after(0, {"wimbridge", "wim"})
+    if head < 0:
+        return None
+    own_i = idx_after(head, {"own"})
+    if own_i < 0:
+        return None
+    link_i = idx_after(own_i, {"from", "to"})
+    if link_i < 0:
+        return None
+    kind = words[link_i]
+    msg_i = idx_after(link_i, {"message", "messages"})
+    if msg_i < 0:
+        return None
+    end_i = idx_after(msg_i, {"endbridge", "end"})
+
+    def decode(a: int, b: int) -> str:
+        out = []
+        for w in words[a:b]:
+            if w in NATO_TO_CHAR:
+                out.append(NATO_TO_CHAR[w])
+            elif len(w) == 1 and w.isalnum():
+                out.append(w)
+        return "".join(out)
+
+    own = decode(own_i + 1, link_i)
+    other = decode(link_i + 1, msg_i)
+    tail = end_i if end_i >= 0 else len(words)
+    body = " ".join(words[msg_i + 1 : tail]).strip()
+    if not own or not other or not body:
+        return None
+    direction = "incoming" if kind == "from" else "outgoing"
+    return direction, own, other, body
+
+
+def tail_file(path: Path, stop_event: threading.Event, log_cb):
+    """Yield new lines forever. Handles rotation."""
     while not path.exists() and not stop_event.is_set():
         log_cb(f"⏳ Aguardando {path.name} — digite /chatlog no jogo.")
         for _ in range(10):
@@ -900,6 +881,7 @@ DEFAULT_CONTROLS = {
     "whisperChatSendDelayMs": 1000,
     "whisperCloseChatEnabled": True,
     "whisperChatCloseDelayMs": 500,
+    "voiceRelayEnabled": True,
     "queuePollMs": 1500,
 }
 
@@ -1033,6 +1015,12 @@ class BridgeEngine:
         t5 = threading.Thread(target=self._gse_syncer, daemon=True)
         t5.start()
         self.threads.append(t5)
+
+        # Voice relay listener — hears the addon speaking whispers and posts
+        # them to the site without depending on WoWChatLog.txt at all.
+        t6 = threading.Thread(target=self._voice_listener, daemon=True)
+        t6.start()
+        self.threads.append(t6)
 
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
@@ -1303,6 +1291,81 @@ class BridgeEngine:
         finally:
             for s in paused_spammers:
                 s.pause_event.clear()
+
+    def _voice_listener(self) -> None:
+        """
+        Speech-to-text relay. The addon speaks each whisper as:
+          "Wimbridge. Own <NATO name>. From/To <NATO name>. Message <body>. Endbridge."
+        We transcribe with the microphone and POST to /api/ingest. This path
+        does NOT depend on WoWChatLog.txt, so it works even on clients that
+        only flush the log file when closing the window.
+        """
+        if not HAS_SPEECH:
+            self.log(
+                "🎙 modo VOZ indisponível: instale 'pip install SpeechRecognition' "
+                "para ativar o relay por voz."
+            )
+            return
+        try:
+            mic = sr.Microphone()
+        except Exception as e:
+            self.log(f"🎙 microfone não encontrado, modo VOZ desativado: {e}")
+            return
+
+        rec = sr.Recognizer()
+        rec.pause_threshold = 0.6
+
+        def _on_audio(recognizer, audio) -> None:
+            try:
+                if not self._get_controls().get("voiceRelayEnabled", True):
+                    return
+                text = recognizer.recognize_google(audio, language="en-US")
+            except Exception:
+                return
+            parsed = parse_voice_transcript(text)
+            if not parsed:
+                return
+            direction, own_raw, other, body = parsed
+            own = self._canonical_char(own_raw) or own_raw
+            if self._recent_dup(own, other, body):
+                return
+            self._remember_whisper(own, other, body)
+            bucket = int(time.time() // 10)
+            try:
+                self.api.ingest(
+                    [
+                        {
+                            "externalId": f"voice-{bucket}-{make_ext_id(own, other, body)}",
+                            "character": own,
+                            "player": other,
+                            "body": body,
+                            "direction": direction,
+                            "status": "sent" if direction == "outgoing" else "received",
+                            "receivedAt": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                            ),
+                        }
+                    ]
+                )
+                arrow = "→" if direction == "outgoing" else "←"
+                self.log(f"🎙 {arrow} voz [{own}] {other}: {body}")
+            except Exception as e:
+                self.log(f"🎙 ingest falhou: {e}")
+
+        try:
+            stop_fn = rec.listen_in_background(mic, _on_audio, phrase_time_limit=12)
+            self.log(
+                "🎙 modo VOZ ativo: ouvindo o addon falar os whispers "
+                "(nomes soletrados em alfabeto fonético)."
+            )
+            while not self.stop_event.is_set():
+                time.sleep(0.5)
+            try:
+                stop_fn(wait_for_stop=False)
+            except Exception:
+                pass
+        except Exception as e:
+            self.log(f"🎙 listener de voz falhou: {e}")
 
     def _gse_syncer(self) -> None:
         """

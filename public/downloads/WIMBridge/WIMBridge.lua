@@ -1,8 +1,12 @@
--- WIMBridge (multi-window edition)
--- Captures received AND sent whispers and relays them into WoWChatLog.txt.
--- Uses a private relay channel because real channel messages are logged by
--- /chatlog. Some WoW clients buffer WoWChatLog.txt until logout, so this addon
--- performs delayed multi-flush after every relay message.
+-- WIMBridge (multi-window edition) — v2.6.0 VOICE RELAY
+-- Captures received AND sent whispers. Three parallel delivery paths so the
+-- site gets messages in real time no matter how the WoW client behaves:
+--   1) private relay channel  -> WoWChatLog.txt (works when log flushes)
+--   2) delayed multi flush    -> forces WoWChatLog.txt to disk
+--   3) VOICE (default ON)     -> the addon SPEAKS each whisper; the Python
+--      bridge listens on the microphone, transcribes it and posts it to the
+--      site. Names are spelled with the NATO phonetic alphabet so they are
+--      NEVER misheard/miswritten. This path does not depend on WoWChatLog.
 
 local f = CreateFrame("Frame")
 f:RegisterEvent("CHAT_MSG_WHISPER")
@@ -13,12 +17,36 @@ f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 
 WIMBridgeDB = WIMBridgeDB or {}
+if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = true end
 
 local ownName = "Unknown"
 local chatLoggingEnabled = false
 local relayChannelName = nil
 local relayChannelId = nil
 local flushGeneration = 0
+
+local NATO = {
+    A="Alpha",B="Bravo",C="Charlie",D="Delta",E="Echo",F="Foxtrot",G="Golf",
+    H="Hotel",I="India",J="Juliet",K="Kilo",L="Lima",M="Mike",N="November",
+    O="Oscar",P="Papa",Q="Quebec",R="Romeo",S="Sierra",T="Tango",U="Uniform",
+    V="Victor",W="Whiskey",X="Xray",Y="Yankee",Z="Zulu",
+    ["0"]="Zero",["1"]="One",["2"]="Two",["3"]="Three",["4"]="Four",
+    ["5"]="Five",["6"]="Six",["7"]="Seven",["8"]="Eight",["9"]="Niner",
+    ["-"]="Dash",
+}
+
+local function natoSpell(s)
+    local out = {}
+    for ch in (s or ""):gmatch(".") do
+        local word = NATO[ch:upper()]
+        if word then
+            out[#out + 1] = word
+        elseif ch:match("%w") then
+            out[#out + 1] = ch
+        end
+    end
+    return table.concat(out, ". ")
+end
 
 local function normalize(name)
     if not name or name == "" then return "Unknown" end
@@ -56,37 +84,21 @@ local function enableChatLog(silent)
 end
 
 local function forceFlush(label)
-    -- Force WoW to close and reopen the chatlog writer.
-    -- We intentionally run this DELAYED after the relay channel message,
-    -- because the server/channel line can take a moment to be written to the
-    -- internal chat buffer. Flushing too early does nothing.
     if not LoggingChat then return end
     pcall(function() LoggingChat(false) end)
     C_Timer.After(0.35, function()
         pcall(function() LoggingChat(true) end)
         chatLoggingEnabled = true
-        if label then
-            -- Keep this visible but short for debugging.
-            print("|cff88ff88WIMBridge|r flush " .. label)
-        end
+        if label then print("|cff88ff88WIMBridge|r flush " .. label) end
     end)
 end
 
 local function scheduleMultiFlush()
     flushGeneration = flushGeneration + 1
     local gen = flushGeneration
-    -- Multi-stage flush: if the channel message lands late in WoW's buffer,
-    -- a later flush still catches it. This is the key fix for "only appears
-    -- after closing the WoW window".
-    C_Timer.After(1.5, function()
-        if gen == flushGeneration then forceFlush("1/3") end
-    end)
-    C_Timer.After(3.0, function()
-        if gen == flushGeneration then forceFlush("2/3") end
-    end)
-    C_Timer.After(5.0, function()
-        if gen == flushGeneration then forceFlush("3/3") end
-    end)
+    C_Timer.After(1.5, function() if gen == flushGeneration then forceFlush("1/3") end end)
+    C_Timer.After(3.0, function() if gen == flushGeneration then forceFlush("2/3") end end)
+    C_Timer.After(5.0, function() if gen == flushGeneration then forceFlush("3/3") end end)
 end
 
 local function ensureRelayChannel()
@@ -97,13 +109,8 @@ local function ensureRelayChannel()
     if not relayChannelName then
         relayChannelName = "BW" .. sanitize(GetRealmName()) .. WIMBridgeDB.channelSuffix
     end
-
     local id = GetChannelName(relayChannelName)
-    if id and id > 0 then
-        relayChannelId = id
-        return true
-    end
-
+    if id and id > 0 then relayChannelId = id; return true end
     pcall(function() JoinTemporaryChannel(relayChannelName) end)
     id = GetChannelName(relayChannelName)
     if id and id > 0 then
@@ -122,17 +129,61 @@ local function echoVisible(line)
     end
 end
 
-local function relay(line)
+local voiceID = nil
+local function pickVoice()
+    if voiceID then return voiceID end
+    local ok, voices = pcall(function()
+        return C_VoiceChat and C_VoiceChat.GetTtsVoices and C_VoiceChat.GetTtsVoices()
+    end)
+    if ok and voices then
+        for _, v in ipairs(voices) do
+            if v and v.voiceID then
+                -- prefer English voices so NATO words are pronounced correctly
+                local nm = (v.name or ""):lower()
+                if nm:find("en") or nm:find("english") or nm:find("david") or nm:find("zira") then
+                    voiceID = v.voiceID
+                    return voiceID
+                end
+                if not voiceID then voiceID = v.voiceID end
+            end
+        end
+    end
+    return voiceID
+end
+
+local function speak(text)
+    if not WIMBridgeDB.voiceEnabled then return end
+    local vid = pickVoice()
+    if C_VoiceChat and C_VoiceChat.SpeakText then
+        local ok = pcall(function() C_VoiceChat.SpeakText(vid or 0, text) end)
+        if ok then return end
+    end
+    -- older/alternate API
+    if SpeakText then pcall(function() SpeakText(text) end) end
+end
+
+local function relay(kind, other, body)
     enableChatLog(true)
+    local tag = kind == "in" and "FROM" or "TO"
+    local line = string.format("WIMRELAY<OWN:%s><%s:%s><TS:%d>%s", ownName, tag, other, time(), body or "")
     echoVisible(line)
 
     if ensureRelayChannel() and relayChannelId then
-        if #line > 240 then line = line:sub(1, 240) end
-        pcall(function() SendChatMessage(line, "CHANNEL", nil, relayChannelId) end)
+        local short = line
+        if #short > 240 then short = short:sub(1, 240) end
+        pcall(function() SendChatMessage(short, "CHANNEL", nil, relayChannelId) end)
         scheduleMultiFlush()
-    else
-        print("|cffff5555WIMBridge|r não conseguiu entrar no canal relay; usando apenas echo visual.")
     end
+
+    -- VOICE path: speak the whisper with names spelled phonetically.
+    local spoken = string.format(
+        "Wimbridge. Own %s. %s %s. Message %s. Endbridge.",
+        natoSpell(ownName),
+        kind == "in" and "From" or "To",
+        natoSpell(other),
+        body or ""
+    )
+    speak(spoken)
 end
 
 f:SetScript("OnEvent", function(_, event, msg, target)
@@ -148,14 +199,11 @@ f:SetScript("OnEvent", function(_, event, msg, target)
     ensureRelayChannel()
 
     if event == "CHAT_MSG_WHISPER" or event == "CHAT_MSG_BN_WHISPER" then
-        local from = normalize(target)
-        relay(string.format("WIMRELAY<OWN:%s><FROM:%s><TS:%s>%s", ownName, from, time(), msg or ""))
+        relay("in", normalize(target), msg or "")
         return
     end
-
     if event == "CHAT_MSG_WHISPER_INFORM" or event == "CHAT_MSG_BN_WHISPER_INFORM" then
-        local to = normalize(target)
-        relay(string.format("WIMRELAY<OWN:%s><TO:%s><TS:%s>%s", ownName, to, time(), msg or ""))
+        relay("out", normalize(target), msg or "")
         return
     end
 end)
@@ -166,24 +214,26 @@ SlashCmdList["WIMBRIDGE"] = function(cmd)
     enableChatLog(false)
     ensureRelayChannel()
     if cmd == "test" then
-        relay(string.format("WIMRELAY<OWN:%s><FROM:TestPlayer-TestRealm><TS:%s>hello world", ownName, time()))
+        relay("in", "TestPlayer-TestRealm", "hello world")
     elseif cmd == "testout" then
-        relay(string.format("WIMRELAY<OWN:%s><TO:TestPlayer-TestRealm><TS:%s>outgoing hello", ownName, time()))
+        relay("out", "TestPlayer-TestRealm", "outgoing hello")
     elseif cmd == "who" then
         print("|cffffcc00WIMBridge|r own = " .. ownName)
         print("|cffffcc00WIMBridge|r relay = " .. (relayChannelName or "not-ready"))
+        print("|cffffcc00WIMBridge|r voz = " .. (WIMBridgeDB.voiceEnabled and "ligada" or "desligada"))
+    elseif cmd == "voice" then
+        WIMBridgeDB.voiceEnabled = not WIMBridgeDB.voiceEnabled
+        print("|cffffcc00WIMBridge|r voz " .. (WIMBridgeDB.voiceEnabled and "LIGADA" or "DESLIGADA"))
     elseif cmd == "log" then
         enableChatLog(false)
         forceFlush("manual")
-        print("|cffffcc00WIMBridge|r /chatlog solicitado e flush executado.")
     elseif cmd == "flush" then
         forceFlush("manual")
-        print("|cffffcc00WIMBridge|r flush do chatlog solicitado.")
     elseif cmd == "channel" then
         print("|cffffcc00WIMBridge|r relay channel = " .. (relayChannelName or "not-ready"))
     else
-        print("|cffffcc00WIMBridge|r comandos: /wimbridge test | testout | who | log | flush | channel")
+        print("|cffffcc00WIMBridge|r comandos: test | testout | who | voice | log | flush | channel")
     end
 end
 
-print("|cffffcc00WIMBridge|r carregado. Relay privado + multi-flush do WoWChatLog ativos.")
+print("|cffffcc00WIMBridge|r v2.6.0 carregado. Relay canal + flush + VOZ ativos.")

@@ -2,3 +2,4 @@ requests>=2.31
 pydirectinput>=1.0.4
 pyautogui>=0.9.54
 pywin32>=306 ; platform_system == "Windows"
+SpeechRecognition>=3.10.0

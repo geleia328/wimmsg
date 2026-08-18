@@ -30,6 +30,7 @@ type Controls = {
   whisperChatSendDelayMs: number;
   whisperCloseChatEnabled: boolean;
   whisperChatCloseDelayMs: number;
+  voiceRelayEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -48,6 +49,7 @@ export function GseView() {
     whisperChatSendDelayMs: 1000,
     whisperCloseChatEnabled: true,
     whisperChatCloseDelayMs: 500,
+    voiceRelayEnabled: true,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
@@ -409,6 +411,37 @@ export function GseView() {
                   {controls.gseMasterEnabled ? "GSE ON" : "GSE OFF"}
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* Voice relay toggle */}
+          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-slate-950 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-slate-100">🎙 Modo voz (tempo real)</div>
+                <div className="text-xs text-slate-500">
+                  O addon fala cada whisper no jogo com os nomes soletrados em
+                  alfabeto fonético; o bridge ouve pelo microfone e manda direto
+                  para o site — funciona mesmo quando o WoW só grava o chatlog
+                  ao fechar a janela. Requer{" "}
+                  <code>pip install SpeechRecognition</code> (já incluso no
+                  requirements) e um microfone ligado.
+                </div>
+              </div>
+              <button
+                onClick={() =>
+                  void updateControls({
+                    voiceRelayEnabled: !controls.voiceRelayEnabled,
+                  })
+                }
+                className={`rounded px-4 py-2 text-xs font-bold ${
+                  controls.voiceRelayEnabled
+                    ? "bg-emerald-500 text-slate-950"
+                    : "bg-slate-700 text-slate-300"
+                }`}
+              >
+                {controls.voiceRelayEnabled ? "VOZ ON" : "VOZ OFF"}
+              </button>
             </div>
           </div>
 

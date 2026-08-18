@@ -122,6 +122,22 @@ export function ChatApp() {
   const [showNotifSettings, setShowNotifSettings] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Only auto-scroll to the newest message when the user is already near the
+  // bottom. Fixes the bug where reading history was impossible because every
+  // poll yanked the scrollbar back to the end.
+  const stickToBottomRef = useRef(true);
+  const onChatScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+  }, []);
+  const scrollIfStuck = useCallback(() => {
+    const el = scrollRef.current;
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
   const notif = useNotifications();
   const lastIncomingIdRef = useRef<number>(-1);
   const selectedRef = useRef(selected);
@@ -288,11 +304,7 @@ export function ChatApp() {
             if (isCurrentChat && sel) {
               // Auto-refresh usando bidirecional para mostrar mensagens de ambos os lados
               await fetchBidirectionalMessages(sel.character, sel.player);
-              setTimeout(() => {
-                if (scrollRef.current) {
-                  scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-                }
-              }, 50);
+              setTimeout(scrollIfStuck, 50);
             } else {
               // Mark as unread for the conversation list badge
               const key = `${m.character}::${m.player}`;
@@ -326,6 +338,9 @@ export function ChatApp() {
       delete next[key];
       return next;
     });
+    // Abrir conversa sempre mostra o final; depois disso o usuário pode rolar
+    // para cima livremente sem ser "puxado" de volta.
+    stickToBottomRef.current = true;
     // Usar API bidirecional para mostrar conversa completa (A→B e B→A)
     void fetchBidirectionalMessages(selected.character, selected.player);
     // Polling mais rápido quando conversa está aberta (500ms)
@@ -337,10 +352,8 @@ export function ChatApp() {
   }, [selected, fetchBidirectionalMessages]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
+    scrollIfStuck();
+  }, [messages, scrollIfStuck]);
 
   const sendReply = useCallback(async () => {
     if (!selected || !draft.trim()) return;
@@ -905,6 +918,7 @@ export function ChatApp() {
               {/* Messages area */}
               <div
                 ref={scrollRef}
+                onScroll={onChatScroll}
                 className="flex-1 space-y-3 overflow-y-auto px-3 py-3 sm:px-6 sm:py-4"
               >
                 {messages.length === 0 && (

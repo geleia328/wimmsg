@@ -482,7 +482,7 @@ O WoW grava mensagens reais de canal no `WoWChatLog.txt`, por isso o bridge cons
 
 ### Problema descoberto
 
-Em alguns clientes, o `WoWChatLog.txt` só atualiza quando fecha o WoW. Causa raiz provável: no Windows o WoW mantém o arquivo TRAVADO para escrita enquanto está aberto, e o `open()` normal do Python vê conteúdo stale até o jogo liberar o handle (ao fechar). Para contornar, o addon 2.5.0 faz multi-flush atrasado:
+Em alguns clientes, o `WoWChatLog.txt` só atualiza quando fecha o WoW. Para contornar, o addon 2.5.0 faz multi-flush atrasado:
 
 ```txt
 1.5s depois do relay
@@ -612,17 +612,12 @@ npx drizzle-kit push
    - Solução: `charDirtyRef`.
 7. `WIMRELAY` chegava no corpo da mensagem e salvava errado.
    - Solução: parser defensivo no `/api/ingest` e `/api/sync`.
-8. Mensagens só chegavam no bridge ao FECHAR o WoW (Windows trava o chatlog).
-   - Solução definitiva: leitura com acesso compartilhado via Win32 (`win32file.CreateFile` com `FILE_SHARE_READ|WRITE|DELETE`) nas funções `_read_shared`/`tail_file_shared` do bridge. `tail_file` usa essa leitura em `win32` quando `HAS_WIN32FILE`. Isso permite ler o log EM TEMPO REAL com o jogo aberto.
-   - NÃO usar text-to-speech/speech-to-text/OCR: o usuário cogitou áudio, mas TTS é o caminho inverso e STT/OCR seriam frágeis (nomes errados, latência). A trava de arquivo é a causa real.
 
 ---
 
 ## 17. Ponto crítico para próxima IA
 
-Se o usuário ainda disser que só recebe mensagem ao fechar o WoW:
-- PRIMEIRO confirmar que ele está com o `.exe` MAIS NOVO (o que contém `_read_shared`/`tail_file_shared` com `win32file`). Se estiver com exe antigo, o addon 2.5.0 sozinho não resolve.
-- Depois pedir o seguinte:
+Se o usuário ainda disser que só recebe mensagem ao fechar o WoW, pedir o seguinte:
 
 1. Confirmar addon versão 2.5.0:
 
@@ -678,7 +673,43 @@ O parser do bridge não é instalado separado; vem dentro do `.exe`.
 
 ---
 
-## 19. Status final deste relatório
+## 19. Modo VOZ (v2.6.0) — relay que não depende do WoWChatLog
+
+Quando o cliente do WoW só grava `WoWChatLog.txt` ao fechar a janela, existe um caminho alternativo **padrão ligado**:
+
+1. Addon `WIMBridge.lua` v2.6.0 captura o whisper e FALA em voz alta:
+
+```txt
+Wimbridge. Own <NATO do próprio char>. From <NATO do remetente>. Message <texto>. Endbridge.
+```
+
+   - Nomes soletrados em alfabeto fonético da OTAN (Alpha, Bravo, Charlie...) para o STT nunca errar os nomes.
+   - Usa `C_VoiceChat.SpeakText` (TTS do WoW) com fallback.
+   - Liga/desliga no jogo: `/wimbridge voice`.
+   - Também mantém o relay por canal + multi-flush (caminhos 1 e 2).
+
+2. Bridge `wim_bridge_gui.py` roda `_voice_listener`:
+   - `speech_recognition` (`pip install SpeechRecognition`, já no requirements.txt) + microfone.
+   - `recognize_google(audio, language="en-US")`.
+   - `parse_voice_transcript()` decodifica NATO → nomes exatos.
+   - POST `/api/ingest` com `externalId` `voice-<bucket10s>-<hash>` (dedupe de 10s + `_recent_dup`).
+   - Loga `🎙 ← voz [char] player: body`.
+   - Respeita o controle `voiceRelayEnabled` (chave `voice_relay_enabled`, default yes).
+
+3. Site: toggle "🎙 Modo voz" na aba GSE; rota `/api/control` já trata a chave.
+
+Importante: o corpo da mensagem falada é transcrito por STT (pode ter pequenas imperfeições de acentuação em português), mas os NOMES são exatos por causa da OTAN. Se o corpo falado for problema, manter também o relay por canal/log.
+
+## 20. Fix do scroll do chat (v2.6.0)
+
+Bug: a cada poll a barra era puxada para o fim, impedindo ler o histórico.
+
+Solução em `ChatApp.tsx`:
+- `stickToBottomRef` + `onChatScroll`: só rola para o fim se o usuário já estiver a <90px do fundo.
+- Ao abrir uma conversa, `stickToBottomRef.current = true` (mostra o final uma vez).
+- `scrollIfStuck()` usado no effect de `[messages]` e no poller de incoming.
+
+## 21. Status final deste relatório
 
 No sandbox atual:
 
