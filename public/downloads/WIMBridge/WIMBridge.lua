@@ -111,10 +111,18 @@ local function ensureRelayChannel()
     end
     local id = GetChannelName(relayChannelName)
     if id and id > 0 then relayChannelId = id; return true end
-    pcall(function() JoinTemporaryChannel(relayChannelName) end)
+    -- IMPORTANT: use a NORMAL channel, not a temporary one. Some WoW clients
+    -- do NOT write temporary-channel traffic to WoWChatLog.txt, which made
+    -- the relay invisible to the bridge.
+    pcall(function() JoinChannelByName(relayChannelName) end)
     id = GetChannelName(relayChannelName)
     if id and id > 0 then
         relayChannelId = id
+        -- Keep it out of the visible chat frames to reduce noise.
+        pcall(function()
+            local info = C_ChatInfo and C_ChatInfo.GetChannelInfoFromIdentifier and nil
+            ChatFrame_RemoveChannel(DEFAULT_CHAT_FRAME, relayChannelName)
+        end)
         print("|cffffcc00WIMBridge|r canal relay ativo: " .. relayChannelName)
         return true
     end

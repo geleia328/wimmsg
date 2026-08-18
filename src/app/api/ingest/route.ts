@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
+import { filterDuplicateContent } from "@/lib/dedupe";
 import { sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -119,9 +120,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ inserted: 0 });
   }
 
+  // Belt-and-suspenders: drop rows whose content already exists within ~8s
+  // (covers relay + native + voice + history-sync-on-restart duplicates that
+  // carry different externalIds).
+  const uniqueRows = await filterDuplicateContent(rows);
+  if (uniqueRows.length === 0) {
+    return NextResponse.json({ inserted: 0, received: rows.length });
+  }
+
   const inserted = await db
     .insert(messages)
-    .values(rows)
+    .values(uniqueRows)
     .onConflictDoNothing({ target: messages.externalId })
     .returning({ id: messages.id });
 

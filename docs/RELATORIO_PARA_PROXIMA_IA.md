@@ -721,6 +721,21 @@ Correções em `wim_bridge_gui.py`:
 - `_focus_ref()`: antes de enviar, tenta focar; se falhar, re-enumerar janelas, re-resolve pelo título e tenta de novo; só então lança erro com dica de "Executar como administrador" (UIPI: se o WoW roda como admin e o bridge não, o Windows não deixa focar).
 - `_send` usa `self._focus_ref(ref)`.
 
+### Fix duplicação a cada "Iniciar" (v1.1.2 do bridge + site)
+
+Causa: `make_ext_id` usava `time.time()` (não determinístico) e o sync de histórico no Iniciar (`/api/sync`) gerava ids aleatórios → cada clique duplicava as últimas 100 linhas.
+
+Correções:
+- Bridge: `make_ext_id(character, player, body, ts)` agora é DETERMINÍSTICO (hash de `bw|char.lower|player.lower|body|ts`), com `ts` = timestamp da própria linha do log (`log_ts_of` / tag `<TS>`). `log_ts_of` e `ext_ts_to_iso` adicionados. Live tail e sync de histórico usam a MESMA fórmula → replay nunca cria rows novas (unique index segura).
+- Site: `src/lib/dedupe.ts` `filterDuplicateContent()` — dedupe por conteúdo (char+player+body+direction em buckets de 8s ±20s de margem nos timestamps dos candidatos, incluindo dedupe intra-lote). Aplicado em `/api/ingest` e `/api/sync`. Impede duplicatas entre caminhos diferentes (relay vs nativo vs voz) e entre reinícios.
+- Testado: sync idêntico 2x → inserted 0; mesma msg 40s depois → entra; relay+nativa do mesmo whisper → inserted 0.
+
+### Addon v2.7.0 + tail robusto (whispers não eram lidos em tempo real)
+
+- Addon: trocou `JoinTemporaryChannel` por `JoinChannelByName` (canal NORMAL). Alguns clientes NÃO gravam tráfego de canal temporário no WoWChatLog.txt — o relay ficava invisível. Remove o canal do frame visível com `ChatFrame_RemoveChannel` para não poluir.
+- Bridge `tail_file`: se o arquivo cresce mas o handle não vê nada por >2s (Windows segura view bufferizada do arquivo que o WoW tem aberto), fecha e reabre o handle na última posição conhecida, logando "📄 ... reabrindo". Isso permite leitura em tempo real mesmo com o jogo segurando o arquivo.
+- Atualizar addon (2.7.0) E gerar novo .exe para valer.
+
 ## 20. Fix do scroll do chat (v2.6.0)
 
 Bug: a cada poll a barra era puxada para o fim, impedindo ler o histórico.

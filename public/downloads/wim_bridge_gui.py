@@ -36,6 +36,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -895,9 +896,12 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
     except (AttributeError, OSError):
         inode = None
     size = fh.tell()
+    last_read = time.time()
+    reopened_logged = 0.0
     while not stop_event.is_set():
         line = fh.readline()
         if line:
+            last_read = time.time()
             yield line
             continue
         time.sleep(0.4)
@@ -911,20 +915,91 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
         except AttributeError:
             new_inode = None
         if (new_inode is not None and new_inode != inode) or st.st_size < size:
+            # Log rotation / truncation.
             fh.close()
             fh = open(path, "r", encoding="utf-8", errors="replace")
             inode = new_inode
             size = 0
+            last_read = time.time()
+        elif st.st_size > size and time.time() - last_read > 2.0:
+            # File grew but our handle sees nothing: Windows may be keeping a
+            # stale buffered view of the file the game has open. Reopen with a
+            # fresh handle positioned at the last known size.
+            pos = size
+            try:
+                fh.close()
+            except Exception:
+                pass
+            fh = open(path, "r", encoding="utf-8", errors="replace")
+            try:
+                fh.seek(pos)
+            except OSError:
+                fh.seek(0, os.SEEK_END)
+            try:
+                inode = os.stat(path).st_ino
+            except (AttributeError, OSError):
+                inode = None
+            if time.time() - reopened_logged > 30:
+                reopened_logged = time.time()
+                log_cb(
+                    f"📄 {path.name} cresceu sem o handle ver — reabrindo "
+                    "para ler em tempo real."
+                )
         else:
             size = st.st_size
     fh.close()
 
 
-def make_ext_id(character: str, player: str, body: str) -> str:
-    h = hashlib.sha1(
-        f"{time.time():.3f}|{character}|{player}|{body}".encode("utf-8")
-    ).hexdigest()
-    return f"in-{h[:16]}"
+def log_ts_of(line: str) -> str:
+    """Extract the chat-log timestamp of a line ("10/8 12:34:56.789 ..." ->
+    "10/8 12:34:56"). Stable across reads, used for deterministic ids."""
+    m = TIMESTAMP_RE.match(line)
+    if not m:
+        return ""
+    ts = m.group(0).strip()
+    return ts.split(".")[0] if "." in ts else ts
+
+
+def ext_ts_to_iso(ts: str) -> str:
+    """Convert a timestamp key to ISO for receivedAt.
+    - digits        -> epoch seconds (from addon <TS:...>)
+    - "M/D HH:MM:SS"-> chat log timestamp (assume current year, local time)
+    Falls back to now()."""
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if not ts:
+        return now_iso
+    if re.fullmatch(r"\d{9,11}", ts):
+        try:
+            dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+            if 2000 <= dt.year <= 2100:
+                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return now_iso
+    m = re.match(r"(\d+)/(\d+)(?:/(\d+))?\s+(\d+):(\d+):(\d+)", ts)
+    if m:
+        try:
+            month, day = int(m.group(1)), int(m.group(2))
+            year = int(m.group(3)) if m.group(3) else datetime.now().year
+            hh, mm, ss = int(m.group(4)), int(m.group(5)), int(m.group(6))
+            return datetime(year, month, day, hh, mm, ss).isoformat()
+        except ValueError:
+            return now_iso
+    return now_iso
+
+
+def make_ext_id(character: str, player: str, body: str, ts: str = "") -> str:
+    """
+    DETERMINISTIC external id. The same log line always produces the same id,
+    so re-reading the log on every "Iniciar" (history sync) hits the unique
+    index and NEVER duplicates rows. `ts` must be the line's own timestamp
+    (log_ts_of / <TS> tag), not the current time.
+    """
+    key = (
+        f"bw|{character.strip().lower()}|{player.strip().lower()}|"
+        f"{body}|{ts}"
+    )
+    h = hashlib.sha1(key.encode("utf-8")).hexdigest()
+    return f"in-{h[:24]}"
 
 
 # =============================================================================
@@ -1013,19 +1088,22 @@ class BridgeEngine:
                 if parsed:
                     direction, character, other, body = parsed
                     character = character or ref.character
+                    line_ts = log_ts_of(line)
                     # Skip if already in recent dedup (from this session)
                     if self._recent_dup(character, other, body):
                         continue
                     self._remember_whisper(character, other, body)
                     buffer.append(
                         {
-                            "externalId": make_ext_id(character, other, body),
+                            # Deterministic: same as the live tail produced,
+                            # so restarting never duplicates.
+                            "externalId": make_ext_id(character, other, body, line_ts),
                             "character": character,
                             "player": other,
                             "body": body,
                             "direction": direction,
                             "status": "sent" if direction == "outgoing" else "received",
-                            "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "receivedAt": ext_ts_to_iso(line_ts),
                         }
                     )
             
@@ -1190,13 +1268,15 @@ class BridgeEngine:
                 hint_emitted = False
                 buffer.append(
                     {
-                        "externalId": make_ext_id(character, other, body),
+                        "externalId": make_ext_id(
+                            character, other, body, log_ts_of(line)
+                        ),
                         "character": character,
                         "player": other,
                         "body": body,
                         "direction": direction,
                         "status": "sent" if direction == "outgoing" else "received",
-                        "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "receivedAt": ext_ts_to_iso(log_ts_of(line)),
                     }
                 )
             elif suspicious_logged < 10:

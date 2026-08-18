@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
+import { filterDuplicateContent } from "@/lib/dedupe";
 import { eq, and, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -108,9 +109,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ inserted: 0 });
   }
 
+  // Never duplicate history on repeated "Iniciar" clicks.
+  const uniqueRows = await filterDuplicateContent(rows);
+  if (uniqueRows.length === 0) {
+    return NextResponse.json({ inserted: 0, received: rows.length });
+  }
+
   const inserted = await db
     .insert(messages)
-    .values(rows)
+    .values(uniqueRows)
     .onConflictDoNothing({ target: messages.externalId })
     .returning({ id: messages.id });
 
