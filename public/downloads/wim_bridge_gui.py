@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.2.0"
 # =============================================================================
 
 import hashlib
@@ -1219,6 +1219,11 @@ class BridgeEngine:
         t8.start()
         self.threads.append(t8)
 
+        self.log(
+            f"🥐 {APP_NAME} {APP_VERSION} — loopback + OCR + combatlog + voz. "
+            "Se esta linha NÃO apareceu, o .exe é ANTIGO: baixe o artifact do "
+            "run mais recente da Action 'Build Windows Executable'."
+        )
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
     def stop(self) -> None:

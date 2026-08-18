@@ -36,13 +36,17 @@ jobs:
           # Voice relay deps — bundled into the .exe so users WITHOUT Python
           # get real-time whisper reception (loopback audio, no mic needed).
           pip install "SpeechRecognition>=3.10.0" "PyAudio>=0.2.14"
-          # Loopback capture (WASAPI) + screen OCR relay deps.
-          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0" "winocr>=0.0.15"
+          # Loopback capture (WASAPI) deps — required for voice without mic.
+          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0"
+          # OCR dep — best effort: if it ever fails, the exe still builds and
+          # OCR simply stays disabled at runtime (HAS_WINOCR guard).
+          pip install "winocr>=0.0.15" || echo "winocr unavailable - OCR will be disabled in this build"
           pip install pywin32-ctypes
           python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
           python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
           python -c "import speech_recognition, pyaudio; print('voice deps OK')"
-          python -c "import soundcard, numpy, mss, winocr; print('loopback+OCR deps OK')"
+          python -c "import soundcard, numpy, mss; print('loopback deps OK')"
+          python -c "import winocr; print('OCR deps OK')" || echo "OCR deps missing - continuing without OCR"
 
       - name: Inject build constants
         shell: pwsh
@@ -81,26 +85,36 @@ jobs:
           python -c "import ast; ast.parse(open('public/downloads/wim_bridge_gui.py', encoding='utf-8').read()); print('Python syntax OK')"
 
       - name: Build with PyInstaller
+        shell: pwsh
         run: |
-          pyinstaller --onefile --noconsole --name "BakersWhisper" `
-            --collect-submodules pyautogui `
-            --collect-submodules pydirectinput `
-            --collect-submodules psutil `
-            --collect-all speech_recognition `
-            --collect-all winocr `
-            --hidden-import pyaudio `
-            --hidden-import speech_recognition `
-            --hidden-import soundcard `
-            --hidden-import numpy `
-            --hidden-import mss `
-            --hidden-import winocr `
-            --hidden-import win32gui `
-            --hidden-import win32con `
-            --hidden-import win32api `
-            --hidden-import win32process `
-            --hidden-import pywintypes `
-            --hidden-import pkg_resources.py2_warn `
-            public/downloads/wim_bridge_gui.py
+          $pyargs = @(
+            "--onefile", "--noconsole", "--name", "BakersWhisper",
+            "--collect-submodules", "pyautogui",
+            "--collect-submodules", "pydirectinput",
+            "--collect-submodules", "psutil",
+            "--collect-all", "speech_recognition",
+            "--hidden-import", "pyaudio",
+            "--hidden-import", "speech_recognition",
+            "--hidden-import", "soundcard",
+            "--hidden-import", "numpy",
+            "--hidden-import", "mss",
+            "--hidden-import", "win32gui",
+            "--hidden-import", "win32con",
+            "--hidden-import", "win32api",
+            "--hidden-import", "win32process",
+            "--hidden-import", "pywintypes"
+          )
+          # Only bundle winocr when it actually installed, so the build never
+          # fails because of the OCR dependency.
+          python -c "import winocr" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $pyargs += @("--collect-all", "winocr", "--hidden-import", "winocr")
+            Write-Host "winocr detected - bundling OCR"
+          } else {
+            Write-Host "winocr NOT detected - building without OCR"
+          }
+          $pyargs += "public/downloads/wim_bridge_gui.py"
+          pyinstaller @pyargs
 
       - name: Verify build
         shell: pwsh
