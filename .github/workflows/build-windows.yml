@@ -35,7 +35,7 @@ jobs:
           # get real-time whisper reception (loopback audio, no mic needed).
           pip install "SpeechRecognition>=3.10.0" "PyAudio>=0.2.14"
           # Loopback capture (WASAPI) + screen OCR relay deps.
-          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0" "winocr>=0.3.0"
+          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0" "winocr>=0.0.15"
           pip install pywin32-ctypes
           python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
           python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
