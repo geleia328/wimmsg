@@ -81,3 +81,32 @@ export async function POST(
     .returning();
   return NextResponse.json({ ok: true, state: inserted });
 }
+
+/**
+ * DELETE → removes the GSE row for a character.
+ * Useful when the user changes characters / accounts.
+ */
+export async function DELETE(
+  _request: NextRequest,
+  context: { params: Promise<{ character: string }> },
+) {
+  const { character: raw } = await context.params;
+  const character = decodeURIComponent(raw).trim();
+  if (!character) {
+    return NextResponse.json({ error: "character required" }, { status: 400 });
+  }
+
+  const [deleted] = await db
+    .delete(gseState)
+    .where(eq(gseState.character, character))
+    .returning({ character: gseState.character });
+
+  if (!deleted) {
+    return NextResponse.json(
+      { error: "character_not_found" },
+      { status: 404 },
+    );
+  }
+
+  return NextResponse.json({ ok: true, removed: deleted.character });
+}

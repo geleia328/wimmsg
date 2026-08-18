@@ -7,7 +7,7 @@ Copie e cole este bloco inteiro no próximo chat onde você vai continuar o dese
 Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — painel web + app Windows para WoW multi-conta.
 
 **Instruções para você (IA):**
-1. Leia primeiro `docs/RELATORIO_PARA_PROXIMA_IA.md` — ele é o relatório mais novo e completo do estado atual. Depois, se precisar de contexto antigo, leia `docs/RELATORIO_COMPLETO.md`.
+1. Leia o relatório completo em `docs/RELATORIO_COMPLETO.md` que está anexado neste projeto (ou vou colar abaixo).
 2. Recrie o projeto IDÊNTICO: mantenha Tech stack, estrutura de pastas, nomes de arquivos, endpoints, schema Drizzle, lógica Python, addon Lua, workflow GitHub Actions exatamente iguais.
 3. Não faça simplificações. Implemente todas as features descritas: chat, accounts, gse, settings, download, setup, report, ingest, queue, scan, control, admin init-db, vercel-env, download/[file], notifications sonoras, realm mismatch warning, slot wowN, renomeação automática, persistência por slot, botão salvar personagens, server settings editáveis no app, master GSE, reader toggle separado, delays configuráveis, mensagens pending se janela fechada.
 4. Use Next.js 16 App Router + Tailwind + Drizzle + pg. Valide no final com `npx next typegen`, `tsc --noEmit`, `npm run build`, `build_and_start`.
@@ -53,49 +53,33 @@ Olá! Você vai continuar um projeto existente chamado **Bakers Whisper** — pa
     - `_send` pausa TODOS os spammers GSE durante o envio (antes só o do personagem alvo) — teclas simuladas nunca colidem com PostMessage do GSE.
     - Fechar chat: novos controles `whisperCloseChatEnabled` (default yes) e `whisperChatCloseDelayMs` (default 200). Após enviar, o bridge pressiona ESC e fecha o campo de chat do jogo. A próxima mensagem da fila reabre o chat sozinha (Enter → paste /w player → Enter → ESC), então dá para conversar depois com fulano/lucas mesmo com o chat fechado.
     - GSE master OFF: corrida corrigida — `_control_syncer` para TODOS os spammers a CADA ciclo (0.5s) enquanto master estiver OFF, mesmo se `_gse_syncer` tentar recriar com controles obsoletos.
-    - `whisperChatOpenDelayMs` default 800ms (chat aberto antes do paste).
-    - `whisperChatSendDelayMs` default 500ms (antes de apertar Enter para enviar).
-    - `whisperChatCloseDelayMs` default 600ms (antes de apertar Escape para fechar).
-    - Delays aumentados drasticamente (1.5s entre abrir chat e colar comando) para evitar que o WoW "bugue" e abra outras janelas.
-14. ✅ Sequência exata de envio v1.1.6 (ordem especificada pelo usuário):
-    - 1️⃣ Focar janela → aguardar **2.0 segundos**
-    - 2️⃣ Pressionar **Enter** → aguardar **1.0 segundo**
-    - 3️⃣ Colar `/w nome-server` → aguardar **1.5 segundos** (chat abre aqui)
-    - 4️⃣ Colar **mensagem** → aguardar **1.0 segundo**
-    - 5️⃣ Pressionar **Enter** → aguardar **1.0 segundo**
-    - 🔒 Fechar chat com **Escape** (opcional)
-    - Separar o comando `/w` da mensagem garante que o WoW processa cada parte corretamente, evitando mensagens picotadas.
-15. ✅ Chat em tempo real bidirecional v1.1.8:
-    - `/api/conversations/bidirectional?charA=X&charB=Y` agora NORMALIZA direção pela perspectiva do viewer (`charA`): se B enviou para A, aparece como `incoming` quando A está vendo a conversa.
-    - Dedup de espelhos: se existe A outgoing "salve" e B incoming "salve" em até 15s, vira um único balão (sem duplicar).
-    - ChatApp cria conversas espelhadas no client quando `player` também é um personagem/janela conhecida: conversa B↔A aparece mesmo se só existe row A→B.
-    - Polling de conversa aberta 500ms + global 1s.
-    - Addon `WIMBridge.lua` agora captura também `CHAT_MSG_WHISPER_INFORM` (mensagens ENVIADAS pelo WIM/jogo) e ecoa `[WIMBRIDGE]<OWN:me><TO:target>body`.
-    - Parser Python entende `<TO:...>` como `outgoing`, além de `<FROM:...>` como `incoming` e chatlog nativo `[W To]/[W From]`.
-    - Resultado: comportamento de mensageiro normal — se taldoglaidon manda "salve" para madelina, o site de madelina mostra "salve" como mensagem recebida em tempo real.
-16. ✅ Fix incoming externo v1.1.9:
-    - Conversas agora são case-insensitive: WoW/WIM pode emitir `Juper-Azralon`/`Cbsies-Azralon` enquanto o site abriu `juper-azralon`/`cbsies-azralon`.
-    - `/api/conversations/bidirectional` compara `lower(character/player)` e normaliza a direção pela perspectiva do viewer sem depender de caixa.
-    - `/api/conversations/[character]/[player]` também compara case-insensitive (fallback e limpeza).
-    - `/api/conversations` e `/api/characters` agrupam por `lower(...)` para não dividir conversa em maiúscula/minúscula.
-    - `ChatApp` compara seleção/conversas/unread sem diferenciar caixa.
-    - Bridge Python `_find_char_by_name` também procura personagem sem diferenciar caixa.
-    - Testado: ingest `Juper-Azralon` + `Cbsies-Azralon` aparece em chat aberto como `juper-azralon`/`cbsies-azralon` com `direction=incoming`.
-13. ✅ Delays ultra-conservadores v1.1.5:
-    - `whisperFocusDelayMs` 800ms (antes de começar)
-    - `whisperChatOpenDelayMs` 1500ms (CRÍTICO: tempo entre abrir chat e colar comando)
-    - `whisperKeystrokeDelayMs` 100ms (entre cada caractere no fallback)
-    - `whisperChatSendDelayMs` 800ms (antes de apertar Enter)
-    - `whisperChatCloseDelayMs` 600ms (antes de apertar Escape)
-    - `_send` reescrito com logging passo-a-passo para diagnóstico
-    - Delay extra de 300ms após paste para garantir que o texto chegou ao campo
-    - Verificação de comprimento do comando enviado
-    - Fallback de digitação mais lento e robusto
-12. ✅ Sincronização de histórico v1.1.4:
-    - Bridge: `_sync_historical_messages` lê as últimas 100 linhas do WoWChatLog.txt quando inicia e envia pro site via `/api/sync` — captura mensagens de antes do bridge abrir.
-    - Nova API `/api/sync` (POST para receber histórico do bridge, GET para buscar histórico no site).
-    - Botão "🔄 Sincronizar" no header de cada conversa — força recarregar as últimas 50 mensagens do banco.
-    - ApiClient do bridge: método `sync()` para enviar histórico.
+    - `whisperChatOpenDelayMs` default 300ms (chat aberto antes do paste).
+12. ✅ Tempos de envio mais lentos v1.1.4 (chat do jogo não buga mais):
+    - Novos defaults: foco 800ms, abrir chat 600ms, typing 80ms, enviar (após colar) 500ms, fechar chat (ESC) 400ms, pós-envio 800ms.
+    - PISOS mínimos no bridge `_send`: foco/abrir/enviar/fechar nunca ficam abaixo de 0.3s (typing 0.02s) mesmo se configurados para menos — o jogo sempre termina a ação anterior antes da próxima tecla.
+    - Faixas do site ampliadas: abrir/enviar/fechar até 5000ms, foco/pós até 10000ms, typing até 1000ms; mínimos 200ms.
+    - Atualizados: schema, /api/control (GET+POST), seed init-db, GseView (defaults + inputs) e DEFAULT_CONTROLS do bridge.
+13. ✅ Histórico completo do chat v1.1.5 (extrai o que já estava escrito no jogo):
+    - REPLAY do WoWChatLog.txt: ao abrir uma janela, o bridge relê os últimos ~2MB do log e ingere TODOS os whispers já escritos (recebidos via addon/native, enviados no jogo via [W To]) com `receivedAt` real — a conversa aparece no site em ordem cronológica. Se o arquivo tem linhas [WIMBRIDGE], as nativas [W From] são puladas (o addon já cobre) para não duplicar.
+    - ADDON: echo agora inclui `<TS:epoch>` (idempotência), guarda whispers recebidos em SavedVariables (WIMBridgeDB, máx 300) e o comando `/wimbridge dump` re-imprime o histórico com os MESMOS TS. O bridge roda o dump automaticamente uma vez por janela/sessão (`_history_syncer` + `_type_command`), recuperando whispers que aconteceram antes do /chatlog ou do bridge abrir.
+    - `make_ext_id` determinístico (hash character|player|body|ts): replay, dump e rotação de log são idempotentes — nunca duplicam no site.
+    - Sent-history persistido (`%APPDATA%/BakersWhisper/sent_history.json`): durante replay, [W To] de mensagens que o PRÓPRIO bridge enviou são pulados (site já tem essas linhas do ack da fila).
+    - `_canonical_char` normaliza o OWN do addon (case-insensitive) — conversas não se dividem por variação de maiúsculas/minúsculas.
+    - `_type_command` refatorado: mesma rotina segura (foco→Enter→paste→Enter→ESC) usada para whispers E para o dump.
+14. ✅ Envio lento e seguro v1.1.6 (fim da mensagem picada e do jogo bugando):
+    - CAUSA do "jogo buga": o bridge pressionava ESC após enviar, mas o WoW JÁ fecha o campo de chat sozinho — ESC com chat fechado ABRE O MENU do jogo. Agora `whisperCloseChatEnabled` é default OFF (toggle com aviso no site).
+    - Nova sequência do `_type_command`: foco (1000ms) → Enter → **2000ms esperando o chat abrir 100%** → Ctrl+A (limpa texto residual) → espera 250ms → cola o comando inteiro (clipboard) → **800ms** antes do Enter de envio → pós-envio 800ms.
+    - Pisos no bridge: foco ≥0.5s, abrir chat ≥0.5s, enviar ≥0.4s, typing ≥0.05s/tecla — impossível digitar antes do campo estar pronto.
+    - Fallback de digitação prefere pydirectinput (melhor para jogos) com 100ms/tecla.
+    - Site: label explicativo "se a mensagem chega picada, AUMENTE este valor"; faixas até 10000ms para abrir/enviar/foco/pós.
+15. ✅ ORDEM OFICIAL DE ENVIO v1.1.7 (definida pelo usuário):
+    - Sequência em duas etapas: foco (2000ms) → Enter → 1000ms → colar `/w Nome-Server` → **1500ms** (jogo abre o modo whisper) → colar a mensagem → 1000ms → Enter envia → 1000ms pós-envio.
+    - Novo controle `whisperWReadyDelayMs` (whisper_w_ready_delay_ms, default 1500) — o tempo entre colar o /w e colar a mensagem.
+    - `_send` reescrito com a ordem exata (Ctrl+A de segurança só no início); defaults atualizados em schema, /api/control, init-db, GseView e DEFAULT_CONTROLS do bridge.
+16. ✅ FIX ESPAÇO v1.1.8 — o WoW exige espaço após /w Nome:
+    - Nova ordem: foco (2s) → Enter → 1s → colar `/w Nome-Server` → 1s → **press_key("space")** → 1s → colar mensagem → 1s → Enter → 1s.
+    - Novo controle `whisperSpaceDelayMs` (whisper_space_delay_ms, default 1000); `whisperWReadyDelayMs` agora é "antes do espaço" (default 1000).
+    - Atualizados: schema, /api/control, init-db, GseView (labels + campo novo) e bridge (_send + DEFAULT_CONTROLS).
 
 **Relatório completo (cole aqui):**
 

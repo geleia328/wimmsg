@@ -36,7 +36,9 @@ import sys
 import threading
 import time
 import tkinter as tk
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Optional
@@ -492,6 +494,62 @@ def post_key_to_hwnd(hwnd: int, vk: int) -> bool:
         return False
 
 
+def set_clipboard_text(text: str) -> bool:
+    """
+    Copy `text` to the Windows clipboard (pywin32 is already a dependency for
+    window enumeration). Used by the whisper sender to paste the command
+    atomically instead of typing char-by-char — this fixes "cut" messages
+    where the first keystrokes were eaten because the chat box wasn't ready.
+    """
+    try:
+        import win32clipboard  # type: ignore
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    except Exception:
+        return False
+
+
+def paste_ctrl_v() -> bool:
+    """Press Ctrl+V (paste) with whichever input library is available."""
+    try:
+        if HAS_PYDIRECTINPUT:
+            pydirectinput.keyDown("ctrl")
+            pydirectinput.press("v")
+            pydirectinput.keyUp("ctrl")
+        else:
+            pyautogui.hotkey("ctrl", "v")
+        return True
+    except Exception:
+        return False
+
+
+def press_ctrl_a() -> None:
+    """Ctrl+A — select everything in the focused text field (clears leftover
+    text from the chat box before we paste the new command)."""
+    try:
+        if HAS_PYDIRECTINPUT:
+            pydirectinput.keyDown("ctrl")
+            pydirectinput.press("a")
+            pydirectinput.keyUp("ctrl")
+        else:
+            pyautogui.hotkey("ctrl", "a")
+    except Exception:
+        pass
+
+
+def press_key(name: str) -> None:
+    """Press a single key with the active input library."""
+    if HAS_PYDIRECTINPUT:
+        pydirectinput.press(name)
+    else:
+        pyautogui.press(name)
+
+
 # --------------------------------------------------------------------------
 # GSE spammer — one thread per character, pausable during whisper sends
 # --------------------------------------------------------------------------
@@ -548,9 +606,21 @@ class GseSpammer:
 # =============================================================================
 # Whisper log parser
 # =============================================================================
-TIMESTAMP_RE = re.compile(r"^\d+/\d+\s+\d+:\d+:\d+\.\d+\s+")
+# Tolerant timestamp: retail writes "10/8 12:34:56.789", older clients may
+# omit the milliseconds (or even the year).
+TIMESTAMP_RE = re.compile(r"^\d+/\d+(?:/\d+)?\s+\d+:\d+:\d+(?:\.\d+)?\s+")
 ADDON_RE = re.compile(
-    r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?P<body>.*)$"
+    r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><(?P<kind>FROM|TO):(?P<other>[^>]+)>"
+    r"(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
+)
+# WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
+# as long as /chatlog is on):
+#   10/8 12:34:56.789  [W From] [Sender-Realm]: message
+#   10/8 12:34:56.789  [W To]   [Recipient-Realm]: message
+# Older clients may omit the brackets around the name.
+NATIVE_TAG_RE = re.compile(r"^\[W (?P<kind>From|To)\]\s+(?P<rest>.*)$")
+NATIVE_NAME_RE = re.compile(
+    r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$"
 )
 FALLBACKS = [
     re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$"),
@@ -558,24 +628,113 @@ FALLBACKS = [
 ]
 
 
-def parse_whisper(line: str, own_default: str) -> Optional[tuple[str, str, str]]:
+def _strip_wow_markup(text: str) -> str:
+    """Remove WoW color codes / item links so bodies stay readable."""
+    clean = re.sub(r"\|c[0-9a-fA-F]{8}", "", text)
+    clean = re.sub(r"\|H[^|]*\|h", "", clean)
+    clean = clean.replace("|h", "").replace("|r", "")
+    return clean.strip()
+
+
+def log_ts_of(line: str) -> str:
+    """Extract the chat-log timestamp of a line ("10/8 12:34:56.789" →
+    "10/8 12:34:56") — used as part of the deterministic externalId."""
+    m = TIMESTAMP_RE.match(line)
+    if not m:
+        return ""
+    ts = m.group(0).strip()
+    return ts.split(".")[0] if "." in ts else ts
+
+
+def ext_ts_to_iso(ts: str) -> str:
+    """Convert a timestamp key to an ISO-ish date for the site's receivedAt.
+
+    - Digits → WoW epoch seconds (from the addon <TS:...> tag).
+    - "M/D HH:MM:SS" → chat log timestamp (assume current year, local time).
+    Falls back to now() when it can't be parsed.
+    """
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if not ts:
+        return now_iso
+    if re.fullmatch(r"\d{9,11}", ts):
+        try:
+            dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+            if 2000 <= dt.year <= 2100:
+                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            pass
+        return now_iso
+    m = re.match(r"(\d+)/(\d+)(?:/(\d+))?\s+(\d+):(\d+):(\d+)", ts)
+    if m:
+        try:
+            month, day = int(m.group(1)), int(m.group(2))
+            year = int(m.group(3)) if m.group(3) else datetime.now().year
+            hh, mm, ss = int(m.group(4)), int(m.group(5)), int(m.group(6))
+            return datetime(year, month, day, hh, mm, ss).isoformat()
+        except ValueError:
+            pass
+    return now_iso
+
+
+def parse_whisper(
+    line: str, own_default: str
+) -> Optional[tuple[str, str, str, str, str]]:
+    """
+    Returns (direction, character, player, body, ts) or None.
+      direction  : "incoming" (window received) | "outgoing" (window sent)
+      character  : YOUR character (the window that owns this log line)
+      player     : the other side
+      body       : message text (markup stripped)
+      ts         : timestamp key for idempotency — the addon's <TS:...> epoch
+                   when present, otherwise the chat-log line timestamp.
+    """
     raw = line.rstrip("\r\n")
     stripped = TIMESTAMP_RE.sub("", raw).strip()
-    m = ADDON_RE.match(stripped)
+    if not stripped:
+        return None
+    log_ts = log_ts_of(raw)
+
+    m = ADDON_RE.match(_strip_wow_markup(stripped))
     if m:
-        return m.group("own").strip(), m.group("from").strip(), m.group("body").strip()
-    clean = re.sub(r"\|c[0-9a-fA-F]{8}", "", stripped)
-    clean = re.sub(r"\|H[^|]*\|h", "", clean)
-    clean = clean.replace("|h", "").replace("|r", "").replace("[", "").replace("]", "")
+        own = m.group("own").strip() or own_default
+        direction = "incoming" if m.group("kind") == "FROM" else "outgoing"
+        return (
+            direction,
+            own,
+            m.group("other").strip(),
+            m.group("body").strip(),
+            m.group("ts") or log_ts,
+        )
+
+    clean = _strip_wow_markup(stripped)
+
+    tag = NATIVE_TAG_RE.match(clean)
+    if tag:
+        name_m = NATIVE_NAME_RE.match(tag.group("rest"))
+        if name_m:
+            other = (name_m.group("name") or name_m.group("name2") or "").strip()
+            body = name_m.group("body").strip()
+            if other:
+                if tag.group("kind") == "From":
+                    return "incoming", own_default, other, body, log_ts
+                return "outgoing", own_default, other, body, log_ts
+
+    # Legacy fallbacks: some logs/chat addons print "Name whispers: body".
+    # Strip brackets so "[Name-Realm] whispers: body" also matches.
+    clean_nobrackets = clean.replace("[", "").replace("]", "")
     for pat in FALLBACKS:
-        m = pat.match(clean)
+        m = pat.match(clean_nobrackets)
         if m:
-            return own_default, m.group("from").strip(), m.group("body").strip()
+            return "incoming", own_default, m.group("from").strip(), m.group("body").strip(), log_ts
     return None
 
 
-def tail_file(path: Path, stop_event: threading.Event, log_cb):
-    """Yield new lines forever. Handles rotation."""
+def tail_file(path: Path, stop_event: threading.Event, log_cb, start_offset=None):
+    """Yield lines forever. Handles rotation.
+
+    `start_offset` (bytes) resumes from where a history replay stopped, so no
+    line is lost between the replay and the live tail.
+    """
     while not path.exists() and not stop_event.is_set():
         log_cb(f"⏳ Aguardando {path.name} — digite /chatlog no jogo.")
         for _ in range(10):
@@ -585,12 +744,20 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
     if stop_event.is_set():
         return
     fh = open(path, "r", encoding="utf-8", errors="replace")
-    fh.seek(0, os.SEEK_END)
+    if start_offset is not None and start_offset > 0:
+        try:
+            fh.seek(start_offset)
+            size = fh.tell()
+        except OSError:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+    else:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
     try:
         inode = os.stat(path).st_ino
     except (AttributeError, OSError):
         inode = None
-    size = fh.tell()
     while not stop_event.is_set():
         line = fh.readline()
         if line:
@@ -616,11 +783,17 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
     fh.close()
 
 
-def make_ext_id(character: str, player: str, body: str) -> str:
+def make_ext_id(character: str, player: str, body: str, ts: str = "") -> str:
+    """Deterministic externalId.
+
+    Uses the whisper's own timestamp (addon <TS> or chat-log timestamp) so
+    re-reading the SAME line (log replay, addon dump, log rotation) always
+    yields the same id → the site upserts idempotently and never duplicates.
+    """
     h = hashlib.sha1(
-        f"{time.time():.3f}|{character}|{player}|{body}".encode("utf-8")
+        f"bw|{character}|{player}|{body}|{ts}".encode("utf-8")
     ).hexdigest()
-    return f"in-{h[:16]}"
+    return f"in-{h[:24]}"
 
 
 # =============================================================================
@@ -631,8 +804,15 @@ _send_lock = threading.Lock()
 DEFAULT_CONTROLS = {
     "bridgeReaderEnabled": True,
     "gseMasterEnabled": False,
-    "whisperFocusDelayMs": 500,
-    "whisperAfterSendDelayMs": 500,
+    "whisperFocusDelayMs": 2000,
+    "whisperAfterSendDelayMs": 1000,
+    "whisperChatOpenDelayMs": 1000,
+    "whisperWReadyDelayMs": 1000,
+    "whisperSpaceDelayMs": 1000,
+    "whisperKeystrokeDelayMs": 100,
+    "whisperChatSendDelayMs": 1000,
+    "whisperCloseChatEnabled": False,
+    "whisperChatCloseDelayMs": 400,
     "queuePollMs": 1500,
 }
 
@@ -658,10 +838,76 @@ class BridgeEngine:
         self.spammers_lock = threading.Lock()
         self.controls = DEFAULT_CONTROLS.copy()
         self.controls_lock = threading.Lock()
+        # Recent whisper triples (character, player, body, timestamp).
+        # Used to avoid double-ingesting the same whisper: the addon echo and
+        # the native [W From]/[W To] chat log lines describe the same event,
+        # and messages the bridge itself typed are already recorded by the site.
+        self.recent_whispers: deque = deque(maxlen=400)
+        self.recent_whispers_lock = threading.Lock()
+        # Persisted history of whispers the bridge itself sent. Used during
+        # log replay to skip `[W To]` echoes of our own sends (the site already
+        # has those rows from the queue ack) so history never duplicates.
+        self.sent_history: list[tuple[str, str, str]] = []
+        self.sent_history_lock = threading.Lock()
+        self.sent_history_path = app_data_dir() / "sent_history.json"
+        self._load_sent_history()
+        # Characters whose addon history was already dumped this session.
+        self.dumped_history: set[str] = set()
+        self.dumped_history_lock = threading.Lock()
+
+    # ------------------------------------------------------------------ #
+    # Sent-history persistence (avoids duplicating [W To] on log replay)
+    # ------------------------------------------------------------------ #
+    def _load_sent_history(self) -> None:
+        try:
+            if self.sent_history_path.exists():
+                data = json.loads(self.sent_history_path.read_text(encoding="utf-8"))
+                entries = data if isinstance(data, list) else []
+                self.sent_history = [
+                    (str(e[0]), str(e[1]), str(e[2])) for e in entries if isinstance(e, list) and len(e) == 3
+                ][-800:]
+        except Exception:
+            self.sent_history = []
+
+    def _persist_sent(self, character: str, player: str, body: str) -> None:
+        with self.sent_history_lock:
+            entry = (character, player, body)
+            self.sent_history.append(entry)
+            self.sent_history = self.sent_history[-800:]
+            payload = [[c, p, b] for (c, p, b) in self.sent_history]
+        try:
+            self.sent_history_path.write_text(json.dumps(payload), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _was_bridge_sent(self, character: str, player: str, body: str) -> bool:
+        with self.sent_history_lock:
+            for (c, p, b) in self.sent_history:
+                if c == character and p == player and b == body:
+                    return True
+        return False
+
+    def _recent_dup(self, character: str, player: str, body: str) -> bool:
+        """True if this exact whisper was already processed in the last ~15s."""
+        now = time.time()
+        cutoff = now - 15.0
+        with self.recent_whispers_lock:
+            while self.recent_whispers and self.recent_whispers[0][3] < cutoff:
+                self.recent_whispers.popleft()
+            for (c, p, b, _t) in self.recent_whispers:
+                if c == character and p == player and b == body:
+                    return True
+        return False
+
+    def _remember_whisper(self, character: str, player: str, body: str) -> None:
+        with self.recent_whispers_lock:
+            self.recent_whispers.append((character, player, body, time.time()))
 
     def start(self, chars: list[RuntimeCharacter]) -> None:
         self.chars = chars
         self.stop_event.clear()
+        with self.dumped_history_lock:
+            self.dumped_history.clear()
 
         # De-dup chat logs — one tailer per file.
         seen: set[Path] = set()
@@ -692,6 +938,12 @@ class BridgeEngine:
         t5 = threading.Thread(target=self._gse_syncer, daemon=True)
         t5.start()
         self.threads.append(t5)
+
+        # History syncer — asks each window's addon to dump its stored
+        # whispers once (when its window is detected online).
+        t6 = threading.Thread(target=self._history_syncer, daemon=True)
+        t6.start()
+        self.threads.append(t6)
 
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
@@ -744,12 +996,18 @@ class BridgeEngine:
                         + ("ligado" if merged["gseMasterEnabled"] else "desligado")
                     )
                     last_gse_master = merged["gseMasterEnabled"]
-                    if not merged["gseMasterEnabled"]:
-                        self._stop_all_spammers("master GSE OFF")
+
+                if not merged["gseMasterEnabled"]:
+                    # Idempotent guard: stop spammers on EVERY cycle while the
+                    # master is off. Without this, the gse_syncer thread can
+                    # race us — it may restart a spammer with stale controls
+                    # right after we stopped it, so the key kept being pressed
+                    # even with "Master GSE" off on the site.
+                    self._stop_all_spammers("master GSE OFF")
             except Exception as e:
                 self.log(f"❌ control sync falhou: {e}")
 
-            for _ in range(10):
+            for _ in range(5):  # 0.5s cadence — reacts faster to master toggles
                 if self.stop_event.is_set():
                     return
                 time.sleep(0.1)
@@ -765,27 +1023,57 @@ class BridgeEngine:
             self.log(f"⏹ {count} GSE parado(s): {reason}")
 
     def _incoming(self, ref: RuntimeCharacter) -> None:
+        # 1) History replay: ingest EVERYTHING already in the chat log file
+        #    (whispers received before the bridge started or while it was off).
+        offset = self._replay_existing_log(ref)
+
+        # 2) Live tail: resume from where the replay stopped so no line is
+        #    ever lost between the two phases.
         buffer: list[dict] = []
         last_flush = time.time()
-        for line in tail_file(ref.chat_log, self.stop_event, self.log):
+        lines_seen = 0
+        last_whisper_at: Optional[float] = None
+        hint_emitted = False
+        for line in tail_file(ref.chat_log, self.stop_event, self.log, start_offset=offset):
             if not self._get_controls().get("bridgeReaderEnabled", True):
                 # Reader disabled from the site: keep the tailer alive, but do
                 # not parse/ingest messages until re-enabled.
                 time.sleep(0.2)
                 continue
+            lines_seen += 1
             parsed = parse_whisper(line, ref.character)
             if parsed:
-                own, sender, body = parsed
-                character = own or ref.character
-                self.log(f"← [{character}] {sender}: {body}")
+                direction, character, other, body, ts = parsed
+                character = self._canonical_char(character or ref.character)
+                if self._recent_dup(character, other, body):
+                    # Same whisper already captured (addon echo + native log
+                    # line, or a message the bridge itself typed).
+                    continue
+                arrow = "→" if direction == "outgoing" else "←"
+                self.log(f"{arrow} [{character}] {other}: {body}")
+                self._remember_whisper(character, other, body)
+                last_whisper_at = time.time()
+                hint_emitted = False
                 buffer.append(
                     {
-                        "externalId": make_ext_id(character, sender, body),
+                        "externalId": make_ext_id(character, other, body, ts),
                         "character": character,
-                        "player": sender,
+                        "player": other,
                         "body": body,
-                        "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "direction": direction,
+                        "status": "sent" if direction == "outgoing" else "received",
+                        "receivedAt": ext_ts_to_iso(ts),
                     }
+                )
+            elif lines_seen > 30 and (last_whisper_at is None or time.time() - last_whisper_at > 180) and not hint_emitted:
+                # Watching the log but no whisper line was ever parsed. Surface
+                # the two most common setup mistakes instead of failing silently.
+                hint_emitted = True
+                self.log(
+                    "💡 Nenhum whisper detectado no chatlog desta janela ainda. "
+                    "Verifique: (1) digite /chatlog no jogo; "
+                    "(2) instale o addon WIMBridge (recomendado). "
+                    "O fallback nativo ([W From]/[W To]) também funciona só com /chatlog."
                 )
             if buffer and (len(buffer) >= 10 or time.time() - last_flush > 1.5):
                 try:
@@ -795,6 +1083,219 @@ class BridgeEngine:
                 except Exception as e:
                     self.log(f"❌ ingest falhou: {e}")
                     time.sleep(2)
+
+    def _canonical_char(self, name: str) -> str:
+        """Normalize an addon-echoed OWN name to the configured character
+        (case-insensitive), so conversations never split across two spellings."""
+        if not name:
+            return name
+        for c in self.chars:
+            if c.character.lower() == name.lower():
+                return c.character
+        return name
+
+    def _replay_existing_log(self, ref: RuntimeCharacter) -> int:
+        """Re-read the existing chat log and ingest every whisper line found.
+
+        Returns the byte offset where the replay stopped (the live tailer
+        resumes from there). Deterministic externalIds make this idempotent —
+        re-reading the same file never duplicates messages on the site.
+        """
+        if not self._get_controls().get("bridgeReaderEnabled", True):
+            return 0
+        path = ref.chat_log
+        if not path.exists():
+            return 0
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return 0
+        if size == 0:
+            return 0
+
+        chunk = ""
+        end_offset = 0
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(max(0, size - 2_000_000))  # last ~2MB of history
+                fh.readline()  # drop partial first line
+                chunk = fh.read()
+                end_offset = fh.tell()
+        except OSError:
+            return 0
+        if not chunk:
+            return end_offset
+
+        # If the addon was writing echoes to this file, native [W From] lines
+        # are duplicates of the addon lines — skip them to avoid double rows.
+        has_addon = "[WIMBRIDGE]" in chunk
+
+        buffer: list[dict] = []
+        last_flush = time.time()
+        restored = 0
+
+        def flush() -> None:
+            nonlocal restored
+            if not buffer:
+                return
+            try:
+                inserted = self.api.ingest(buffer)
+                restored += inserted
+            except Exception as e:
+                self.log(f"❌ replay do histórico falhou: {e}")
+            buffer.clear()
+
+        for line in chunk.splitlines():
+            parsed = parse_whisper(line, ref.character)
+            if not parsed:
+                continue
+            direction, character, other, body, ts = parsed
+            character = self._canonical_char(character or ref.character)
+            if direction == "outgoing":
+                # Skip [W To] echoes of messages the BRIDGE itself sent: the
+                # site already has those rows from the queue ack.
+                if self._was_bridge_sent(character, other, body):
+                    continue
+            elif has_addon:
+                # Addon echo already covers this received whisper.
+                continue
+            buffer.append(
+                {
+                    "externalId": make_ext_id(character, other, body, ts),
+                    "character": character,
+                    "player": other,
+                    "body": body,
+                    "direction": direction,
+                    "status": "sent" if direction == "outgoing" else "received",
+                    "receivedAt": ext_ts_to_iso(ts),
+                }
+            )
+            if len(buffer) >= 10:
+                flush()
+            if time.time() - last_flush > 1.5 and buffer:
+                flush()
+                last_flush = time.time()
+        flush()
+
+        if restored > 0:
+            self.log(
+                f"📜 {restored} mensagem(ns) do histórico de {path.name} "
+                f"restaurada(s) para o site."
+            )
+        return end_offset
+
+    def _type_command(self, ref: RuntimeCharacter, command: str) -> None:
+        """Focus the window, open the chat, paste `command`, send it, and close
+        the chat again — with all the safety delays. Shared by whisper sends
+        and the addon history dump (/wimbridge dump)."""
+        if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
+            raise RuntimeError("pyautogui/pydirectinput não disponíveis")
+
+        # Pause EVERY GSE spammer while we type.
+        with self.spammers_lock:
+            paused_spammers = list(self.spammers.values())
+        for s in paused_spammers:
+            s.pause_event.set()
+
+        try:
+            with _send_lock:
+                controls = self._get_controls()
+                # PISOS de segurança: cada etapa espera no MÍNIMO o valor
+                # abaixo antes de mandar a próxima tecla. O jogo não recebe
+                # input novo antes de terminar a ação anterior — mensagem
+                # "picada" e chat bugando eram teclas rápidas demais.
+                focus_delay = max(
+                    0.5, int(controls.get("whisperFocusDelayMs", 1000)) / 1000.0
+                )
+                open_delay = max(
+                    0.5, int(controls.get("whisperChatOpenDelayMs", 2000)) / 1000.0
+                )
+                keystroke_delay = max(
+                    0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
+                )
+                send_delay = max(
+                    0.4, int(controls.get("whisperChatSendDelayMs", 800)) / 1000.0
+                )
+                # ATENÇÃO: o WoW JÁ fecha o campo de chat sozinho depois de
+                # enviar. Pressionar ESC com o chat fechado ABRE O MENU do
+                # jogo — por isso o default é desligado.
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", False))
+                close_delay = max(
+                    0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
+                )
+                after_delay = max(
+                    0.3, int(controls.get("whisperAfterSendDelayMs", 800)) / 1000.0
+                )
+                if not focus_hwnd(ref.hwnd):
+                    raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
+                # 1) Espera a janela receber o foco de verdade.
+                time.sleep(focus_delay)
+                press_key("enter")  # abre o campo de chat
+                # 2) Espera o campo de chat abrir COMPLETAMENTE antes de
+                #    escrever qualquer coisa (este é o delay que estava
+                #    rápido demais — o início da mensagem era engolido).
+                time.sleep(open_delay)
+                # 3) Limpa qualquer texto que tenha ficado no campo (ex.: uma
+                #    mensagem anterior que falhou) para o comando nunca se
+                #    misturar com restos.
+                press_ctrl_a()
+                time.sleep(0.25)
+                # 4) Atomic paste via clipboard: o comando inteiro chega de
+                #    uma vez.
+                pasted = False
+                if HAS_WIN32:
+                    pasted = set_clipboard_text(command) and paste_ctrl_v()
+                if not pasted:
+                    # Fallback: digita com pausa generosa entre teclas.
+                    if HAS_PYDIRECTINPUT:
+                        for ch in command:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(command, interval=keystroke_delay)
+                # 5) Espera o jogo processar o texto inteiro antes do Enter.
+                time.sleep(send_delay)
+                press_key("enter")  # envia o whisper
+                if close_enabled:
+                    # Somente se o usuário ligar explicitamente (alguns setups
+                    # mantêm o chat aberto após enviar).
+                    time.sleep(close_delay)
+                    press_key("esc")
+                # 6) Estabilidade antes de liberar o GSE de volta.
+                time.sleep(after_delay)
+        finally:
+            for s in paused_spammers:
+                s.pause_event.clear()
+
+    def _history_syncer(self) -> None:
+        """Dumps each window's addon-stored whisper history once per session
+        (the dump lines flow through the chat log and are ingested)."""
+        last_warn: dict[str, float] = {}
+        while not self.stop_event.is_set():
+            if not self._get_controls().get("bridgeReaderEnabled", True):
+                time.sleep(1)
+                continue
+            with self.dumped_history_lock:
+                pending = [
+                    c for c in self.chars if c.character not in self.dumped_history
+                ]
+            for ref in pending:
+                if self.stop_event.is_set():
+                    return
+                try:
+                    self._type_command(ref, "/wimbridge dump")
+                    with self.dumped_history_lock:
+                        self.dumped_history.add(ref.character)
+                    self.log(f"📜 histórico do addon sincronizado para {ref.character}.")
+                except Exception as e:
+                    now = time.time()
+                    if now - last_warn.get(ref.character, 0) > 30:
+                        last_warn[ref.character] = now
+                        self.log(
+                            f"⚠ histórico de {ref.character} ainda não sincronizado "
+                            f"({e}) — tentando de novo quando a janela abrir."
+                        )
+                time.sleep(1.5)  # gap between windows
+            time.sleep(2)
 
     def _outgoing(self) -> None:
         while not self.stop_event.is_set():
@@ -835,50 +1336,115 @@ class BridgeEngine:
             time.sleep(max(0.5, min(10.0, poll_ms / 1000.0)))
 
     def _send(self, ref: RuntimeCharacter, player: str, body: str) -> None:
+        """
+        ORDEM OFICIAL DE ENVIO (definida pelo usuário para evitar bugs):
+          1) focar a janela ......... aguardar 2s   (whisperFocusDelayMs)
+          2) pressionar Enter ....... aguardar 1s   (whisperChatOpenDelayMs)
+          3) colar /w Nome-Server ... aguardar 1s   (whisperWReadyDelayMs)
+          4) pressionar ESPAÇO ...... aguardar 1s   (whisperSpaceDelayMs)
+             → O WoW EXIGE o espaço para abrir o modo whisper!
+          5) colar a mensagem ....... aguardar 1s   (whisperChatSendDelayMs)
+          6) pressionar Enter ....... aguardar 1s   (whisperAfterSendDelayMs)
+        """
         if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
             raise RuntimeError("pyautogui/pydirectinput não disponíveis")
 
-        # Pause this character's GSE spammer during the type sequence so the
-        # simulated keys don't collide with GSE's rotation. Other characters
-        # keep spamming — their spammers write to their own windows via
-        # PostMessage in background.
-        spammer = None
+        # Pausa TODOS os spammers GSE durante a digitação.
         with self.spammers_lock:
-            spammer = self.spammers.get(ref.character)
-        if spammer:
-            spammer.pause_event.set()
+            paused_spammers = list(self.spammers.values())
+        for s in paused_spammers:
+            s.pause_event.set()
 
         try:
             with _send_lock:
                 controls = self._get_controls()
-                focus_delay = int(controls.get("whisperFocusDelayMs", 500)) / 1000.0
-                after_delay = int(controls.get("whisperAfterSendDelayMs", 500)) / 1000.0
+                focus_delay = max(
+                    0.5, int(controls.get("whisperFocusDelayMs", 2000)) / 1000.0
+                )
+                open_delay = max(
+                    0.3, int(controls.get("whisperChatOpenDelayMs", 1000)) / 1000.0
+                )
+                w_ready_delay = max(
+                    0.3, int(controls.get("whisperWReadyDelayMs", 1000)) / 1000.0
+                )
+                space_delay = max(
+                    0.3, int(controls.get("whisperSpaceDelayMs", 1000)) / 1000.0
+                )
+                keystroke_delay = max(
+                    0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
+                )
+                send_delay = max(
+                    0.3, int(controls.get("whisperChatSendDelayMs", 1000)) / 1000.0
+                )
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", False))
+                close_delay = max(
+                    0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
+                )
+                after_delay = max(
+                    0.3, int(controls.get("whisperAfterSendDelayMs", 1000)) / 1000.0
+                )
+
                 if not focus_hwnd(ref.hwnd):
-                    raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
-                # Delay de estabilidade: dá tempo para o foco e mensagens em
-                # background terminarem antes de digitar o /w.
-                time.sleep(max(0.1, min(5.0, focus_delay)))
-                if HAS_PYDIRECTINPUT:
-                    pydirectinput.press("enter")
-                else:
-                    pyautogui.press("enter")
-                time.sleep(0.08)
-                cmd = f"/w {player} {body}"
-                if HAS_PYAUTOGUI:
-                    pyautogui.typewrite(cmd, interval=0.02)
-                else:
-                    for ch in cmd:
-                        pydirectinput.write(ch, interval=0.02)
-                time.sleep(0.05)
-                if HAS_PYDIRECTINPUT:
-                    pydirectinput.press("enter")
-                else:
-                    pyautogui.press("enter")
-                # Delay de estabilidade antes de liberar o GSE de volta.
-                time.sleep(max(0.1, min(5.0, after_delay)))
+                    raise RuntimeError(
+                        f"não consegui focar janela {ref.window_title!r}"
+                    )
+
+                # 1) Janela focada → aguardar o tempo configurado (2s).
+                time.sleep(focus_delay)
+
+                # 2) Enter abre o campo de chat → aguardar (1s).
+                press_key("enter")
+                time.sleep(open_delay)
+
+                # Segurança: limpa qualquer texto residual no campo.
+                press_ctrl_a()
+                time.sleep(0.25)
+
+                # 3) Colar "/w Nome-Server" → aguardar (1s).
+                w_cmd = f"/w {player}"
+                pasted_w = False
+                if HAS_WIN32:
+                    pasted_w = set_clipboard_text(w_cmd) and paste_ctrl_v()
+                if not pasted_w:
+                    if HAS_PYDIRECTINPUT:
+                        for ch in w_cmd:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(w_cmd, interval=keystroke_delay)
+                time.sleep(w_ready_delay)
+
+                # 4) ESPAÇO — o WoW exige espaço após /w Nome para abrir o
+                #    modo whisper → aguardar (1s).
+                press_key("space")
+                time.sleep(space_delay)
+
+                # 5) Colar a mensagem → aguardar (1s).
+                pasted_body = False
+                if HAS_WIN32:
+                    pasted_body = set_clipboard_text(body) and paste_ctrl_v()
+                if not pasted_body:
+                    if HAS_PYDIRECTINPUT:
+                        for ch in body:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(body, interval=keystroke_delay)
+                time.sleep(send_delay)
+
+                # 6) Enter envia o whisper → aguardar (1s).
+                press_key("enter")
+                if close_enabled:
+                    time.sleep(close_delay)
+                    press_key("esc")
+                time.sleep(after_delay)
+
+                # Remember what we just typed: the game echoes the sent whisper
+                # to the chat log as [W To] — skip it so the site doesn't show
+                # the same outgoing message twice (live + replay + restarts).
+                self._remember_whisper(ref.character, player, body)
+                self._persist_sent(ref.character, player, body)
         finally:
-            if spammer:
-                spammer.pause_event.clear()
+            for s in paused_spammers:
+                s.pause_event.clear()
 
     def _gse_syncer(self) -> None:
         """
