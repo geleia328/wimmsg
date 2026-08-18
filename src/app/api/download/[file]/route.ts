@@ -25,6 +25,7 @@ const ALLOWED = new Set([
   "WIMBridge.lua",
   "WIMBridge.toc",
   "build-windows.yml",
+  "bakers-whisper-1.4.0-update.zip",
 ]);
 
 const MIME: Record<string, string> = {
