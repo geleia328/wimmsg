@@ -1,91 +1,154 @@
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { checkBridgeAuth, unauthorized, sameName, parseRelayBody } from "@/lib/auth";
-import { and, desc, or, sql } from "drizzle-orm";
+import { checkBridgeAuth } from "@/lib/auth";
+import { eq, and, sql } from "drizzle-orm";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const character = (url.searchParams.get("character") || "").trim();
-  const player = (url.searchParams.get("player") || "").trim();
-  const limit = Math.min(500, Math.max(1, parseInt(url.searchParams.get("limit") || "50", 10) || 50));
-  if (!character || !player) {
-    return Response.json({ ok: false, error: "character and player required" }, { status: 400 });
-  }
-  const rows = await db
-    .select()
-    .from(messages)
-    .where(
-      and(
-        sql`lower(${messages.character}) = lower(${character})`,
-        sql`lower(${messages.player}) = lower(${player})`,
-      ),
-    )
-    .orderBy(desc(messages.createdAt))
-    .limit(limit);
-  return Response.json({ ok: true, messages: rows.reverse() });
-}
+type SyncPayload = {
+  messages: Array<{
+    externalId?: string;
+    character: string;
+    player: string;
+    body: string;
+    direction?: "incoming" | "outgoing";
+    status?: string;
+    receivedAt?: string;
+  }>;
+};
 
-type SyncMsg = {
-  externalId?: string;
+type ParsedRelay = {
+  direction: "incoming" | "outgoing";
   character: string;
   player: string;
   body: string;
-  direction?: "incoming" | "outgoing";
-  status?: string;
-  receivedAt?: string;
 };
 
-export async function POST(req: Request) {
-  if (!checkBridgeAuth(req)) return unauthorized();
-  let payload: unknown;
+function parseEmbeddedRelay(body: string): ParsedRelay | null {
+  const from = body.match(
+    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><FROM:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
+  );
+  if (from) {
+    return {
+      direction: "incoming",
+      character: from[1].trim(),
+      player: from[2].trim(),
+      body: from[3].trim(),
+    };
+  }
+  const to = body.match(
+    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><TO:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
+  );
+  if (to) {
+    return {
+      direction: "outgoing",
+      character: to[1].trim(),
+      player: to[2].trim(),
+      body: to[3].trim(),
+    };
+  }
+  return null;
+}
+
+/**
+ * POST /api/sync — bridge sends historical messages from log file
+ * GET  /api/sync — returns last 50 messages for a character (for UI refresh)
+ */
+export async function POST(request: NextRequest) {
+  const guard = await checkBridgeAuth(request);
+  if (!guard.ok) return guard.response;
+
+  let payload: SyncPayload;
   try {
-    payload = await req.json();
+    payload = (await request.json()) as SyncPayload;
   } catch {
-    return Response.json({ ok: false, error: "invalid json" }, { status: 400 });
+    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
-  const list: SyncMsg[] = Array.isArray((payload as { messages?: unknown })?.messages)
-    ? ((payload as { messages: SyncMsg[] }).messages)
-    : Array.isArray(payload)
-    ? (payload as SyncMsg[])
-    : [payload as SyncMsg];
-  let inserted = 0;
-  let skipped = 0;
-  for (const raw of list) {
-    if (!raw || typeof raw !== "object") { skipped++; continue; }
-    let character = String(raw.character || "").trim();
-    let player = String(raw.player || "").trim();
-    let body = String(raw.body || "").trim();
-    let direction: "incoming" | "outgoing" = raw.direction === "outgoing" ? "outgoing" : "incoming";
-    const parsed = parseRelayBody(character, player, body);
-    if (parsed) {
-      character = parsed.character;
-      player = parsed.player;
-      body = parsed.body;
-      direction = parsed.direction;
-    }
-    if (!character || !player || !body) { skipped++; continue; }
-    const externalId = raw.externalId ? String(raw.externalId) : null;
-    const status = raw.status ? String(raw.status) : direction === "incoming" ? "received" : "sent";
-    const createdAt = raw.receivedAt ? new Date(raw.receivedAt) : new Date();
-    try {
-      if (externalId) {
-        await db.execute(sql`
-          insert into messages (character, player, direction, body, status, external_id, created_at)
-          values (${character}, ${player}, ${direction}, ${body}, ${status}, ${externalId}, ${createdAt})
-          on conflict (external_id) do nothing
-        `);
-      } else {
-        await db.insert(messages).values({ character, player, direction, body, status, createdAt });
-      }
-      inserted++;
-    } catch (e) {
-      skipped++;
-      console.error("[sync] insert error", e);
-    }
+
+  if (!payload || !Array.isArray(payload.messages)) {
+    return NextResponse.json({ error: "missing_messages" }, { status: 400 });
   }
-  // Silence unused import warnings
-  void or; void and; void desc; void sameName;
-  return Response.json({ ok: true, inserted, skipped, total: list.length });
+
+  const rows = payload.messages
+    .filter(
+      (m) =>
+        m &&
+        typeof m.player === "string" &&
+        typeof m.body === "string" &&
+        typeof m.character === "string",
+    )
+    .map((m) => {
+      const relay = parseEmbeddedRelay(m.body);
+      const character = (relay?.character ?? m.character.trim()) || "unknown";
+      const player = relay?.player ?? m.player.trim();
+      const body = relay?.body ?? m.body;
+      const direction = relay?.direction ?? m.direction ?? "incoming";
+      const isOutgoing = direction === "outgoing";
+      return {
+        character,
+        player,
+        body,
+        direction: isOutgoing ? ("outgoing" as const) : ("incoming" as const),
+        status: isOutgoing
+          ? ((m.status ?? "sent") as "sent" | "failed")
+          : ("received" as const),
+        externalId:
+          m.externalId ??
+          `sync-${character}-${player}-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 8)}`,
+        createdAt: m.receivedAt ? new Date(m.receivedAt) : new Date(),
+      };
+    })
+    .filter((r) => r.player.length > 0 && r.body.length > 0);
+
+  if (rows.length === 0) {
+    return NextResponse.json({ inserted: 0 });
+  }
+
+  const inserted = await db
+    .insert(messages)
+    .values(rows)
+    .onConflictDoNothing({ target: messages.externalId })
+    .returning({ id: messages.id });
+
+  return NextResponse.json({ inserted: inserted.length, received: rows.length });
+}
+
+export async function GET(request: NextRequest) {
+  const character = request.nextUrl.searchParams.get("character");
+  const player = request.nextUrl.searchParams.get("player");
+  const limit = Math.min(
+    100,
+    Math.max(1, Number(request.nextUrl.searchParams.get("limit") ?? "50")),
+  );
+
+  const conditions = [];
+  if (character) {
+    conditions.push(eq(messages.character, character));
+  }
+  if (player) {
+    conditions.push(eq(messages.player, player));
+  }
+
+  const rows = await db
+    .select({
+      id: messages.id,
+      character: messages.character,
+      player: messages.player,
+      body: messages.body,
+      direction: messages.direction,
+      status: messages.status,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(sql`${messages.createdAt} desc`)
+    .limit(limit);
+
+  return NextResponse.json({
+    messages: rows.reverse(), // oldest first
+  });
 }

@@ -1,140 +1,395 @@
-import NavBar from "@/components/NavBar";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
+const CODE_BLOCK =
+  "rounded-lg bg-slate-950 border border-slate-800 p-4 text-xs overflow-x-auto";
+
 export default function SetupPage() {
   return (
-    <>
-      <NavBar />
-      <div className="mx-auto max-w-3xl px-4 py-6 text-sm leading-6 text-slate-300">
-        <h1 className="text-2xl font-semibold text-slate-100">Setup completo</h1>
-        <p className="mt-2 text-slate-400">
-          Passo a passo para conectar o Bakers Whisper ao World of Warcraft. Novidade da versão 2.6: leitura via
-          text-to-speech + speech-to-text, para bypass total do <span className="font-mono">WoWChatLog.txt</span>.
-        </p>
+    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
+      <Link href="/" className="text-xs text-amber-400 hover:underline">
+        ← voltar ao chat
+      </Link>
+      <h1 className="mt-2 text-2xl font-bold sm:text-3xl">
+        Setup do Bakers Whisper
+      </h1>
+      <p className="mt-2 text-slate-400">
+        Modo <b>multi-janela</b>: você abre várias sessões do WoW no mesmo PC,
+        vê todos os whispers agregados aqui e responde manualmente pelo site.
+        Cada resposta é entregue pelo Python na janela do personagem certo.
+      </p>
+      <p className="mt-2 text-sm">
+        <Link
+          href="/accounts"
+          className="rounded border border-emerald-500/50 bg-emerald-500/10 px-3 py-1 text-emerald-300 hover:bg-emerald-500/20"
+        >
+          📡 Abrir varredura de contas
+        </Link>{" "}
+        para ver as janelas do WoW detectadas em tempo real.{" "}
+        <a
+          href="/report"
+          target="_blank"
+          rel="noreferrer"
+          className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
+        >
+          📄 Relatório completo do projeto
+        </a>
+      </p>
 
-        <section className="mt-6">
-          <h2 className="text-lg font-semibold text-slate-100">1. Instalar o addon WIMBridge</h2>
-          <ol className="mt-2 list-decimal space-y-1 pl-5">
-            <li>
-              Baixe <span className="font-mono text-emerald-400">WIMBridge.zip</span> em{" "}
-              <span className="font-mono">/download</span>.
-            </li>
-            <li>
-              Extraia em <span className="font-mono">World of Warcraft/_retail_/Interface/AddOns/</span>:
-              <pre className="mt-2 rounded-lg bg-slate-900 p-3 text-xs">{`AddOns/
-  WIMBridge/
-    WIMBridge.toc
-    WIMBridge.lua`}</pre>
-            </li>
-            <li>Ative o addon na tela de personagens e entre no jogo.</li>
-            <li>
-              Confirme com <span className="font-mono">/wimbridge who</span> — deve mostrar v2.6.0.
-            </li>
-          </ol>
-        </section>
-
-        <section className="mt-6">
-          <h2 className="text-lg font-semibold text-slate-100">2. Instalar o bridge Python</h2>
-          <ol className="mt-2 list-decimal space-y-1 pl-5">
-            <li>Instale Python 3.10+ (marque &ldquo;Add to PATH&rdquo;).</li>
-            <li>
-              Baixe <span className="font-mono">wim_bridge_gui.py</span>, <span className="font-mono">wim_bridge.py</span> e{" "}
-              <span className="font-mono">requirements.txt</span> na mesma pasta.
-            </li>
-            <li>
-              <span className="font-mono">pip install -r requirements.txt</span>
-            </li>
-            <li>
-              <span className="font-mono">python wim_bridge_gui.py</span>
-            </li>
-          </ol>
-        </section>
-
-        <section className="mt-6 rounded-xl border border-emerald-800/60 bg-emerald-950/30 p-4">
-          <h2 className="text-lg font-semibold text-emerald-200">3. 🔊 Ativar leitura por voz (recomendado)</h2>
-          <p className="mt-1 text-slate-300">
-            Esse é o caminho novo que resolve o problema de mensagens só aparecerem quando você fecha o WoW. O addon
-            fala cada whisper com nomes soletrados letra a letra, o bridge captura o áudio da placa de som
-            (loopback WASAPI) e transcreve local com Whisper. Sem depender de flush de arquivo.
+      <div className="mt-8 space-y-8">
+        <section className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-5">
+          <h2 className="text-xl font-semibold text-emerald-300">
+            🚀 Hospedagem grátis (Vercel + Neon)
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Combinação 100% grátis, sem cartão de crédito, com domínio HTTPS
+            incluso:
           </p>
-          <ol className="mt-3 list-decimal space-y-1 pl-5">
+          <ol className="mt-3 list-decimal space-y-3 pl-6 text-sm text-slate-300">
             <li>
-              Baixe também <span className="font-mono">wim_bridge_stt.py</span> e{" "}
-              <span className="font-mono">requirements-stt.txt</span>.
+              <b>Suba o código pro GitHub</b> (repositório público ou privado,
+              tanto faz).
             </li>
             <li>
-              <span className="font-mono">pip install -r requirements-stt.txt</span>{" "}
-              <span className="text-slate-400">(numpy, soundcard, faster-whisper — na primeira vez baixa ~500 MB do modelo &ldquo;small&rdquo;)</span>
+              Crie uma conta grátis em{" "}
+              <a
+                href="https://neon.tech"
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-400 hover:underline"
+              >
+                neon.tech
+              </a>
+              , crie um projeto Postgres, e copie a <b>Pooled connection</b>{" "}
+              string (contém <code>-pooler</code> no hostname, algo como{" "}
+              <code>
+                postgresql://user:pass@ep-xxx-pooler.neon.tech/neondb?sslmode=require
+              </code>
+              ). O pooler é essencial em serverless — evita esgotar as
+              conexões do Postgres. Free tier: 0.5 GB + 190 h de compute/mês.
             </li>
             <li>
-              No GUI do bridge marque{" "}
-              <span className="font-mono text-emerald-300">🔊 Leitura por TTS→STT</span> e clique{" "}
-              <span className="font-mono">Salvar config</span> + <span className="font-mono">▶ Iniciar</span>.
+              Crie uma conta grátis em{" "}
+              <a
+                href="https://vercel.com"
+                target="_blank"
+                rel="noreferrer"
+                className="text-emerald-400 hover:underline"
+              >
+                vercel.com
+              </a>{" "}
+              → <b>Add New… → Project</b> → importe o repo do GitHub.
             </li>
             <li>
-              No WoW rode <span className="font-mono">/wimbridge tts on</span> (default é ligado) e{" "}
-              <span className="font-mono">/wimbridge tts test</span> para confirmar que a placa de som fala uma frase de teste.
+              Na tela de deploy, em <b>Environment Variables</b>, adicione:
+              <pre className={`${CODE_BLOCK} mt-2`}>
+                {`DATABASE_URL = <a connection string do Neon>
+BRIDGE_TOKEN = <um token aleatório longo>`}
+              </pre>
+              O <code>BRIDGE_TOKEN</code> é o segredo compartilhado com o seu
+              Python — sem ele, qualquer um consegue ler seus whispers.
+              Gere um bem aleatório (ex.{" "}
+              <code>openssl rand -hex 32</code>).
+            </li>
+            <li>Clique <b>Deploy</b>. Aguarde 1–2 min.</li>
+            <li>
+              Após o deploy, rode <b>uma vez</b> o comando abaixo no seu PC
+              (com <code>DATABASE_URL</code> apontando para o Neon) para
+              criar a tabela:
+              <pre className={`${CODE_BLOCK} mt-2`}>{`npx drizzle-kit push`}</pre>
             </li>
             <li>
-              Peça para alguém te sussurrar. O addon falará algo como{" "}
-              <span className="font-mono text-emerald-300">
-                &ldquo;bridge from C B S I E S dash A Z R A L O N says hello end&rdquo;
-              </span>
-              . Deve aparecer no site em ~1 s.
+              Seu site estará em{" "}
+              <code>https://bakers-whisper.vercel.app</code> (o nome exato
+              depende do que você escolher no Vercel).
+            </li>
+            <li>
+              No <code>config.ini</code> do Python bridge, ajuste:
+              <pre className={`${CODE_BLOCK} mt-2`}>{`api_url = https://bakers-whisper.vercel.app
+token   = <o mesmo BRIDGE_TOKEN>`}</pre>
             </li>
           </ol>
-          <div className="mt-3 rounded-lg bg-slate-950/60 p-3 text-xs text-slate-400">
-            <div className="font-medium text-slate-300">Dicas de qualidade</div>
-            <ul className="mt-1 list-disc space-y-1 pl-5">
-              <li>Deixe o volume do WoW audível (o loopback captura o que a placa toca, mesmo com fone).</li>
-              <li>Use modelo <span className="font-mono">small</span> em CPU normal. Se tiver GPU NVIDIA, mude para <span className="font-mono">device=cuda</span>.</li>
-              <li>
-                Se ficar cortando fala longa, aumente <span className="font-mono">silence_ms</span> e{" "}
-                <span className="font-mono">max_utter_ms</span> no <span className="font-mono">config.ini</span>.
-              </li>
-              <li>
-                Se pegar barulho demais, aumente <span className="font-mono">rms_threshold</span> para 0.015.
-              </li>
-              <li>
-                Ajuste a voz no jogo: <span className="font-mono">/wimbridge tts voices</span> e{" "}
-                <span className="font-mono">/wimbridge tts rate 4</span>.
-              </li>
-            </ul>
+
+          <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+            <b>Observação:</b> o polling a cada 2s (site + bridge) consome
+            invocações no plano grátis. Uso pessoal cabe tranquilo, mas se
+            você deixar aberto 24/7 em várias abas, pode encostar no limite.
+            Alternativas: rodar tudo local (<code>npm run build &amp;&amp; npm
+            start</code>), <a
+              href="https://render.com"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              Render
+            </a>{" "}
+            (free + spin-down) ou{" "}
+            <a
+              href="https://railway.app"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              Railway
+            </a>{" "}
+            ($5 grátis/mês).
           </div>
         </section>
 
-        <section className="mt-6">
-          <h2 className="text-lg font-semibold text-slate-100">4. Bônus: ler no navegador</h2>
-          <p className="mt-1">
-            No chat, ligue <span className="font-mono">🔊 Ler em voz alta</span> para que o próprio site fale as
-            mensagens que chegam usando o TTS do navegador. Prático para deixar aberto em outro monitor.
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            1. Arquitetura
+          </h2>
+          <ol className="mt-3 list-decimal space-y-2 pl-6 text-sm text-slate-300">
+            <li>
+              Cada janela do WoW roda com o addon <code>WIMBridge</code>{" "}
+              instalado. Ele ecoa cada whisper recebido no log de chat com o
+              marcador <code>[WIMBRIDGE]&lt;OWN:SeuChar-Reino&gt;&lt;FROM:Fulano-Reino&gt;msg</code>
+              .
+            </li>
+            <li>
+              Ative <code>/chatlog</code> em cada janela — isso grava tudo em{" "}
+              <code>_retail_/Logs/WoWChatLog.txt</code>.
+            </li>
+            <li>
+              O script Python observa esses arquivos em paralelo e envia os
+              whispers para este site.
+            </li>
+            <li>
+              Você lê tudo aqui num só painel, filtra por personagem, e
+              responde manualmente. Cada resposta vai para uma fila.
+            </li>
+            <li>
+              O Python pega da fila, <b>foca a janela correta</b> (pelo título)
+              e digita <code>/w Nome mensagem</code>.
+            </li>
+          </ol>
+        </section>
+
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            2. Preparando as janelas do WoW
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Para o auto-focus funcionar, cada janela precisa de um{" "}
+            <b>título único</b>. Duas formas:
+          </p>
+          <ul className="mt-3 list-disc space-y-1 pl-6 text-sm text-slate-300">
+            <li>
+              Ter instalações separadas do WoW em pastas distintas (ex.{" "}
+              <code>C:\Games\WoW-Inst1\</code>, <code>WoW-Inst2\</code>, ...) e
+              usar um utilitário simples de renomear janela como{" "}
+              <a
+                href="https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowtexta"
+                className="text-amber-400 hover:underline"
+              >
+                SetWindowText
+              </a>{" "}
+              ou o utilitário AutoHotkey <code>WinSetTitle</code>.
+            </li>
+            <li>
+              Rodar cada instância com o argumento{" "}
+              <code>-WindowTitle &quot;WoW - Aragorn&quot;</code> quando aplicável
+              (varia por launcher).
+            </li>
+          </ul>
+          <p className="mt-2 text-sm text-slate-300">
+            Depois, em cada janela, dentro do jogo, ative:
+          </p>
+          <pre className={CODE_BLOCK}>/chatlog</pre>
+        </section>
+
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            3. Instalar o addon WIMBridge
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Baixe o pacote completo:
+          </p>
+          <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
+            <li>
+              <a
+                href="/api/download/WIMBridge.zip"
+                className="text-amber-400 hover:underline"
+                download
+              >
+                📦 WIMBridge.zip
+              </a>{" "}
+              — descompacte em{" "}
+              <code>World of Warcraft/_retail_/Interface/AddOns/</code>
+            </li>
+          </ul>
+
+          <div className="mt-3 rounded border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
+            <b className="text-amber-300">O download do .zip não funciona?</b>
+            <p className="mt-1">
+              Alguns navegadores/antivírus bloqueiam .zip vindos de sites
+              desconhecidos. Baixe os 2 arquivos avulsos abaixo:
+            </p>
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              <li>
+                Crie uma pasta chamada exatamente{" "}
+                <code>WIMBridge</code> dentro de{" "}
+                <code>World of Warcraft/_retail_/Interface/AddOns/</code>
+              </li>
+              <li>
+                Baixe e coloque estes dois arquivos dentro dela:
+                <div className="mt-1 flex flex-wrap gap-2">
+                  <a
+                    href="/api/download/WIMBridge.toc"
+                    download
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
+                  >
+                    ⬇ WIMBridge.toc
+                  </a>
+                  <a
+                    href="/api/download/WIMBridge.lua"
+                    download
+                    className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300 hover:bg-amber-500/20"
+                  >
+                    ⬇ WIMBridge.lua
+                  </a>
+                </div>
+              </li>
+            </ol>
+            <p className="mt-2 text-slate-400">
+              Se o navegador abrir o arquivo como texto em vez de baixar,
+              clique com o <b>botão direito → &quot;Salvar link como…&quot;</b>.
+            </p>
+          </div>
+
+          <p className="mt-3 text-sm text-slate-300">
+            Depois de copiar os arquivos, faça <code>/reload</code> em cada
+            janela do WoW. Teste com <code>/wimbridge test</code> — deve
+            imprimir uma linha com o marcador.
           </p>
         </section>
 
-        <section className="mt-6">
-          <h2 className="text-lg font-semibold text-slate-100">5. Comandos do addon</h2>
-          <ul className="mt-2 list-disc space-y-1 pl-5 font-mono">
-            <li>/wimbridge who — versão e personagem</li>
-            <li>/wimbridge test — dispara relay + fala de teste (incoming)</li>
-            <li>/wimbridge testout — teste outgoing</li>
-            <li>/wimbridge log — garante /chatlog ligado</li>
-            <li>/wimbridge flush — força multi-flush do chatlog</li>
-            <li>/wimbridge channel — status do canal relay</li>
-            <li>/wimbridge tts on|off|test|voices|rate N|volume N</li>
-            <li>/wimbridge chan on|off — liga/desliga rota do canal relay</li>
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            4. Instalar o Python bridge
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Baixe:
+          </p>
+          <ul className="mt-3 list-disc space-y-1 pl-6 text-sm">
+            <li>
+              <a
+                href="/api/download/wim_bridge.py"
+                className="text-amber-400 hover:underline"
+                download
+              >
+                wim_bridge.py
+              </a>
+            </li>
+            <li>
+              <a
+                href="/api/download/requirements.txt"
+                className="text-amber-400 hover:underline"
+                download
+              >
+                requirements.txt
+              </a>
+            </li>
+            <li>
+              <a
+                href="/api/download/config.example.ini"
+                className="text-amber-400 hover:underline"
+                download
+              >
+                config.example.ini
+              </a>{" "}
+              → copie para <code>config.ini</code>.
+            </li>
+          </ul>
+
+          <pre className={CODE_BLOCK}>{`pip install -r requirements.txt`}</pre>
+
+          <p className="mt-3 text-sm text-slate-300">
+            Edite <code>config.ini</code> e adicione UM bloco por janela:
+          </p>
+          <pre className={CODE_BLOCK}>{`[bridge]
+api_url = http://localhost:3000
+poll_interval = 1.0
+auto_focus = true
+
+[character:Aragorn-Nemesis]
+chat_log = C:\\Games\\WoW-Inst1\\_retail_\\Logs\\WoWChatLog.txt
+window_title = WoW - Aragorn
+
+[character:Legolas-Nemesis]
+chat_log = C:\\Games\\WoW-Inst2\\_retail_\\Logs\\WoWChatLog.txt
+window_title = WoW - Legolas
+
+# ... até 20+ personagens`}</pre>
+
+          <p className="mt-3 text-sm text-slate-300">Rode:</p>
+          <pre className={CODE_BLOCK}>{`python wim_bridge.py`}</pre>
+        </section>
+
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            5. Como funciona o envio com 20+ janelas
+          </h2>
+          <ul className="mt-3 list-disc space-y-2 pl-6 text-sm text-slate-300">
+            <li>
+              O envio é <b>serializado</b> por um mutex global no Python: uma
+              mensagem por vez, para não misturar teclas entre janelas.
+            </li>
+            <li>
+              Antes de digitar, o bridge <b>foca</b> a janela cujo{" "}
+              <code>window_title</code> bate com o do personagem. Se você
+              estiver interagindo com o PC nesse instante, o foco será tomado
+              — planeje: rode isso em uma máquina dedicada ou em segundo
+              monitor.
+            </li>
+            <li>
+              Se a janela não for encontrada, a mensagem fica marcada como{" "}
+              <code>failed</code> com o erro. Você pode ver e reenviar.
+            </li>
           </ul>
         </section>
 
-        <section className="mt-6">
-          <h2 className="text-lg font-semibold text-slate-100">6. Debug</h2>
-          <ul className="mt-2 list-disc space-y-1 pl-5">
-            <li>Bridge mostra <span className="font-mono">🔊← [Char] Player: msg</span> quando STT transcreveu com sucesso.</li>
-            <li>Se aparecer <span className="font-mono">[stt] fala não bateu com padrão bridge: «...»</span>, ajuste a voz do addon (mais devagar) ou troque o modelo Whisper para <span className="font-mono">medium</span>.</li>
-            <li>Se aparecer <span className="font-mono">🔎 linha com cara de whisper não parseada</span>, é a rota antiga do chatlog — o parser de texto pode precisar de regex extra.</li>
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            6. Limitações honestas
+          </h2>
+          <ul className="mt-3 list-disc space-y-2 pl-6 text-sm text-slate-300">
+            <li>
+              Addons não podem fazer HTTP — a leitura depende do{" "}
+              <code>WoWChatLog.txt</code>.
+            </li>
+            <li>
+              Envio requer que a janela alvo receba foco por instantes —
+              qualquer input seu enquanto isso acontece pode interferir.
+            </li>
+            <li>
+              Whispers &gt;255 chars são bloqueados no site.
+            </li>
+            <li>
+              Blizzard considera automação de input contra o ToS. Isso é uma
+              ferramenta de conveniência pessoal (você escreve toda mensagem),
+              mas mesmo assim o risco é seu.
+            </li>
           </ul>
         </section>
+
+        <section>
+          <h2 className="text-xl font-semibold text-amber-300">
+            7. Testando sem o WoW
+          </h2>
+          <p className="mt-2 text-sm text-slate-300">
+            Simule whispers vindos de várias janelas via curl:
+          </p>
+          <pre className={CODE_BLOCK}>{`curl -X POST http://localhost:3000/api/ingest \\
+  -H "content-type: application/json" \\
+  -d '{"messages":[
+    {"character":"Aragorn-Nemesis","player":"Thrall-Nemesis","body":"For the Horde!"},
+    {"character":"Legolas-Nemesis","player":"Sylvanas-Windrunner","body":"M+ 15?"}
+  ]}'`}</pre>
+        </section>
       </div>
-    </>
+    </div>
   );
 }

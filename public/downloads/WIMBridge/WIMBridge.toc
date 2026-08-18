@@ -1,8 +1,8 @@
-## Interface: 110107
-## Title: WIMBridge
-## Notes: Relay de whispers para o Bakers Whisper via canal privado + TTS estruturado (STT-friendly).
-## Author: Bakers Whisper
-## Version: 2.6.0
+## Interface: 110200
+## Title: WIM Bridge
+## Notes: Captura whispers para Bakers Whisper usando canal relay privado e multi-flush do /chatlog.
+## Author: WIM Bridge
+## Version: 2.5.0
 ## SavedVariables: WIMBridgeDB
 
 WIMBridge.lua

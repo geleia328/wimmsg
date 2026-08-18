@@ -1,103 +1,219 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+type Prefs = {
+  sound: boolean;
+  desktop: boolean;
+  volume: number; // 0..1
+};
+
+const STORAGE_KEY = "bakers-whisper:notif-prefs";
+const DEFAULTS: Prefs = { sound: true, desktop: false, volume: 0.5 };
+
+function loadPrefs(): Prefs {
+  if (typeof window === "undefined") return DEFAULTS;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return DEFAULTS;
+    const parsed = JSON.parse(raw) as Partial<Prefs>;
+    return { ...DEFAULTS, ...parsed };
+  } catch {
+    return DEFAULTS;
+  }
+}
+
+function savePrefs(p: Prefs) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Small two-note "ping-pong" chime synthesized in-browser via WebAudio.
+ * No external asset required — works offline and stays crisp on any device.
+ */
+function playChime(ctx: AudioContext, volume: number) {
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.value = volume;
+  master.connect(ctx.destination);
+
+  const notes = [
+    { freq: 880, start: 0.0, dur: 0.12 }, // A5
+    { freq: 1318.5, start: 0.09, dur: 0.16 }, // E6
+  ];
+
+  for (const n of notes) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = n.freq;
+    // Quick attack, gentle release for a "ding"
+    gain.gain.setValueAtTime(0, now + n.start);
+    gain.gain.linearRampToValueAtTime(0.6, now + n.start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + n.start + n.dur);
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(now + n.start);
+    osc.stop(now + n.start + n.dur + 0.02);
+  }
+}
+
+/**
+ * `useNotifications` centralises: audio chime, browser notifications, tab
+ * title unread counter, and user preferences (persisted to localStorage).
+ *
+ * Usage:
+ *   const notif = useNotifications();
+ *   notif.notifyIncoming({ character, player, body });
+ */
 export function useNotifications() {
-  const [permission, setPermission] = useState<NotificationPermission | "unsupported">("default");
-  const [ttsEnabled, setTtsEnabled] = useState<boolean>(false);
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULTS);
+  const [ready, setReady] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const unreadRef = useRef(0);
+  const baseTitleRef = useRef<string | null>(null);
 
+  // Load prefs client-side to avoid SSR mismatches.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const v = window.localStorage.getItem("bakers.tts.enabled");
-      if (v === "1") setTtsEnabled(true);
-    } catch {
-      /* ignore */
+    setPrefs(loadPrefs());
+    setReady(true);
+    if (typeof document !== "undefined") {
+      baseTitleRef.current = document.title;
     }
   }, []);
 
-  const setTts = useCallback((on: boolean) => {
-    setTtsEnabled(on);
-    try {
-      window.localStorage.setItem("bakers.tts.enabled", on ? "1" : "0");
-    } catch { /* ignore */ }
-  }, []);
-
-  const speak = useCallback((text: string) => {
-    if (typeof window === "undefined") return;
-    if (!("speechSynthesis" in window)) return;
-    if (!ttsEnabled) return;
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.05;
-      u.pitch = 1.0;
-      u.volume = 1.0;
-      const voices = window.speechSynthesis.getVoices();
-      const pt = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("pt"));
-      if (pt) u.voice = pt;
-      window.speechSynthesis.speak(u);
-    } catch { /* ignore */ }
-  }, [ttsEnabled]);
-
+  // Persist on change.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!("Notification" in window)) {
-      setPermission("unsupported");
-      return;
-    }
-    setPermission(Notification.permission);
-  }, []);
+    if (ready) savePrefs(prefs);
+  }, [prefs, ready]);
 
-  const request = useCallback(async () => {
-    if (typeof window === "undefined") return;
-    if (!("Notification" in window)) return;
-    try {
-      const p = await Notification.requestPermission();
-      setPermission(p);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  const beep = useCallback(() => {
-    if (typeof window === "undefined") return;
-    try {
-      type WithWebkit = typeof window & { webkitAudioContext?: typeof AudioContext };
-      const w = window as WithWebkit;
-      const AC = window.AudioContext || w.webkitAudioContext;
-      if (!AC) return;
-      if (!audioCtxRef.current) audioCtxRef.current = new AC();
-      const ctx = audioCtxRef.current;
-      if (ctx.state === "suspended") {
-        void ctx.resume();
+  // Browsers require a user gesture before starting AudioContext.
+  // We install a one-time listener that primes the context on any click/key.
+  useEffect(() => {
+    if (!ready) return;
+    const prime = () => {
+      if (!audioCtxRef.current) {
+        try {
+          const AC =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext: typeof AudioContext })
+              .webkitAudioContext;
+          audioCtxRef.current = new AC();
+        } catch {
+          /* audio unsupported */
+        }
       }
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.value = 880;
-      g.gain.value = 0.0001;
-      o.connect(g).connect(ctx.destination);
-      const now = ctx.currentTime;
-      g.gain.exponentialRampToValueAtTime(0.15, now + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
-      o.start(now);
-      o.stop(now + 0.3);
-    } catch {
-      /* ignore */
-    }
+      // Resume in case it was suspended.
+      audioCtxRef.current?.resume().catch(() => {});
+    };
+    window.addEventListener("click", prime, { once: false });
+    window.addEventListener("keydown", prime, { once: false });
+    return () => {
+      window.removeEventListener("click", prime);
+      window.removeEventListener("keydown", prime);
+    };
+  }, [ready]);
+
+  // Clear unread badge when the tab becomes visible.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        unreadRef.current = 0;
+        if (baseTitleRef.current) document.title = baseTitleRef.current;
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
-  const notify = useCallback((title: string, body?: string) => {
-    beep();
-    if (typeof window === "undefined") return;
-    if (!("Notification" in window)) return;
-    if (Notification.permission !== "granted") return;
+  const setSound = useCallback(
+    (v: boolean) => setPrefs((p) => ({ ...p, sound: v })),
+    [],
+  );
+  const setVolume = useCallback(
+    (v: number) => setPrefs((p) => ({ ...p, volume: Math.max(0, Math.min(1, v)) })),
+    [],
+  );
+  const setDesktop = useCallback(async (v: boolean) => {
+    if (v && typeof Notification !== "undefined" && Notification.permission !== "granted") {
+      try {
+        const res = await Notification.requestPermission();
+        if (res !== "granted") {
+          setPrefs((p) => ({ ...p, desktop: false }));
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+    setPrefs((p) => ({ ...p, desktop: v }));
+  }, []);
+
+  const testChime = useCallback(() => {
+    if (!audioCtxRef.current) return;
     try {
-      new Notification(title, { body, tag: `bakers-${title}` });
+      playChime(audioCtxRef.current, prefs.volume);
     } catch {
       /* ignore */
     }
-  }, [beep]);
+  }, [prefs.volume]);
 
-  return { permission, request, notify, beep, ttsEnabled, setTts, speak };
+  const notifyIncoming = useCallback(
+    (msg: { character: string; player: string; body: string }) => {
+      // Sound
+      if (prefs.sound && audioCtxRef.current) {
+        try {
+          playChime(audioCtxRef.current, prefs.volume);
+        } catch {
+          /* ignore */
+        }
+      }
+      // Desktop notification (only if tab hidden — avoid double stimulation)
+      if (
+        prefs.desktop &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted" &&
+        document.visibilityState !== "visible"
+      ) {
+        try {
+          new Notification(`Whisper de ${msg.player}`, {
+            body: `[${msg.character}] ${msg.body}`,
+            tag: `wim-${msg.character}-${msg.player}`,
+            silent: prefs.sound, // avoid double beep
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+      // Tab title unread badge
+      if (document.visibilityState !== "visible") {
+        unreadRef.current += 1;
+        if (baseTitleRef.current) {
+          document.title = `(${unreadRef.current}) ${baseTitleRef.current}`;
+        }
+      }
+    },
+    [prefs],
+  );
+
+  // Stable object identity: ChatApp's incoming poller effect depends on this
+  // object. Without useMemo the object would change on every render and the
+  // polling interval would be torn down/recreated constantly.
+  return useMemo(
+    () => ({
+      prefs,
+      setSound,
+      setVolume,
+      setDesktop,
+      testChime,
+      notifyIncoming,
+      ready,
+    }),
+    [prefs, ready, setSound, setVolume, setDesktop, testChime, notifyIncoming],
+  );
 }

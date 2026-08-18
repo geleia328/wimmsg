@@ -1,47 +1,25 @@
 @import "tailwindcss";
 
-:root {
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left: env(safe-area-inset-left, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
-}
+/* Safe-area support for notched devices (iPhone X+, iPads with notch) */
+@layer base {
+  :root {
+    --sat: env(safe-area-inset-top);
+    --sab: env(safe-area-inset-bottom);
+    --sal: env(safe-area-inset-left);
+    --sar: env(safe-area-inset-right);
+  }
 
-html,
-body {
-  height: 100%;
-  background: #0f172a;
-  color: #e2e8f0;
-  -webkit-tap-highlight-color: transparent;
-}
+  /* Prevent iOS rubber-banding from breaking fixed layouts */
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
 
-body {
-  padding-top: var(--safe-top);
-  padding-bottom: var(--safe-bottom);
-  padding-left: var(--safe-left);
-  padding-right: var(--safe-right);
-}
-
-* {
-  box-sizing: border-box;
-}
-
-/* Custom scrollbars */
-.scroll-y {
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
-}
-.scroll-y::-webkit-scrollbar {
-  width: 8px;
-}
-.scroll-y::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 8px;
-}
-
-.scroll-x {
-  overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  body {
+    padding-top: var(--sat);
+    padding-bottom: var(--sab);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+    min-height: 100dvh;
+  }
 }

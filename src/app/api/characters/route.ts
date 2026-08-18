@@ -1,31 +1,34 @@
+import { NextResponse } from "next/server";
 import { db } from "@/db";
+import { messages } from "@/db/schema";
 import { sql } from "drizzle-orm";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Distinct list of your characters (WoW windows) that have any activity.
+ * Grouped case-insensitively to avoid split rows like Juper-Azralon/juper-azralon.
+ */
 export async function GET() {
-  const res = await db.execute<{ character: string; last_at: string }>(sql`
-    select distinct on (lower(character))
-      character,
-      max(created_at) over (partition by lower(character)) as last_at
-    from messages
-    order by lower(character), max(created_at) over (partition by lower(character)) desc
+  const rows = await db.execute(sql/* sql */ `
+    SELECT
+      lower(character) AS character,
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE direction = 'incoming')::int AS incoming,
+      COUNT(*) FILTER (WHERE direction = 'outgoing' AND status = 'pending')::int AS pending_out,
+      MAX(created_at) AS last_at
+    FROM ${messages}
+    GROUP BY lower(character)
+    ORDER BY last_at DESC
   `);
-  const chars = (res.rows || []).map((r) => ({ character: r.character, lastAt: r.last_at }));
-
-  // Include client_windows characters
-  const winRes = await db.execute<{ character: string; last_seen: string }>(sql`
-    select distinct on (lower(character))
-      character, max(last_seen) over (partition by lower(character)) as last_seen
-    from client_windows
-    where character is not null and character <> ''
-    order by lower(character), max(last_seen) over (partition by lower(character)) desc
-  `);
-  for (const w of winRes.rows || []) {
-    if (!chars.find((c) => c.character.toLowerCase() === w.character.toLowerCase())) {
-      chars.push({ character: w.character, lastAt: w.last_seen });
-    }
-  }
-  chars.sort((a, b) => a.character.localeCompare(b.character));
-  return Response.json({ ok: true, characters: chars });
+  return NextResponse.json({
+    characters: rows.rows.map((r) => ({
+      character: (r.character as string) || "unknown",
+      total: r.total as number,
+      incoming: r.incoming as number,
+      pendingOut: r.pending_out as number,
+      lastAt: r.last_at as string,
+    })),
+  });
 }
