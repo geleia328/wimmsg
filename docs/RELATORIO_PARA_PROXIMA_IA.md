@@ -700,6 +700,17 @@ Wimbridge. Own <NATO do próprio char>. From <NATO do remetente>. Message <texto
 
 Importante: o corpo da mensagem falada é transcrito por STT (pode ter pequenas imperfeições de acentuação em português), mas os NOMES são exatos por causa da OTAN. Se o corpo falado for problema, manter também o relay por canal/log.
 
+### Empacotamento no EXE (sem Python no PC do usuário)
+
+O workflow `.github/workflows/build-windows.yml` instala e empacota o modo voz no `BakersWhisper.exe`:
+
+- `pip install SpeechRecognition PyAudio` (PyAudio 0.2.14 tem wheel Windows no PyPI).
+- PyInstaller com `--collect-all speech_recognition` (inclui `flac-win32.exe` usado pelo `recognize_google`) e `--hidden-import pyaudio` / `--hidden-import speech_recognition`.
+- Se não houver microfone, o bridge loga e desativa só o modo voz; o resto funciona.
+- `requirements.txt` também lista `SpeechRecognition` e `PyAudio` (marker Windows) para quem roda do código-fonte.
+
+NÃO remover essas flags do PyInstaller, senão o EXE perde o modo voz.
+
 ## 20. Fix do scroll do chat (v2.6.0)
 
 Bug: a cada poll a barra era puxada para o fim, impedindo ler o histórico.

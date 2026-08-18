@@ -1302,14 +1302,19 @@ class BridgeEngine:
         """
         if not HAS_SPEECH:
             self.log(
-                "🎙 modo VOZ indisponível: instale 'pip install SpeechRecognition' "
-                "para ativar o relay por voz."
+                "🎙 modo VOZ indisponível nesta instalação. No BakersWhisper.exe "
+                "oficial ele já vem embutido; se roda do código-fonte use "
+                "'pip install -r requirements.txt'."
             )
             return
         try:
             mic = sr.Microphone()
         except Exception as e:
-            self.log(f"🎙 microfone não encontrado, modo VOZ desativado: {e}")
+            self.log(
+                f"🎙 microfone não encontrado, modo VOZ desativado: {e}. "
+                "Conecte um microfone perto do som do WoW para receber "
+                "whispers em tempo real. O resto do app funciona normalmente."
+            )
             return
 
         rec = sr.Recognizer()
