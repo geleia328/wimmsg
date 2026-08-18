@@ -746,6 +746,14 @@ Implementação:
 - Site: controle `combat_relay_enabled` (default yes) + toggle "🗡 Relay pelo combatlog" na aba GSE.
 - Usuário deve ter `/combatlog` ativo (addon liga sozinho) e, opcionalmente, "Advanced Combat Logging" nas opções de rede.
 
+### Otimização de fluidez (auditoria v1.2.0)
+
+ChatApp fazia ~6 req/s por aba; reduzido para ~2.2 req/s (~64% menos):
+- Cadências: refreshTop (conversas+personagens+status) 3s; incoming/notificações 2s; conversa aberta (bidirecional) 1.5s.
+- Removido `fetchMessages` (unidirecional) — o bidirecional é a única fonte do chat aberto (menos código, menos requests).
+- Removido botão "🔄 Sincronizar" + `syncHistory` + estado `syncingHistory` (o bidirecional já carrega o histórico ao abrir). `/api/sync` POST continua para o bridge; GET ficou só por compatibilidade.
+- Testado: todas as páginas 200 em ~50-110ms; todas as APIs 200 em ~40-60ms; fluxo enviar→ingest→bidirecional→fila OK.
+
 ## 20. Fix do scroll do chat (v2.6.0)
 
 Bug: a cada poll a barra era puxada para o fim, impedindo ler o histórico.
