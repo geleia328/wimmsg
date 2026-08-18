@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 # =============================================================================
 
 import hashlib
@@ -1602,14 +1602,29 @@ class BridgeEngine:
 
         # ---- Preferred: loopback (internal PC audio, no microphone) ----
         if HAS_LOOPBACK:
+            spk = None
             try:
                 spk = sc.default_speaker()
+            except Exception as e:
+                self.log(f"🎙 alto-falante padrão falhou ({e}); tentando outros...")
+                try:
+                    for s in sc.all_speakers():
+                        try:
+                            spk = s
+                            break
+                        except Exception:
+                            continue
+                except Exception:
+                    spk = None
+            if spk is not None:
+              try:
                 rate = 16000
                 with spk.recorder(samplerate=rate, channels=1) as recorder:
                     self.log(
-                        "🎙 VOZ via LOOPBACK (sem microfone): transcrevendo a "
-                        "narração interna do PC em tempo real."
+                        f"🎙 VOZ via LOOPBACK no dispositivo '{getattr(spk, 'name', '?')}': "
+                        "transcrevendo a narração interna do PC em tempo real."
                     )
+                    first_voice = True
                     while not self.stop_event.is_set():
                         if not self._get_controls().get("voiceRelayEnabled", True):
                             time.sleep(0.5)
@@ -1628,9 +1643,12 @@ class BridgeEngine:
                             text = rec.recognize_google(audio, language="en-US")
                         except Exception:
                             continue
+                        if first_voice and text:
+                            first_voice = False
+                            self.log(f"🎙 loopback ouviu a primeira narração: '{text[:80]}'")
                         self._handle_voice_text(text)
                     return
-            except Exception as e:
+              except Exception as e:
                 self.log(f"🎙 loopback falhou ({e}); tentando microfone...")
 
         # ---- Fallback: physical microphone ----
@@ -1724,6 +1742,9 @@ class BridgeEngine:
 
         # Tiny stagger so 20 workers don't screenshot in the same instant.
         time.sleep(0.15 * (abs(hash(ref.character)) % 7))
+        errs = 0
+        first_ok = False
+        self.log(f"📷 OCR engine iniciado para {ref.character} (faixa relay).")
         with mss.mss() as sct:
             while not self.stop_event.is_set():
                 if not self._get_controls().get("ocrRelayEnabled", True):
@@ -1748,7 +1769,16 @@ class BridgeEngine:
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
                     result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
                     text = getattr(result, "text", None) or str(result)
-                except Exception:
+                    if not first_ok and text.strip():
+                        first_ok = True
+                        self.log(
+                            f"📷 OCR lendo a janela {ref.character}: "
+                            f"{len(text)} chars na primeira leitura."
+                        )
+                except Exception as e:
+                    errs += 1
+                    if errs <= 3 or errs % 50 == 0:
+                        self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
                     time.sleep(1)
                     continue
                 if "WIMRELAY" not in text and "BWRELAY" not in text:
@@ -1823,9 +1853,10 @@ class BridgeEngine:
         )
         own_base = (ref.character.split("-")[0] or "").strip().lower()
         seen: dict = {}
-        stats = {"lines": 0, "cand": 0, "own": 0, "sent": 0}
+        stats = {"lines": 0, "cand": 0, "own": 0, "sent": 0, "errs": 0}
         last_hb = time.time()
         dbg_path = app_data_dir() / f"ocr_{ref.window_title or ref.character}.txt"
+        self.log(f"🖥 OCR WIM engine iniciado para {ref.character}.")
         time.sleep(0.3 * (abs(hash(ref.character)) % 5))
         with mss.mss() as sct:
             while not self.stop_event.is_set():
@@ -1846,7 +1877,12 @@ class BridgeEngine:
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
                     result = asyncio.run(winocr.recognize_pil_image(pil, "pt-BR"))
                     text = getattr(result, "text", None) or str(result)
-                except Exception:
+                except Exception as e:
+                    stats["errs"] += 1
+                    if stats["errs"] <= 3 or stats["errs"] % 50 == 0:
+                        self.log(
+                            f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
+                        )
                     time.sleep(1.5)
                     continue
                 now = time.time()
@@ -1914,7 +1950,7 @@ class BridgeEngine:
                     self.log(
                         f"🖥 OCR [{ref.character}] vivo: {stats['lines']} leituras, "
                         f"{stats['cand']} linhas de whisper, {stats['own']} próprias, "
-                        f"{stats['sent']} enviadas ao site. "
+                        f"{stats['sent']} enviadas ao site, {stats['errs']} erros OCR. "
                         f"Debug: {dbg_path}"
                     )
                 time.sleep(2.0)
