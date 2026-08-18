@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 # =============================================================================
 
 import hashlib
@@ -911,8 +911,16 @@ def parse_voice_transcript(text: str) -> Optional[tuple[str, str, str, str]]:
 
 def tail_file(path: Path, stop_event: threading.Event, log_cb):
     """Yield new lines forever. Handles rotation."""
+    last_wait_log = 0.0
+    hint = (
+        "digite /combatlog no jogo (é o log de COMBATE, diferente de /chatlog)"
+        if "Combat" in path.name
+        else "digite /chatlog no jogo"
+    )
     while not path.exists() and not stop_event.is_set():
-        log_cb(f"⏳ Aguardando {path.name} — digite /chatlog no jogo.")
+        if time.time() - last_wait_log > 60:
+            last_wait_log = time.time()
+            log_cb(f"⏳ Aguardando {path.name} — {hint}.")
         for _ in range(10):
             if stop_event.is_set():
                 return
@@ -1809,11 +1817,15 @@ class BridgeEngine:
 
         from PIL import Image
 
+        # Tolerant: OCR may render [Name] as (Name), |Name| or Name.
         line_re = re.compile(
-            r"^\s*(\d{1,2}:\d{2})\s*\[([^\]]{1,32})\]\s*[:\-]\s*(.{1,200})$"
+            r"^\s*(\d{1,2}:\d{2})\s*[\[\(\|]?\s*([^:\]\)\|]{1,32}?)\s*[\]\)\|]?\s*[:\-]\s*(\S.{0,200})$"
         )
         own_base = (ref.character.split("-")[0] or "").strip().lower()
         seen: dict = {}
+        stats = {"lines": 0, "cand": 0, "own": 0, "sent": 0}
+        last_hb = time.time()
+        dbg_path = app_data_dir() / f"ocr_{ref.window_title or ref.character}.txt"
         time.sleep(0.3 * (abs(hash(ref.character)) % 5))
         with mss.mss() as sct:
             while not self.stop_event.is_set():
@@ -1838,11 +1850,20 @@ class BridgeEngine:
                     time.sleep(1.5)
                     continue
                 now = time.time()
+                stats["lines"] += 1
+                # DEBUG: dump what the OCR sees so we can diagnose silently
+                # failing reads. Open this file to see exactly what the bridge
+                # is reading from the WoW window.
+                try:
+                    dbg_path.write_text(text[:2000], encoding="utf-8")
+                except Exception:
+                    pass
                 seen = {k: v for k, v in seen.items() if now - v < 300}
                 for raw in text.splitlines():
                     m = line_re.match(raw.strip())
                     if not m:
                         continue
+                    stats["cand"] += 1
                     name = m.group(2).strip()
                     body = m.group(3).strip()
                     low = name.lower()
@@ -1854,6 +1875,7 @@ class BridgeEngine:
                         continue
                     name_base = name.split("-")[0].strip().lower()
                     if name_base == own_base:
+                        stats["own"] += 1
                         continue  # outgoing — o site já sabe; evita rota errada
                     key = ("in", name_base, body.lower())
                     if key in seen:
@@ -1881,9 +1903,20 @@ class BridgeEngine:
                         ]
                     )
                     if ok:
+                        stats["sent"] += 1
                         self.log(
                             f"🖥 ← WIM-OCR [{ref.character}] {name}: {body}"
                         )
+                # Heartbeat every 30s: proves the reader is alive and shows
+                # how many whisper-shaped lines it saw (cand) vs own (own).
+                if now - last_hb > 30:
+                    last_hb = now
+                    self.log(
+                        f"🖥 OCR [{ref.character}] vivo: {stats['lines']} leituras, "
+                        f"{stats['cand']} linhas de whisper, {stats['own']} próprias, "
+                        f"{stats['sent']} enviadas ao site. "
+                        f"Debug: {dbg_path}"
+                    )
                 time.sleep(2.0)
 
     def _combat_tail(self, path: Path) -> None:
