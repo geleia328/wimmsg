@@ -1,567 +1,561 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-WIM Bridge — Python client (multi-window edition)
-=================================================
+wim_bridge.py — versão CLI headless do bridge Bakers Whisper.
 
-Ponte entre múltiplas janelas do WoW rodando no seu PC e o painel web.
+Responsabilidades:
+- Ler WoWChatLog.txt em tempo real (tail).
+- Parsear whispers do WIM/WoW e do addon WIMBridge (WIMRELAY/WIMBRIDGE).
+- Postar mensagens em /api/ingest.
+- Consultar /api/queue e enviar respostas nas janelas WoW corretas.
+- Reportar janelas em /api/status/scan.
+- Consultar /api/control e /api/gse para GSE spammers.
 
-Todo conteúdo que sai é escrito por você MANUALMENTE no site — o Python
-apenas entrega a mensagem já digitada na janela correta.
-
-Fluxo:
-    1) Para cada personagem configurado em config.ini, observa o
-       WoWChatLog.txt correspondente (ative com /chatlog no jogo) e
-       identifica whispers recebidos. Cada whisper novo é enviado ao site
-       via POST /api/ingest com o campo `character`.
-    2) Faz polling em GET /api/queue procurando respostas suas. Para cada
-       resposta pendente, foca a JANELA correspondente ao personagem que
-       vai enviar (usando window_title do config) e digita /w Nome msg.
-    3) Confirma o envio ao site via POST /api/queue/{id}/ack.
-
-Requisitos:
-    pip install -r requirements.txt
-    Recomendado: Windows (pywin32 para focar janelas por título).
-
-Uso:
-    python wim_bridge.py
+Requer Windows para envio no jogo (pywin32). Em outros SOs, apenas leitura
+funciona.
 """
 from __future__ import annotations
 
+import argparse
 import configparser
-import hashlib
-import logging
+import json
 import os
 import re
 import sys
-import threading
 import time
+import threading
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Iterable, Optional
-
-import requests
+from typing import Optional
 
 try:
-    import pydirectinput  # type: ignore
-    pydirectinput.PAUSE = 0.0
-    HAS_PYDIRECTINPUT = True
-except Exception:  # pragma: no cover
-    HAS_PYDIRECTINPUT = False
+    import requests
+except Exception as e:  # pragma: no cover
+    print("Instale requests: pip install requests", file=sys.stderr)
+    raise
 
-try:
-    import pyautogui  # type: ignore
-    HAS_PYAUTOGUI = True
-except Exception:  # pragma: no cover
-    HAS_PYAUTOGUI = False
+IS_WINDOWS = sys.platform == "win32"
 
-try:
-    import win32gui  # type: ignore
-    import win32con  # type: ignore
-    HAS_WIN32 = True
-except Exception:  # pragma: no cover
-    HAS_WIN32 = False
+if IS_WINDOWS:
+    try:
+        import win32gui  # type: ignore
+        import win32con  # type: ignore
+        import win32api  # type: ignore
+        import win32process  # type: ignore
+        import psutil  # type: ignore
+        import pyperclip  # type: ignore
+    except Exception:
+        win32gui = None  # type: ignore
+        win32con = None  # type: ignore
+        win32api = None  # type: ignore
+        win32process = None  # type: ignore
+        psutil = None  # type: ignore
+        pyperclip = None  # type: ignore
+else:
+    win32gui = None
+    win32con = None
+    win32api = None
+    win32process = None
+    psutil = None
+    pyperclip = None
 
 
-# --------------------------------------------------------------------------
-# Logging
-# --------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("wim-bridge")
-
-
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Config
-# --------------------------------------------------------------------------
-@dataclass
-class CharacterConfig:
-    name: str            # "Aragorn-Nemesis"
-    chat_log: Path
-    window_title: str
-
-
+# ---------------------------------------------------------------------------
 @dataclass
 class Config:
-    api_url: str
-    token: str
-    poll_interval: float
-    type_delay: float
-    auto_focus: bool
-    characters: list[CharacterConfig] = field(default_factory=list)
+    base_url: str = "http://127.0.0.1:3000"
+    bridge_token: str = ""
+    chatlog_path: str = ""
+    queue_poll_ms: int = 1500
+    scan_ms: int = 3000
+    focus_delay_ms: int = 2000
+    chat_open_delay_ms: int = 1000
+    keystroke_delay_ms: int = 100
+    chat_send_delay_ms: int = 1000
+    after_send_delay_ms: int = 1000
+    close_chat_enabled: bool = True
+    chat_close_delay_ms: int = 500
+    # STT (leitura via text-to-speech do addon + speech-to-text local)
+    stt_enabled: bool = False
+    stt_model: str = "small"
+    stt_device: str = "cpu"
+    stt_compute: str = "int8"
+    stt_language: str = "en"
+    stt_device_name: str = ""
+    stt_own_character: str = ""  # fallback quando não sabemos qual janela falou
+    stt_rms_threshold: float = 0.008
+    stt_silence_ms: int = 700
+    stt_max_utter_ms: int = 12000
 
-    @classmethod
-    def load(cls, path: str = "config.ini") -> "Config":
-        cp = configparser.ConfigParser()
-        if not Path(path).exists():
-            log.error("config.ini não encontrado. Copie config.example.ini.")
-            sys.exit(1)
+
+def load_config(path: str) -> Config:
+    cp = configparser.ConfigParser()
+    if os.path.exists(path):
         cp.read(path, encoding="utf-8")
-
-        b = cp["bridge"] if cp.has_section("bridge") else {}
-        api_url = (b.get("api_url", "http://localhost:3000") if b else "http://localhost:3000").rstrip("/")
-        token = (b.get("token", "").strip() if b else "")
-        poll_interval = float((b.get("poll_interval", "1.0") if b else "1.0"))
-        type_delay = float((b.get("type_delay", "0.02") if b else "0.02"))
-        auto_focus = str((b.get("auto_focus", "true") if b else "true")).lower() in ("1", "true", "yes", "on")
-
-        characters: list[CharacterConfig] = []
-        for section in cp.sections():
-            if not section.startswith("character:"):
-                continue
-            name = section.split("character:", 1)[1].strip()
-            chat_log = Path(cp[section].get("chat_log", "").strip())
-            window_title = cp[section].get("window_title", "").strip()
-            if not name or not chat_log or not window_title:
-                log.warning("Seção %s incompleta — ignorando.", section)
-                continue
-            characters.append(
-                CharacterConfig(name=name, chat_log=chat_log, window_title=window_title)
-            )
-
-        if not characters:
-            log.error(
-                "Nenhum [character:...] configurado em config.ini. Adicione "
-                "pelo menos um bloco (veja config.example.ini)."
-            )
-            sys.exit(1)
-
-        return cls(
-            api_url=api_url,
-            token=token,
-            poll_interval=poll_interval,
-            type_delay=type_delay,
-            auto_focus=auto_focus,
-            characters=characters,
-        )
+    c = Config()
+    if cp.has_section("server"):
+        c.base_url = cp.get("server", "base_url", fallback=c.base_url)
+        c.bridge_token = cp.get("server", "bridge_token", fallback=c.bridge_token)
+    if cp.has_section("bridge"):
+        c.chatlog_path = cp.get("bridge", "chatlog_path", fallback=c.chatlog_path)
+        c.queue_poll_ms = cp.getint("bridge", "queue_poll_ms", fallback=c.queue_poll_ms)
+        c.scan_ms = cp.getint("bridge", "scan_ms", fallback=c.scan_ms)
+    if cp.has_section("send"):
+        c.focus_delay_ms = cp.getint("send", "focus_delay_ms", fallback=c.focus_delay_ms)
+        c.chat_open_delay_ms = cp.getint("send", "chat_open_delay_ms", fallback=c.chat_open_delay_ms)
+        c.keystroke_delay_ms = cp.getint("send", "keystroke_delay_ms", fallback=c.keystroke_delay_ms)
+        c.chat_send_delay_ms = cp.getint("send", "chat_send_delay_ms", fallback=c.chat_send_delay_ms)
+        c.after_send_delay_ms = cp.getint("send", "after_send_delay_ms", fallback=c.after_send_delay_ms)
+        c.close_chat_enabled = cp.getboolean("send", "close_chat_enabled", fallback=c.close_chat_enabled)
+        c.chat_close_delay_ms = cp.getint("send", "chat_close_delay_ms", fallback=c.chat_close_delay_ms)
+    if cp.has_section("stt"):
+        c.stt_enabled = cp.getboolean("stt", "enabled", fallback=c.stt_enabled)
+        c.stt_model = cp.get("stt", "model", fallback=c.stt_model)
+        c.stt_device = cp.get("stt", "device", fallback=c.stt_device)
+        c.stt_compute = cp.get("stt", "compute_type", fallback=c.stt_compute)
+        c.stt_language = cp.get("stt", "language", fallback=c.stt_language)
+        c.stt_device_name = cp.get("stt", "device_name", fallback=c.stt_device_name)
+        c.stt_own_character = cp.get("stt", "own_character", fallback=c.stt_own_character)
+        c.stt_rms_threshold = cp.getfloat("stt", "rms_threshold", fallback=c.stt_rms_threshold)
+        c.stt_silence_ms = cp.getint("stt", "silence_ms", fallback=c.stt_silence_ms)
+        c.stt_max_utter_ms = cp.getint("stt", "max_utter_ms", fallback=c.stt_max_utter_ms)
+    return c
 
 
-# --------------------------------------------------------------------------
-# HTTP client
-# --------------------------------------------------------------------------
-class ApiClient:
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
-        self.s = requests.Session()
-        if cfg.token:
-            self.s.headers["Authorization"] = f"Bearer {cfg.token}"
-        self.s.headers["content-type"] = "application/json"
+# ---------------------------------------------------------------------------
+# Whisper parser
+# ---------------------------------------------------------------------------
+RE_WIMRELAY = re.compile(r"WIMRELAY<OWN:([^>]+)><(FROM|TO):([^>]+)><TS:[^>]*>(.*)", re.I)
+RE_WIMBRIDGE = re.compile(r"\[?WIMBRIDGE\]?<OWN:([^>]+)><(FROM|TO):([^>]+)>(.*)", re.I)
+RE_WHISPER_FROM_EN = re.compile(r"\[W From\]\s*\[([^\]]+)\]:\s*(.*)")
+RE_WHISPER_TO_EN = re.compile(r"\[W To\]\s*\[([^\]]+)\]:\s*(.*)")
+RE_WHISPER_DE = re.compile(r"\[De\]\s*\[([^\]]+)\]:\s*(.*)")
+RE_WHISPER_PARA = re.compile(r"\[Para\]\s*\[([^\]]+)\]:\s*(.*)")
+RE_WHISPERS_EN = re.compile(r"([\w\-\']+)\s+whispers:\s*(.*)")
+RE_SUSSURRA = re.compile(r"([\w\-\']+)\s+sussurra:\s*(.*)")
+RE_DE = re.compile(r"^De\s+([\w\-\']+):\s*(.*)")
+RE_PARA = re.compile(r"^Para\s+([\w\-\']+):\s*(.*)")
 
-    def _url(self, path: str) -> str:
-        return f"{self.cfg.api_url}{path}"
-
-    def ingest(self, msgs: list[dict]) -> None:
-        if not msgs:
-            return
-        r = self.s.post(self._url("/api/ingest"), json={"messages": msgs}, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        log.info("ingest: %d/%d nova(s)", data.get("inserted", 0), len(msgs))
-
-    def fetch_queue(self) -> list[dict]:
-        r = self.s.get(self._url("/api/queue"), timeout=10)
-        r.raise_for_status()
-        return r.json().get("messages", [])
-
-    def ack(self, mid: int, status: str, error: Optional[str] = None) -> None:
-        payload: dict = {"status": status}
-        if error:
-            payload["error"] = error
-        r = self.s.post(self._url(f"/api/queue/{mid}/ack"), json=payload, timeout=10)
-        r.raise_for_status()
-
-    def scan(self, windows: list[dict]) -> None:
-        r = self.s.post(
-            self._url("/api/status/scan"),
-            json={
-                "scannedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "windows": windows,
-            },
-            timeout=10,
-        )
-        r.raise_for_status()
+WHISPER_HINT = re.compile(r"(WIMRELAY|WIMBRIDGE|whispers?:|sussurra:|\[W From\]|\[W To\]|\[De\]|\[Para\]|^De\s|^Para\s)", re.I)
 
 
-# --------------------------------------------------------------------------
-# Whisper parsing
-# --------------------------------------------------------------------------
-TIMESTAMP_RE = re.compile(r"^\d+/\d+\s+\d+:\d+:\d+\.\d+\s+")
-
-# Preferred format (from WIMBridge addon):
-#   [WIMBRIDGE]<OWN:MyChar-Realm><FROM:Sender-Realm>message
-ADDON_RE = re.compile(
-    r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?P<body>.*)$"
-)
-
-# Fallbacks (no addon):
-#   "Sender whispers: hello"   (EN)
-#   "Sender sussurra: hello"   (pt-BR)
-FALLBACK_RES = [
-    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$"),
-    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+sussurra:\s+(?P<body>.+)$"),
-]
+@dataclass
+class ParsedMessage:
+    character: str
+    player: str
+    body: str
+    direction: str  # incoming | outgoing
 
 
-def clean_line(line: str) -> str:
+def parse_whisper(line: str, own_character: Optional[str] = None) -> Optional[ParsedMessage]:
     line = line.rstrip("\r\n")
-    line = TIMESTAMP_RE.sub("", line).strip()
-    line = re.sub(r"\|c[0-9a-fA-F]{8}", "", line)
-    line = re.sub(r"\|H[^|]*\|h", "", line)
-    return line.replace("|h", "").replace("|r", "").replace("[", "").replace("]", "")
-
-
-def parse_whisper(line: str, fallback_own: str) -> Optional[tuple[str, str, str]]:
-    """Return (own_character, sender, body) or None."""
-    original = line
-    line = clean_line(line)
-
-    # Restore brackets for the addon marker — we stripped '[' above.
-    # Try addon format first (put brackets back for matching)
-    addon_line = original.strip()
-    addon_line = TIMESTAMP_RE.sub("", addon_line).strip()
-    m = ADDON_RE.match(addon_line)
+    m = RE_WIMRELAY.search(line)
     if m:
-        return m.group("own").strip(), m.group("from").strip(), m.group("body").strip()
-
-    for pat in FALLBACK_RES:
-        m = pat.match(line)
-        if m:
-            return fallback_own, m.group("from").strip(), m.group("body").strip()
+        own, kind, other, body = m.group(1).strip(), m.group(2).upper(), m.group(3).strip(), m.group(4).strip()
+        return ParsedMessage(own, other, body, "incoming" if kind == "FROM" else "outgoing")
+    m = RE_WIMBRIDGE.search(line)
+    if m:
+        own, kind, other, body = m.group(1).strip(), m.group(2).upper(), m.group(3).strip(), m.group(4).strip()
+        return ParsedMessage(own, other, body, "incoming" if kind == "FROM" else "outgoing")
+    if own_character is None:
+        return None
+    m = RE_WHISPER_FROM_EN.search(line) or RE_WHISPER_DE.search(line)
+    if m:
+        return ParsedMessage(own_character, m.group(1).strip(), m.group(2).strip(), "incoming")
+    m = RE_WHISPER_TO_EN.search(line) or RE_WHISPER_PARA.search(line)
+    if m:
+        return ParsedMessage(own_character, m.group(1).strip(), m.group(2).strip(), "outgoing")
+    m = RE_WHISPERS_EN.search(line) or RE_SUSSURRA.search(line)
+    if m:
+        return ParsedMessage(own_character, m.group(1).strip(), m.group(2).strip(), "incoming")
+    m = RE_DE.search(line)
+    if m:
+        return ParsedMessage(own_character, m.group(1).strip(), m.group(2).strip(), "incoming")
+    m = RE_PARA.search(line)
+    if m:
+        return ParsedMessage(own_character, m.group(1).strip(), m.group(2).strip(), "outgoing")
     return None
 
 
-# --------------------------------------------------------------------------
-# Log tailer
-# --------------------------------------------------------------------------
-def tail_file(path: Path, from_end: bool = True) -> Iterable[str]:
-    """Yield new lines appended to `path`. Handles file rotation."""
-    while not path.exists():
-        log.warning("Chat log ainda não existe: %s (ative com /chatlog).", path)
-        time.sleep(3)
+# ---------------------------------------------------------------------------
+# Chatlog tailing
+# ---------------------------------------------------------------------------
+def find_default_chatlog() -> Optional[str]:
+    if not IS_WINDOWS:
+        return None
+    candidates = [
+        r"C:\Program Files (x86)\World of Warcraft\_retail_\Logs\WoWChatLog.txt",
+        r"C:\Program Files\World of Warcraft\_retail_\Logs\WoWChatLog.txt",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
 
-    fh = open(path, "r", encoding="utf-8", errors="replace")
-    if from_end:
-        fh.seek(0, os.SEEK_END)
-    try:
-        inode = os.stat(path).st_ino
-    except (AttributeError, OSError):
-        inode = None
-    size = fh.tell()
 
+def tail_file(path: str, on_line):
+    inode = None
+    fh = None
+    pos = 0
     while True:
-        line = fh.readline()
-        if line:
-            yield line
-            continue
-        time.sleep(0.5)
         try:
             st = os.stat(path)
+            if fh is None or st.st_ino != inode or st.st_size < pos:
+                if fh:
+                    try:
+                        fh.close()
+                    except Exception:
+                        pass
+                fh = open(path, "r", encoding="utf-8", errors="ignore")
+                inode = st.st_ino
+                fh.seek(0, os.SEEK_END)
+                pos = fh.tell()
+            fh.seek(pos)
+            for raw in fh:
+                on_line(raw)
+            pos = fh.tell()
         except FileNotFoundError:
-            time.sleep(1)
+            time.sleep(1.0)
             continue
+        except Exception:
+            time.sleep(0.5)
+        time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
+# HTTP client
+# ---------------------------------------------------------------------------
+class Api:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+
+    def _headers(self):
+        h = {"content-type": "application/json"}
+        if self.cfg.bridge_token:
+            h["authorization"] = f"Bearer {self.cfg.bridge_token}"
+        return h
+
+    def post(self, path: str, payload: dict):
         try:
-            new_inode = st.st_ino
-        except AttributeError:
-            new_inode = None
-        if (new_inode is not None and new_inode != inode) or st.st_size < size:
-            log.info("Chat log recriado — reabrindo: %s", path)
-            fh.close()
-            fh = open(path, "r", encoding="utf-8", errors="replace")
-            inode = new_inode
-            size = 0
-        else:
-            size = st.st_size
+            r = requests.post(self.cfg.base_url.rstrip("/") + path, json=payload, headers=self._headers(), timeout=15)
+            return r
+        except Exception as e:
+            print(f"[api] POST {path} falhou: {e}", file=sys.stderr)
+            return None
+
+    def get(self, path: str, params: Optional[dict] = None):
+        try:
+            r = requests.get(self.cfg.base_url.rstrip("/") + path, params=params, headers=self._headers(), timeout=15)
+            return r
+        except Exception as e:
+            print(f"[api] GET {path} falhou: {e}", file=sys.stderr)
+            return None
 
 
-def make_external_id(character: str, player: str, body: str) -> str:
-    h = hashlib.sha1(
-        f"{time.time():.3f}|{character}|{player}|{body}".encode("utf-8")
-    ).hexdigest()
-    return f"in-{h[:16]}"
+# ---------------------------------------------------------------------------
+# WoW window helpers (Windows only)
+# ---------------------------------------------------------------------------
+@dataclass
+class WowWindow:
+    hwnd: int
+    pid: int
+    title: str
+    character: Optional[str] = None
+    slot: Optional[str] = None
+    realm: Optional[str] = None
+    foreground: bool = False
+    matched: bool = False
 
 
-# --------------------------------------------------------------------------
-# Window focus (Windows)
-# --------------------------------------------------------------------------
-def find_hwnd(title_substr: str):
-    if not HAS_WIN32:
-        return None
-    found = {"h": None}
+def enum_wow_windows() -> list[WowWindow]:
+    if not IS_WINDOWS or win32gui is None:
+        return []
+    fg = win32gui.GetForegroundWindow()
+    out: list[WowWindow] = []
 
     def cb(hwnd, _):
-        title = win32gui.GetWindowText(hwnd)
-        if title_substr.lower() in title.lower() and win32gui.IsWindowVisible(hwnd):
-            found["h"] = hwnd
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        title = win32gui.GetWindowText(hwnd) or ""
+        if "world of warcraft" not in title.lower() and "wow" not in title.lower():
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            pid = 0
+        out.append(WowWindow(hwnd=hwnd, pid=pid, title=title, foreground=(hwnd == fg)))
 
     win32gui.EnumWindows(cb, None)
-    return found["h"]
+    for i, w in enumerate(out):
+        w.slot = f"wow{i+1}"
+    return out
 
 
-def focus_window(title_substr: str) -> bool:
-    hwnd = find_hwnd(title_substr)
-    if not hwnd:
+def focus_window(hwnd: int) -> bool:
+    if not IS_WINDOWS or win32gui is None:
         return False
     try:
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
         return True
-    except Exception as e:
-        log.warning("Não consegui focar '%s': %s", title_substr, e)
+    except Exception:
         return False
 
 
-# --------------------------------------------------------------------------
-# Window scanner — enumerates every open WoW client on the machine
-# --------------------------------------------------------------------------
-# Titles used by the official client. Add/remove as your setup requires.
-WOW_TITLE_HINTS = (
-    "world of warcraft",
-    "wow",  # generic fallback (matches "WoW - Aragorn" etc.)
-)
+def send_key(vk: int):
+    if not IS_WINDOWS or win32api is None:
+        return
+    win32api.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.02)
+    win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
-def _get_pid_for_hwnd(hwnd) -> str:
-    if not HAS_WIN32:
-        return ""
-    try:
-        import win32process  # type: ignore
-        _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
-        return str(pid)
-    except Exception:
-        return ""
+def send_text_paste(text: str):
+    if not IS_WINDOWS or pyperclip is None:
+        return
+    pyperclip.copy(text)
+    time.sleep(0.05)
+    # Ctrl+V
+    win32api.keybd_event(0x11, 0, 0, 0)  # CTRL down
+    win32api.keybd_event(0x56, 0, 0, 0)  # V down
+    time.sleep(0.03)
+    win32api.keybd_event(0x56, 0, win32con.KEYEVENTF_KEYUP, 0)
+    win32api.keybd_event(0x11, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
-def enum_wow_windows() -> list[dict]:
-    """Return a list of dicts describing every visible WoW window."""
-    if not HAS_WIN32:
-        return []
-    results: list[dict] = []
-
-    try:
-        fg_hwnd = win32gui.GetForegroundWindow()
-    except Exception:
-        fg_hwnd = None
-
-    def cb(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-        title = win32gui.GetWindowText(hwnd) or ""
-        if not title:
-            return
-        low = title.lower()
-        # Only keep windows that look like WoW clients.
-        if not any(hint in low for hint in WOW_TITLE_HINTS):
-            return
-        # Skip our own console / editor windows accidentally titled "wow".
-        # Heuristic: the title must be short-ish AND not contain "code", etc.
-        if any(bad in low for bad in ("visual studio", "code -", "explorer")):
-            return
-        results.append(
-            {
-                "hwnd": str(hwnd),
-                "pid": _get_pid_for_hwnd(hwnd),
-                "windowTitle": title,
-                "foreground": hwnd == fg_hwnd,
-            }
-        )
-
-    win32gui.EnumWindows(cb, None)
-    return results
+VK_ENTER = 0x0D
+VK_SPACE = 0x20
+VK_ESCAPE = 0x1B
 
 
-def build_scan_payload(cfg: Config) -> list[dict]:
-    windows = enum_wow_windows()
-    for w in windows:
-        # Match a configured character by substring on window_title.
-        matched_char = ""
-        for c in cfg.characters:
-            if c.window_title and c.window_title.lower() in w["windowTitle"].lower():
-                matched_char = c.name
-                break
-        w["character"] = matched_char
-        w["matched"] = bool(matched_char)
-    return windows
+def send_whisper_in_window(w: WowWindow, target: str, body: str, cfg: Config) -> bool:
+    if not IS_WINDOWS:
+        return False
+    if not focus_window(w.hwnd):
+        return False
+    # 1. Focar janela e aguardar
+    time.sleep(cfg.focus_delay_ms / 1000.0)
+    # 2. Enter para abrir chat
+    send_key(VK_ENTER)
+    time.sleep(cfg.chat_open_delay_ms / 1000.0)
+    # 3. /w nome-server
+    send_text_paste(f"/w {target}")
+    time.sleep(cfg.chat_send_delay_ms / 1000.0)
+    # 4. Espaço (WIM requer para abrir o whisper)
+    send_key(VK_SPACE)
+    time.sleep(cfg.chat_send_delay_ms / 1000.0)
+    # 5. corpo da mensagem
+    send_text_paste(body)
+    time.sleep(cfg.chat_send_delay_ms / 1000.0)
+    # 6. Enter para enviar
+    send_key(VK_ENTER)
+    time.sleep(cfg.after_send_delay_ms / 1000.0)
+    # 7. Fechar chat (ESC) opcional
+    if cfg.close_chat_enabled:
+        send_key(VK_ESCAPE)
+        time.sleep(cfg.chat_close_delay_ms / 1000.0)
+    return True
 
 
-# --------------------------------------------------------------------------
-# Send to WoW
-# --------------------------------------------------------------------------
-_send_lock = threading.Lock()  # only one window may be focused at a time
+# ---------------------------------------------------------------------------
+# Main bridge loop
+# ---------------------------------------------------------------------------
+class Bridge:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.api = Api(cfg)
+        self.windows: list[WowWindow] = []
+        self.settings: dict = {}
+        self.stop_event = threading.Event()
 
-
-def send_to_wow(cfg: Config, character: str, player: str, body: str) -> None:
-    if not HAS_PYDIRECTINPUT and not HAS_PYAUTOGUI:
-        raise RuntimeError(
-            "Nem pydirectinput nem pyautogui instalados. Rode "
-            "`pip install -r requirements.txt`."
-        )
-
-    char_cfg = next((c for c in cfg.characters if c.name == character), None)
-    if not char_cfg:
-        raise RuntimeError(
-            f"Character '{character}' não está no config.ini — adicione uma "
-            f"seção [character:{character}]."
-        )
-
-    with _send_lock:
-        if cfg.auto_focus:
-            if not focus_window(char_cfg.window_title):
-                raise RuntimeError(
-                    f"janela contendo '{char_cfg.window_title}' não encontrada"
-                )
-            time.sleep(0.20)  # let WoW receive focus
-
-        # Type: <Enter> /w Player message <Enter>
-        if HAS_PYDIRECTINPUT:
-            pydirectinput.press("enter")
-        elif HAS_PYAUTOGUI:
-            pyautogui.press("enter")
-        time.sleep(0.08)
-
-        command = f"/w {player} {body}"
-        if HAS_PYAUTOGUI:
-            pyautogui.typewrite(command, interval=cfg.type_delay)
+    def start(self):
+        chatlog = self.cfg.chatlog_path or find_default_chatlog() or ""
+        if chatlog:
+            print(f"[bridge] tail chatlog: {chatlog}")
+            threading.Thread(target=self._tail_thread, args=(chatlog,), daemon=True).start()
         else:
-            for ch in command:
-                pydirectinput.write(ch, interval=cfg.type_delay)
-        time.sleep(0.05)
+            print("[bridge] chatlog_path não configurado — leitura desabilitada.")
+        threading.Thread(target=self._scan_thread, daemon=True).start()
+        threading.Thread(target=self._queue_thread, daemon=True).start()
+        threading.Thread(target=self._settings_thread, daemon=True).start()
+        if self.cfg.stt_enabled:
+            self._start_stt()
+        try:
+            while not self.stop_event.is_set():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            print("\n[bridge] parando...")
 
-        if HAS_PYDIRECTINPUT:
-            pydirectinput.press("enter")
-        else:
-            pyautogui.press("enter")
+    def _tail_thread(self, path: str):
+        def on_line(raw: str):
+            msg = parse_whisper(raw)
+            if msg is None:
+                if WHISPER_HINT.search(raw):
+                    print(f"🔎 linha com cara de whisper não parseada: {raw.strip()}")
+                return
+            ext_id = f"{msg.character}::{msg.player}::{msg.direction}::{int(time.time()*1000)}::{hash(msg.body) & 0xffff}"
+            arrow = "←" if msg.direction == "incoming" else "→"
+            print(f"{arrow} [{msg.character}] {msg.player}: {msg.body}")
+            self.api.post("/api/ingest", {
+                "messages": [
+                    {
+                        "externalId": ext_id,
+                        "character": msg.character,
+                        "player": msg.player,
+                        "body": msg.body,
+                        "direction": msg.direction,
+                        "status": "received" if msg.direction == "incoming" else "sent",
+                    }
+                ]
+            })
+        tail_file(path, on_line)
 
-
-# --------------------------------------------------------------------------
-# Workers
-# --------------------------------------------------------------------------
-def incoming_worker(cfg: Config, api: ApiClient, char_cfg: CharacterConfig) -> None:
-    log.info("[%s] observando: %s", char_cfg.name, char_cfg.chat_log)
-    buffer: list[dict] = []
-    last_flush = time.time()
-    for line in tail_file(char_cfg.chat_log, from_end=True):
-        parsed = parse_whisper(line, fallback_own=char_cfg.name)
-        if parsed:
-            own, sender, body = parsed
-            # Use the OWN field from the addon if present; else the char that
-            # owns this log file.
-            character = own or char_cfg.name
-            log.info("← [%s] whisper de %s: %s", character, sender, body)
-            buffer.append(
+    def _scan_thread(self):
+        while not self.stop_event.is_set():
+            self.windows = enum_wow_windows()
+            payload = {"windows": [
                 {
-                    "externalId": make_external_id(character, sender, body),
-                    "character": character,
-                    "player": sender,
-                    "body": body,
-                    "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "character": w.character,
+                    "windowTitle": w.title,
+                    "pid": w.pid,
+                    "hwnd": w.hwnd,
+                    "foreground": w.foreground,
+                    "matched": w.matched,
+                    "slot": w.slot,
+                    "realm": w.realm,
                 }
-            )
-        if buffer and (len(buffer) >= 10 or time.time() - last_flush > 1.5):
-            try:
-                api.ingest(buffer)
-                buffer.clear()
-                last_flush = time.time()
-            except Exception as e:
-                log.error("[%s] falha no ingest: %s", char_cfg.name, e)
-                time.sleep(2)
+                for w in self.windows
+            ]}
+            self.api.post("/api/status/scan", payload)
+            time.sleep(self.cfg.scan_ms / 1000.0)
 
+    def _find_window_for(self, character: str) -> Optional[WowWindow]:
+        cl = character.lower()
+        for w in self.windows:
+            if w.character and w.character.lower() == cl:
+                return w
+        # fallback: pick foreground
+        for w in self.windows:
+            if w.foreground:
+                return w
+        return None
 
-def scan_worker(cfg: Config, api: ApiClient) -> None:
-    """Enumerate WoW windows every few seconds and POST to /api/status/scan."""
-    while True:
+    def _queue_thread(self):
+        while not self.stop_event.is_set():
+            r = self.api.get("/api/queue", params={"limit": 10})
+            if r is not None and r.ok:
+                data = r.json() or {}
+                queue = data.get("queue") or []
+                for item in queue:
+                    self._process_outgoing(item)
+            time.sleep(self.cfg.queue_poll_ms / 1000.0)
+
+    def _process_outgoing(self, item: dict):
+        mid = item.get("id")
+        character = item.get("character") or ""
+        player = item.get("player") or ""
+        body = item.get("body") or ""
+        w = self._find_window_for(character)
+        if not w:
+            print(f"[queue] sem janela para {character}, aguardando...")
+            return
+        ok = False
+        err = None
         try:
-            windows = build_scan_payload(cfg)
-            api.scan(windows)
-            if windows:
-                log.debug("scan: %d janela(s) detectada(s)", len(windows))
+            ok = send_whisper_in_window(w, player, body, self.cfg)
         except Exception as e:
-            log.error("scan falhou: %s", e)
-        time.sleep(3.0)
+            err = str(e)
+        payload = {"status": "sent" if ok else "failed"}
+        if err:
+            payload["error"] = err
+        self.api.post(f"/api/queue/{mid}/ack", payload)
 
+    def _settings_thread(self):
+        while not self.stop_event.is_set():
+            r = self.api.get("/api/control")
+            if r is not None and r.ok:
+                data = r.json() or {}
+                self.settings = data.get("settings") or {}
+            time.sleep(2.0)
 
-def outgoing_worker(cfg: Config, api: ApiClient) -> None:
-    while True:
+    # ---------------- STT (text-to-speech do addon -> loopback -> whisper) -----------
+    def _guess_own_character(self) -> str:
+        if self.cfg.stt_own_character:
+            return self.cfg.stt_own_character
+        # 1. janela em foreground que casou com personagem
+        for w in self.windows:
+            if w.foreground and w.character:
+                return w.character
+        # 2. qualquer janela com character
+        for w in self.windows:
+            if w.character:
+                return w.character
+        # 3. primeiro slot
+        if self.windows:
+            return self.windows[0].character or "unknown"
+        return "unknown"
+
+    def _start_stt(self):
         try:
-            pending = api.fetch_queue()
+            import wim_bridge_stt as stt_mod  # type: ignore
         except Exception as e:
-            log.error("falha ao buscar fila: %s", e)
-            time.sleep(cfg.poll_interval * 2)
-            continue
-
-        for msg in pending:
-            mid = msg["id"]
-            character = msg.get("character") or ""
-            player = msg["player"]
-            body = msg["body"]
-            log.info("→ #%d [%s → %s]: %s", mid, character, player, body)
-            try:
-                send_to_wow(cfg, character, player, body)
-                api.ack(mid, "sent")
-            except Exception as e:
-                log.error("erro em #%d: %s", mid, e)
-                try:
-                    api.ack(mid, "failed", error=str(e))
-                except Exception:
-                    pass
-            time.sleep(0.25)  # gentle spacing between different sends
-
-        time.sleep(cfg.poll_interval)
-
-
-# --------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------
-def main() -> None:
-    cfg = Config.load()
-    log.info("api: %s", cfg.api_url)
-    log.info("personagens configurados: %d", len(cfg.characters))
-    for c in cfg.characters:
-        log.info("  - %s | %s | title~='%s'", c.name, c.chat_log, c.window_title)
-
-    if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
-        log.warning("pydirectinput/pyautogui ausentes — só ingestão funcionará.")
-    if not HAS_WIN32 and cfg.auto_focus:
-        log.warning("pywin32 ausente — auto_focus desativado.")
-        cfg.auto_focus = False
-
-    api = ApiClient(cfg)
-
-    # De-duplicate log paths: if várias janelas apontam para o mesmo log,
-    # basta uma única thread lendo-o. O addon já grava <OWN:...> em cada
-    # linha, então a distinção é preservada.
-    seen_logs: set[Path] = set()
-    threads: list[threading.Thread] = []
-    for char in cfg.characters:
-        if char.chat_log in seen_logs:
-            log.info(
-                "[%s] compartilha chat log com outra janela — reutilizando o tailer.",
-                char.name,
-            )
-            continue
-        seen_logs.add(char.chat_log)
-        t = threading.Thread(
-            target=incoming_worker, args=(cfg, api, char), daemon=True
+            print(f"[stt] módulo wim_bridge_stt.py não encontrado: {e}")
+            return
+        stt_cfg = stt_mod.SttConfig(
+            enabled=True,
+            model=self.cfg.stt_model,
+            device=self.cfg.stt_device,
+            compute_type=self.cfg.stt_compute,
+            language=self.cfg.stt_language,
+            device_name=self.cfg.stt_device_name,
+            rms_threshold=self.cfg.stt_rms_threshold,
+            silence_ms=self.cfg.stt_silence_ms,
+            max_utter_ms=self.cfg.stt_max_utter_ms,
         )
-        t.start()
-        threads.append(t)
+        print(f"[stt] iniciando · modelo={stt_cfg.model} idioma={stt_cfg.language}")
+        pipe = stt_mod.SttPipeline(
+            stt_cfg,
+            own_character_provider=self._guess_own_character,
+            on_message=self._on_stt_message,
+            log=print,
+        )
+        pipe.start()
+        self._stt_pipeline = pipe
 
-    outgoing = threading.Thread(target=outgoing_worker, args=(cfg, api), daemon=True)
-    outgoing.start()
+    def _on_stt_message(self, msg):
+        # msg é wim_bridge_stt.SttMessage
+        ext_id = f"stt::{msg.character}::{msg.player}::{msg.direction}::{int(time.time()*1000)}::{hash(msg.body) & 0xffff}"
+        arrow = "🔊←" if msg.direction == "incoming" else "🔊→"
+        print(f"{arrow} [{msg.character}] {msg.player}: {msg.body}")
+        self.api.post("/api/ingest", {
+            "messages": [
+                {
+                    "externalId": ext_id,
+                    "character": msg.character,
+                    "player": msg.player,
+                    "body": msg.body,
+                    "direction": msg.direction,
+                    "status": "received" if msg.direction == "incoming" else "sent",
+                }
+            ]
+        })
 
-    scanner = threading.Thread(target=scan_worker, args=(cfg, api), daemon=True)
-    scanner.start()
 
-    log.info(
-        "bridge rodando: %d tailer(s), 1 sender, 1 scanner. Ctrl+C para sair.",
-        len(threads),
-    )
-    try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        log.info("encerrando.")
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="config.ini")
+    ap.add_argument("--url", default=None, help="sobrescreve base_url")
+    ap.add_argument("--token", default=None, help="sobrescreve bridge_token")
+    args = ap.parse_args()
+    cfg = load_config(args.config)
+    if args.url:
+        cfg.base_url = args.url
+    if args.token is not None:
+        cfg.bridge_token = args.token
+    print(f"[bridge] Bakers Whisper bridge · base_url={cfg.base_url}")
+    Bridge(cfg).start()
 
 
 if __name__ == "__main__":

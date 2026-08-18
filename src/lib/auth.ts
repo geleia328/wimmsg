@@ -1,83 +1,104 @@
-import { db } from "@/db";
-import { appSettings } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import type { NextRequest } from "next/server";
 
-function jsonResponse(payload: unknown, status: number) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function bearer(request: Request): string {
-  const header = request.headers.get("authorization") ?? "";
-  return header.replace(/^Bearer\s+/i, "").trim();
+function getToken(req: Request | NextRequest): string | null {
+  const h = req.headers.get("authorization") || req.headers.get("Authorization");
+  if (h) {
+    const m = h.match(/^Bearer\s+(.+)$/i);
+    if (m) return m[1].trim();
+    return h.trim();
+  }
+  const alt = req.headers.get("x-bridge-token") || req.headers.get("X-Bridge-Token");
+  if (alt) return alt.trim();
+  const url = new URL(req.url);
+  const q = url.searchParams.get("token");
+  if (q) return q.trim();
+  return null;
 }
 
 /**
- * Admin guard used by /settings APIs.
- *
- * The admin key is, in order:
- *   1. ADMIN_TOKEN env var, if set
- *   2. BRIDGE_TOKEN env var, fallback
- *
- * This keeps the settings page protected without introducing user accounts.
+ * Check if request has a valid bridge token.
+ * If BRIDGE_TOKEN is not set (dev), always allow.
  */
-export function checkAdminAuth(
-  request: Request,
-): { ok: true } | { ok: false; response: Response } {
+export function checkBridgeAuth(req: Request | NextRequest): boolean {
+  const expected = process.env.BRIDGE_TOKEN;
+  if (!expected || expected.length === 0) return true;
+  const got = getToken(req);
+  return got === expected;
+}
+
+/**
+ * Check if request has a valid admin token.
+ * Uses ADMIN_TOKEN if set, otherwise BRIDGE_TOKEN.
+ * If neither set (dev), always allow.
+ */
+export function checkAdminAuth(req: Request | NextRequest): boolean {
   const expected = process.env.ADMIN_TOKEN || process.env.BRIDGE_TOKEN;
-  if (!expected) return { ok: true };
+  if (!expected || expected.length === 0) return true;
+  const got = getToken(req);
+  return got === expected;
+}
 
-  const provided =
-    request.headers.get("x-admin-token")?.trim() || bearer(request);
+export function unauthorized(): Response {
+  return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+}
 
-  if (provided !== expected) {
+/**
+ * Case-insensitive name comparison.
+ */
+export function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Parse defensive body containing WIMBRIDGE/WIMRELAY markers, returning
+ * corrected fields when relay/marker syntax is present, or null otherwise.
+ */
+export type ParsedRelay = {
+  character: string;
+  player: string;
+  body: string;
+  direction: "incoming" | "outgoing";
+};
+
+export function parseRelayBody(
+  rawCharacter: string,
+  rawPlayer: string,
+  rawBody: string,
+): ParsedRelay | null {
+  if (!rawBody) return null;
+  const body = rawBody.trim();
+
+  // WIMRELAY<OWN:...><FROM:...><TS:...>msg
+  // WIMRELAY<OWN:...><TO:...><TS:...>msg
+  let m = body.match(/^\[?WIMRELAY\]?<OWN:([^>]+)><(FROM|TO):([^>]+)>(?:<TS:[^>]*>)?(.*)$/i);
+  if (m) {
+    const own = m[1].trim();
+    const kind = m[2].toUpperCase();
+    const other = m[3].trim();
+    const payload = m[4].trim();
     return {
-      ok: false,
-      response: jsonResponse({ error: "unauthorized" }, 401),
+      character: own,
+      player: other,
+      body: payload,
+      direction: kind === "FROM" ? "incoming" : "outgoing",
     };
   }
-  return { ok: true };
-}
 
-/**
- * Bridge guard used by Python/EXE endpoints.
- *
- * Accepted tokens:
- *   - BRIDGE_TOKEN env var (works before DB settings are configured)
- *   - app_settings.bridge_token (editable from /settings once DB is online)
- *
- * If neither token exists, dev mode allows requests.
- */
-export async function checkBridgeAuth(
-  request: Request,
-): Promise<{ ok: true } | { ok: false; response: Response }> {
-  const provided = bearer(request);
-  const envToken = process.env.BRIDGE_TOKEN?.trim();
-
-  if (envToken && provided === envToken) return { ok: true };
-
-  let dbToken = "";
-  try {
-    const [row] = await db
-      .select({ value: appSettings.value })
-      .from(appSettings)
-      .where(eq(appSettings.key, "bridge_token"))
-      .limit(1);
-    dbToken = row?.value?.trim() ?? "";
-  } catch {
-    // If DB is down, we can only rely on env token.
+  // [WIMBRIDGE]<OWN:...><FROM:...>msg
+  m = body.match(/^\[?WIMBRIDGE\]?<OWN:([^>]+)><(FROM|TO):([^>]+)>(.*)$/i);
+  if (m) {
+    const own = m[1].trim();
+    const kind = m[2].toUpperCase();
+    const other = m[3].trim();
+    const payload = m[4].trim();
+    return {
+      character: own,
+      player: other,
+      body: payload,
+      direction: kind === "FROM" ? "incoming" : "outgoing",
+    };
   }
 
-  if (dbToken && provided === dbToken) return { ok: true };
-
-  // Dev mode: if no token exists anywhere, allow access so the sandbox/local
-  // app works without configuration.
-  if (!envToken && !dbToken) return { ok: true };
-
-  return {
-    ok: false,
-    response: jsonResponse({ error: "unauthorized" }, 401),
-  };
+  return null;
 }

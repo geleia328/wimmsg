@@ -1,5 +1,13 @@
-import { GseView } from "@/components/GseView";
+import NavBar from "@/components/NavBar";
+import GseView from "@/components/GseView";
+
 export const dynamic = "force-dynamic";
-export default function Page() {
-  return <GseView />;
+
+export default function GsePage() {
+  return (
+    <>
+      <NavBar />
+      <GseView />
+    </>
+  );
 }

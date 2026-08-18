@@ -1,33 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, eq, asc } from "drizzle-orm";
-import { checkBridgeAuth } from "@/lib/auth";
+import { checkBridgeAuth, unauthorized } from "@/lib/auth";
+import { and, asc, eq } from "drizzle-orm";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Python bridge polls this endpoint to get outgoing whispers waiting to be
- * typed into WoW. Each row includes the `character` (window) it must be
- * routed to.
- */
-export async function GET(request: NextRequest) {
-  const guard = await checkBridgeAuth(request);
-  if (!guard.ok) return guard.response;
-
-  const pending = await db
-    .select({
-      id: messages.id,
-      character: messages.character,
-      player: messages.player,
-      body: messages.body,
-      createdAt: messages.createdAt,
-    })
-    .from(messages)
-    .where(and(eq(messages.direction, "outgoing"), eq(messages.status, "pending")))
-    .orderBy(asc(messages.createdAt))
-    .limit(50);
-
-  return NextResponse.json({ messages: pending });
+export async function GET(req: Request) {
+  if (!checkBridgeAuth(req)) return unauthorized();
+  const url = new URL(req.url);
+  const character = (url.searchParams.get("character") || "").trim();
+  const limit = Math.min(50, Math.max(1, parseInt(url.searchParams.get("limit") || "20", 10) || 20));
+  const cond = character
+    ? and(eq(messages.direction, "outgoing"), eq(messages.status, "pending"))
+    : and(eq(messages.direction, "outgoing"), eq(messages.status, "pending"));
+  const rows = await db.select().from(messages).where(cond).orderBy(asc(messages.createdAt)).limit(limit);
+  const filtered = character
+    ? rows.filter((r) => r.character.trim().toLowerCase() === character.toLowerCase())
+    : rows;
+  return Response.json({ ok: true, queue: filtered });
 }

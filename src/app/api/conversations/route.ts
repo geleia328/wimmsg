@@ -1,62 +1,74 @@
-import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { messages } from "@/db/schema";
 import { sql } from "drizzle-orm";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * One row per (character, player) pair with a preview + counters.
- *
- * IMPORTANT: grouping is case-insensitive. WoW/WIM often emits `Juper-Azralon`
- * while the user typed/opened `juper-azralon` in the site. Without this, the
- * same conversation appears split and incoming whispers seem to "not arrive".
- */
 export async function GET() {
-  const rows = await db.execute(sql/* sql */ `
-    WITH normalized AS (
-      SELECT
-        lower(character) AS n_character,
-        lower(player) AS n_player,
+  // Group by lower(character), lower(player) to avoid case duplicates.
+  const rows = await db.execute<{
+    character: string;
+    player: string;
+    last_at: string;
+    last_body: string;
+    last_direction: string;
+    incoming_count: string;
+    total_count: string;
+  }>(sql`
+    with normalized as (
+      select
+        lower(character) as ch_key,
+        lower(player)    as pl_key,
         character,
         player,
         direction,
         body,
+        created_at,
+        status
+      from messages
+    ),
+    grouped as (
+      select
+        ch_key,
+        pl_key,
+        max(created_at) as last_at,
+        count(*) filter (where direction = 'incoming') as incoming_count,
+        count(*) as total_count
+      from normalized
+      group by ch_key, pl_key
+    ),
+    last_msg as (
+      select distinct on (lower(character), lower(player))
+        lower(character) as ch_key,
+        lower(player)    as pl_key,
+        character,
+        player,
+        body,
+        direction,
         created_at
-      FROM ${messages}
+      from messages
+      order by lower(character), lower(player), created_at desc
     )
-    SELECT
-      n_character AS character,
-      n_player AS player,
-      MAX(created_at) AS last_at,
-      (
-        SELECT body FROM normalized m2
-        WHERE m2.n_player = m.n_player AND m2.n_character = m.n_character
-        ORDER BY created_at DESC LIMIT 1
-      ) AS last_body,
-      (
-        SELECT direction FROM normalized m3
-        WHERE m3.n_player = m.n_player AND m3.n_character = m.n_character
-        ORDER BY created_at DESC LIMIT 1
-      ) AS last_direction,
-      COUNT(*) FILTER (WHERE direction = 'incoming')::int AS incoming_count,
-      COUNT(*)::int AS total_count
-    FROM normalized m
-    GROUP BY n_character, n_player
-    ORDER BY last_at DESC
-    LIMIT 500
+    select
+      l.character,
+      l.player,
+      g.last_at,
+      l.body      as last_body,
+      l.direction as last_direction,
+      g.incoming_count,
+      g.total_count
+    from grouped g
+    join last_msg l on l.ch_key = g.ch_key and l.pl_key = g.pl_key
+    order by g.last_at desc
+    limit 200
   `);
-
-  return NextResponse.json({
-    conversations: rows.rows.map((r) => ({
-      character: (r.character as string) || "unknown",
-      player: r.player as string,
-      lastAt: r.last_at as string,
-      lastBody: r.last_body as string,
-      lastDirection: r.last_direction as "incoming" | "outgoing",
-      incomingCount: r.incoming_count as number,
-      totalCount: r.total_count as number,
-    })),
-  });
+  const list = (rows.rows || []).map((r) => ({
+    character: r.character,
+    player: r.player,
+    lastAt: r.last_at,
+    lastBody: r.last_body,
+    lastDirection: r.last_direction,
+    incomingCount: Number(r.incoming_count) || 0,
+    totalCount: Number(r.total_count) || 0,
+  }));
+  return Response.json({ ok: true, conversations: list });
 }

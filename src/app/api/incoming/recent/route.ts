@@ -1,42 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
 import { and, desc, eq, gt } from "drizzle-orm";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Returns the latest incoming whispers globally (any character, any player).
- * Supports `?since=<id>` so the UI can poll for "new since last check" and
- * fire notifications only for messages it hasn't seen before.
- */
-export async function GET(request: NextRequest) {
-  const since = Number.parseInt(
-    request.nextUrl.searchParams.get("since") ?? "0",
-    10,
-  );
-
-  const conditions = [eq(messages.direction, "incoming")];
-  if (Number.isFinite(since) && since > 0) {
-    conditions.push(gt(messages.id, since));
-  }
-
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const sinceMs = parseInt(url.searchParams.get("sinceMs") || "0", 10) || 0;
+  const since = sinceMs > 0 ? new Date(sinceMs) : new Date(Date.now() - 60_000);
   const rows = await db
-    .select({
-      id: messages.id,
-      character: messages.character,
-      player: messages.player,
-      body: messages.body,
-      createdAt: messages.createdAt,
-    })
+    .select()
     .from(messages)
-    .where(and(...conditions))
-    .orderBy(desc(messages.id))
-    .limit(50);
-
-  return NextResponse.json({
-    messages: rows.reverse(), // oldest → newest for easy fire-order
-    latestId: rows.length > 0 ? Math.max(...rows.map((r) => r.id)) : since,
-  });
+    .where(and(eq(messages.direction, "incoming"), gt(messages.createdAt, since)))
+    .orderBy(desc(messages.createdAt))
+    .limit(100);
+  return Response.json({ ok: true, messages: rows });
 }

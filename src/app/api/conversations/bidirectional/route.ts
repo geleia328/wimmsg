@@ -1,133 +1,83 @@
-import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { messages } from "@/db/schema";
-import { asc, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Direction = "incoming" | "outgoing";
-
-type RawMessage = typeof messages.$inferSelect;
-
-type NormalizedMessage = RawMessage & {
-  sourceCharacter: string;
-  sourcePlayer: string;
-  sourceDirection: string;
+type Row = {
+  id: number;
+  character: string;
+  player: string;
+  direction: string;
+  body: string;
+  status: string;
+  created_at: string;
 };
 
-function sameName(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
-}
-
-function normalizeForViewer(row: RawMessage, viewer: string, other: string): NormalizedMessage {
-  const isViewerRow = sameName(row.character, viewer) && sameName(row.player, other);
-  const normalizedDirection: Direction = isViewerRow
-    ? (row.direction as Direction)
-    : row.direction === "outgoing"
-      ? "incoming"
-      : "outgoing";
-
-  return {
-    ...row,
-    // Important: make the message relative to the currently-open chat.
-    // If you are looking at madelina↔taldoglaidon, rows originally stored as
-    // taldoglaidon→madelina must appear as INCOMING for madelina.
-    character: viewer,
-    player: other,
-    direction: normalizedDirection,
-    status:
-      normalizedDirection === "incoming"
-        ? "received"
-        : row.status === "received"
-          ? "sent"
-          : row.status,
-    sourceCharacter: row.character,
-    sourcePlayer: row.player,
-    sourceDirection: row.direction,
-  };
-}
-
-function strength(status: string): number {
-  if (status === "sent" || status === "received") return 3;
-  if (status === "pending") return 2;
-  if (status === "failed") return 1;
-  return 0;
-}
-
-/**
- * Collapses mirror duplicates.
- *
- * Example:
- *  - madelina outgoing "salve" (created when sending from the site)
- *  - taldoglaidon incoming "salve" (captured from the game/WIM)
- *
- * Both represent the same chat bubble when viewing madelina↔taldoglaidon.
- */
-function collapseMirrors(rows: NormalizedMessage[]): NormalizedMessage[] {
-  const out: NormalizedMessage[] = [];
-  for (const row of rows) {
-    const t = new Date(row.createdAt).getTime();
-    const dupIndex = out.findIndex((prev) => {
-      const pt = new Date(prev.createdAt).getTime();
-      return (
-        prev.direction === row.direction &&
-        prev.body === row.body &&
-        Math.abs(t - pt) <= 15_000
-      );
-    });
-
-    if (dupIndex < 0) {
-      out.push(row);
-      continue;
-    }
-
-    const prev = out[dupIndex];
-    if (strength(row.status) > strength(prev.status)) {
-      out[dupIndex] = { ...row, createdAt: prev.createdAt };
-    }
-  }
-  return out;
-}
-
-/**
- * GET /api/conversations/bidirectional?charA=Madelina-Gallywix&charB=Taldoglaidon-Gallywix
- *
- * Returns a NORMAL messenger view: all messages between charA and charB,
- * normalized relative to charA.
- */
-export async function GET(request: NextRequest) {
-  const charA = request.nextUrl.searchParams.get("charA");
-  const charB = request.nextUrl.searchParams.get("charB");
-
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const charA = (url.searchParams.get("charA") || "").trim();
+  const charB = (url.searchParams.get("charB") || "").trim();
   if (!charA || !charB) {
-    return NextResponse.json({ error: "charA and charB required" }, { status: 400 });
+    return Response.json({ ok: false, error: "charA and charB required" }, { status: 400 });
+  }
+  const limit = Math.min(1000, Math.max(1, parseInt(url.searchParams.get("limit") || "300", 10) || 300));
+
+  const res = await db.execute<Row>(sql`
+    select id, character, player, direction, body, status, created_at
+    from messages
+    where (lower(character) = lower(${charA}) and lower(player) = lower(${charB}))
+       or (lower(character) = lower(${charB}) and lower(player) = lower(${charA}))
+    order by created_at asc
+    limit ${limit}
+  `);
+
+  const rows = (res.rows || []) as Row[];
+
+  // Normalize direction to perspective of charA
+  type Norm = {
+    id: number;
+    body: string;
+    status: string;
+    createdAt: string;
+    direction: "incoming" | "outgoing";
+    key: string;
+  };
+  const A = charA.toLowerCase();
+  const normed: Norm[] = rows.map((r) => {
+    const ch = r.character.toLowerCase();
+    const dirFromA = ch === A ? r.direction : r.direction === "incoming" ? "outgoing" : "incoming";
+    return {
+      id: r.id,
+      body: r.body,
+      status: r.status,
+      createdAt: r.created_at,
+      direction: (dirFromA === "outgoing" ? "outgoing" : "incoming") as "incoming" | "outgoing",
+      key: `${dirFromA}::${r.body.trim()}`,
+    };
+  });
+
+  // Deduplicate mirrored messages within 15s window
+  const out: Norm[] = [];
+  for (const m of normed) {
+    let dup = false;
+    const t = new Date(m.createdAt).getTime();
+    for (let i = out.length - 1; i >= 0; i--) {
+      const o = out[i];
+      const dt = t - new Date(o.createdAt).getTime();
+      if (dt > 15000) break;
+      if (o.key === m.key) { dup = true; break; }
+    }
+    if (!dup) out.push(m);
   }
 
-  const charALower = charA.toLowerCase();
-  const charBLower = charB.toLowerCase();
-
-  const rows = await db
-    .select()
-    .from(messages)
-    .where(sql/* sql */ `
-      (
-        lower(${messages.character}) = ${charALower}
-        AND lower(${messages.player}) = ${charBLower}
-      ) OR (
-        lower(${messages.character}) = ${charBLower}
-        AND lower(${messages.player}) = ${charALower}
-      )
-    `)
-    .orderBy(asc(messages.createdAt))
-    .limit(200);
-
-  const normalized = rows.map((row) => normalizeForViewer(row, charA, charB));
-  const collapsed = collapseMirrors(normalized);
-
-  return NextResponse.json({
-    charA,
-    charB,
-    messages: collapsed,
+  return Response.json({
+    ok: true,
+    messages: out.map((m) => ({
+      id: m.id,
+      body: m.body,
+      status: m.status,
+      createdAt: m.createdAt,
+      direction: m.direction,
+    })),
   });
 }

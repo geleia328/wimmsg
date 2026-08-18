@@ -1,88 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { clientWindows } from "@/db/schema";
-import { checkBridgeAuth } from "@/lib/auth";
+import { checkBridgeAuth, unauthorized } from "@/lib/auth";
 import { sql } from "drizzle-orm";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type ScanPayload = {
-  scannedAt?: string;
-  windows: Array<{
-    character?: string;
-    windowTitle: string;
-    pid?: string | number;
-    hwnd: string | number;
-    foreground?: boolean;
-    matched?: boolean;
-    slot?: number | string;
-    realm?: string;
-  }>;
+type Win = {
+  character?: string;
+  windowTitle?: string;
+  pid?: string | number;
+  hwnd?: string | number;
+  foreground?: boolean;
+  matched?: boolean;
+  slot?: string;
+  realm?: string;
 };
 
-/**
- * The Python bridge posts here every N seconds with the full list of WoW
- * windows currently open on the machine. We UPSERT each row by hwnd and
- * remove rows we haven't seen for > 30s (garbage collection of closed
- * windows).
- */
-export async function POST(request: NextRequest) {
-  const guard = await checkBridgeAuth(request);
-  if (!guard.ok) return guard.response;
-
-  let payload: ScanPayload;
-  try {
-    payload = (await request.json()) as ScanPayload;
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-  }
-  if (!payload || !Array.isArray(payload.windows)) {
-    return NextResponse.json({ error: "missing_windows" }, { status: 400 });
-  }
-
-  const now = new Date();
-  const rows = payload.windows
-    .filter((w) => w && w.hwnd !== undefined && w.hwnd !== null)
-    .map((w) => ({
-      character: (w.character ?? "").trim(),
-      windowTitle: (w.windowTitle ?? "").slice(0, 255),
-      pid: String(w.pid ?? ""),
-      hwnd: String(w.hwnd),
-      foreground: w.foreground ? "yes" : "no",
-      matched: w.matched ? "yes" : "no",
-      slot: w.slot !== undefined ? String(w.slot) : "",
-      realm: (w.realm ?? "").slice(0, 64),
-      lastSeen: now,
-    }));
-
-  if (rows.length > 0) {
-    // Upsert one at a time — small N, keeps SQL simple. For 20+ windows this
-    // is still trivially fast.
-    for (const r of rows) {
-      await db
-        .insert(clientWindows)
-        .values(r)
-        .onConflictDoUpdate({
-          target: clientWindows.hwnd,
-          set: {
-            character: r.character,
-            windowTitle: r.windowTitle,
-            pid: r.pid,
-            foreground: r.foreground,
-            matched: r.matched,
-            slot: r.slot,
-            realm: r.realm,
-            lastSeen: now,
-          },
-        });
+export async function POST(req: Request) {
+  if (!checkBridgeAuth(req)) return unauthorized();
+  let payload: unknown;
+  try { payload = await req.json(); } catch { return Response.json({ ok: false }, { status: 400 }); }
+  const list: Win[] = Array.isArray((payload as { windows?: unknown })?.windows)
+    ? ((payload as { windows: Win[] }).windows)
+    : Array.isArray(payload)
+    ? (payload as Win[])
+    : [];
+  // Clear old, insert fresh snapshot
+  await db.execute(sql`truncate table client_windows restart identity`);
+  for (const w of list) {
+    try {
+      await db.insert(clientWindows).values({
+        character: w.character ? String(w.character) : null,
+        windowTitle: w.windowTitle ? String(w.windowTitle) : null,
+        pid: w.pid != null ? String(w.pid) : null,
+        hwnd: w.hwnd != null ? String(w.hwnd) : null,
+        foreground: w.foreground ? "yes" : "no",
+        matched: w.matched ? "yes" : "no",
+        slot: w.slot ? String(w.slot) : null,
+        realm: w.realm ? String(w.realm) : null,
+      });
+    } catch (e) {
+      console.error("[status/scan] insert error", e);
     }
   }
-
-  // Garbage-collect windows we haven't seen for > 30s (closed clients).
-  await db.execute(
-    sql/* sql */ `DELETE FROM ${clientWindows} WHERE last_seen < now() - interval '30 seconds'`,
-  );
-
-  return NextResponse.json({ ok: true, upserted: rows.length });
+  return Response.json({ ok: true, count: list.length });
 }
