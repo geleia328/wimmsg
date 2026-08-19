@@ -1,50 +1,171 @@
 name: Build Windows Executable
+
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
+    tags:
+      - "v*"
+    branches:
+      - main # compila um exe novo a cada push (artifact na aba Actions)
+  workflow_dispatch: # permite disparar manualmente pela aba Actions
+
 jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: write # necessário para criar Release
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
-          architecture: x64
-      - name: Install build dependencies
-        run: pip install pyinstaller==6.11.1 requests pydirectinput pyautogui pywin32 psutil Pillow pywin32-ctypes SpeechRecognition winocr
-      - name: Sanity imports
-        run: python -c "import win32gui, win32con, win32api, win32process, psutil, requests"
+          python-version: "3.11"
+          architecture: "x64"
+
+      - name: Show Python info
+        run: |
+          python --version
+          python -c "import sys; print(sys.version); print(sys.executable)"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install "pyinstaller==6.11.1"
+          pip install "requests>=2.31" "pydirectinput>=1.0.4" "pyautogui>=0.9.54" "pywin32>=306" "psutil>=5.9" "Pillow>=10.0"
+          # Voice relay deps — bundled into the .exe so users WITHOUT Python
+          # get real-time whisper reception (loopback audio, no mic needed).
+          pip install "SpeechRecognition>=3.10.0" "PyAudio>=0.2.14"
+          # Loopback capture (WASAPI) deps — required for voice without mic.
+          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0"
+          # OCR dep — best effort: if it ever fails, the exe still builds and
+          # OCR simply stays disabled at runtime (HAS_WINOCR guard).
+          pip install "winocr>=0.0.15" || echo "winocr unavailable - OCR will be disabled in this build"
+          pip install pywin32-ctypes
+          python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
+          python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
+          python -c "import speech_recognition, pyaudio; print('voice deps OK')"
+          python -c "import soundcard, numpy, mss; print('loopback deps OK')"
+          python -c "import winocr; print('OCR deps OK')" || echo "OCR deps missing - continuing without OCR"
+
       - name: Inject build constants
         shell: pwsh
         env:
           API_URL: ${{ secrets.API_URL }}
           BRIDGE_TOKEN: ${{ secrets.BRIDGE_TOKEN }}
         run: |
-          $p = 'public/downloads/wim_bridge_gui.py'
-          $c = [IO.File]::ReadAllText($p)
-          if ($env:API_URL) { $c = $c -replace 'API_URL="https://[^"]*"', ('API_URL="' + $env:API_URL + '"') }
-          if ($env:BRIDGE_TOKEN) { $c = $c.Replace('BRIDGE_TOKEN="COLE_SEU_TOKEN_AQUI"', 'BRIDGE_TOKEN="' + $env:BRIDGE_TOKEN + '"') }
-          [IO.File]::WriteAllText($p, $c, (New-Object Text.UTF8Encoding($false)))
-      - name: Parse Python
-        run: python -c "import ast,pathlib;ast.parse(pathlib.Path('public/downloads/wim_bridge_gui.py').read_text(encoding='utf-8'))"
-      - name: Build executable
-        run: pyinstaller --onefile --noconsole --name BakersWhisper --collect-submodules pyautogui --collect-submodules pydirectinput --collect-submodules psutil --hidden-import win32gui --hidden-import win32con --hidden-import win32api --hidden-import win32process --hidden-import win32ui --hidden-import winocr --hidden-import pywintypes --hidden-import pkg_resources.py2_warn public/downloads/wim_bridge_gui.py
-      - name: Verify executable
+          $src = "public/downloads/wim_bridge_gui.py"
+          if (-not (Test-Path $src)) {
+            Write-Error "Source file not found: $src"
+            exit 1
+          }
+          # Read as UTF-8 (avoids UTF-16 corruption that PyInstaller would choke on)
+          $content = [System.IO.File]::ReadAllText((Resolve-Path $src), [System.Text.Encoding]::UTF8)
+
+          if ($env:API_URL) {
+            $content = $content -replace 'API_URL = "https://[^"]*"', ('API_URL = "' + $env:API_URL + '"')
+            Write-Host "✓ API_URL injected: $env:API_URL"
+          } else {
+            Write-Warning "API_URL secret not set — using default in source"
+          }
+
+          if ($env:BRIDGE_TOKEN) {
+            $content = $content -replace 'BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"', ('BRIDGE_TOKEN = "' + $env:BRIDGE_TOKEN + '"')
+            Write-Host "✓ BRIDGE_TOKEN injected (length: $($env:BRIDGE_TOKEN.Length))"
+          } else {
+            Write-Warning "BRIDGE_TOKEN secret not set — .exe will run without auth"
+          }
+
+          [System.IO.File]::WriteAllText((Resolve-Path $src), $content, [System.Text.UTF8Encoding]::new($false))
+          Write-Host "✓ Constants injected into $src"
+
+      - name: Sanity-check the injected source
         shell: pwsh
-        run: if (!(Test-Path 'dist/BakersWhisper.exe')) { throw 'Executable missing' }; Get-Item dist/BakersWhisper.exe
-      - uses: actions/upload-artifact@v4
+        run: |
+          python -c "import ast; ast.parse(open('public/downloads/wim_bridge_gui.py', encoding='utf-8').read()); print('Python syntax OK')"
+
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: |
+          $pyargs = @(
+            "--onefile", "--noconsole", "--name", "BakersWhisper",
+            "--collect-submodules", "pyautogui",
+            "--collect-submodules", "pydirectinput",
+            "--collect-submodules", "psutil",
+            "--collect-all", "speech_recognition",
+            "--hidden-import", "pyaudio",
+            "--hidden-import", "speech_recognition",
+            "--hidden-import", "soundcard",
+            "--hidden-import", "numpy",
+            "--hidden-import", "mss",
+            "--hidden-import", "win32gui",
+            "--hidden-import", "win32con",
+            "--hidden-import", "win32api",
+            "--hidden-import", "win32process",
+            "--hidden-import", "pywintypes"
+          )
+          # Only bundle winocr when it actually installed, so the build never
+          # fails because of the OCR dependency.
+          python -c "import winocr" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $pyargs += @("--collect-all", "winocr", "--hidden-import", "winocr")
+            Write-Host "winocr detected - bundling OCR"
+          } else {
+            Write-Host "winocr NOT detected - building without OCR"
+          }
+          $pyargs += "public/downloads/wim_bridge_gui.py"
+          pyinstaller @pyargs
+
+      - name: Verify build
+        shell: pwsh
+        run: |
+          if (Test-Path dist/BakersWhisper.exe) {
+            Write-Host "✅ Build successful"
+            $item = Get-Item dist/BakersWhisper.exe
+            Write-Host "   File: $($item.FullName)"
+            Write-Host "   Size: $([math]::Round($item.Length / 1MB, 2)) MB"
+          } else {
+            Write-Host "❌ Build FAILED - executable not found"
+            Write-Host "Contents of dist/:"
+            Get-ChildItem dist -ErrorAction SilentlyContinue
+            Write-Host "Contents of build/:"
+            Get-ChildItem build -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+      - name: Upload artifact (available on every run)
+        uses: actions/upload-artifact@v4
         with:
           name: BakersWhisper-Windows
           path: dist/BakersWhisper.exe
           retention-days: 30
           if-no-files-found: error
-      - uses: softprops/action-gh-release@v2
+
+      - name: Create Release (for tag pushes)
         if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
           files: dist/BakersWhisper.exe
           name: Bakers Whisper ${{ github.ref_name }}
-          body: Baixe BakersWhisper.exe, permita no SmartScreen, configure servidor e Personagem-Reino e clique Iniciar.
+          body: |
+            ## 🥐 Bakers Whisper ${{ github.ref_name }}
+
+            ### 📥 Download
+            Baixe **BakersWhisper.exe** abaixo.
+
+            ### 🚀 Como usar
+            1. Execute o `.exe` — se o Windows bloquear, clique em **"Mais informações → Executar assim mesmo"**.
+            2. Abra o WoW em cada janela que quiser monitorar.
+            3. Dentro do jogo, digite `/chatlog` em cada janela.
+            4. No app, digite o nome do personagem (`Nome-Reino`) em cada linha.
+            5. Clique em **▶ Iniciar**.
+
+            Depois acesse o painel web e responda os whispers de qualquer lugar!
+
+            ### 🎙 Modo voz (tempo real)
+            O `.exe` já vem com reconhecimento de voz embutido — **não precisa instalar Python nem bibliotecas**.
+            Com um microfone ligado, o addon fala os whispers no jogo (nomes soletrados em alfabeto fonético)
+            e o app ouve e manda para o site em tempo real, mesmo que o seu WoW só grave o chatlog ao fechar.
+            Desative na aba ⚙ GSE do site ("Modo voz") ou no jogo com `/wimbridge voice`.
+          draft: false
+          prerelease: false

@@ -1,7 +1,8 @@
-## Interface: 110000
+## Interface: 120100
 ## Title: WIM Bridge
-## Notes: Echoes whispers to WoWChatLog for Bakers Whisper
-## Author: Bakers Whisper
-## Version: 2.0.0
+## Notes: Captura whispers para Bakers Whisper via canal relay, flush e VOZ (texto falado).
+## Author: WIM Bridge
+## Version: 2.9.2
 ## SavedVariables: WIMBridgeDB
+
 WIMBridge.lua

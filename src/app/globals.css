@@ -1,2 +1,25 @@
 @import "tailwindcss";
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0}button,a,input,textarea{outline:none}button,a{transition:opacity .15s,background-color .15s,border-color .15s}button:not(:disabled),a{cursor:pointer}.field{border:1px solid rgb(51 65 85);border-radius:.65rem;background:rgb(15 23 42);padding:.65rem .75rem;color:rgb(241 245 249);font-size:.875rem}.field::placeholder{color:rgb(100 116 139)}.field:focus{border-color:rgb(245 158 11);box-shadow:0 0 0 2px rgb(245 158 11/.12)}.pill{display:flex;flex:none;align-items:center;gap:.4rem;border:1px solid rgb(51 65 85);border-radius:999px;padding:.35rem .7rem;color:rgb(148 163 184);font-size:.7rem;white-space:nowrap}.pill-active{border-color:rgb(245 158 11);background:rgb(245 158 11/.12);color:rgb(253 230 138)}.card{border:1px solid rgb(30 41 59);border-radius:1rem;background:rgb(15 23 42);padding:1.25rem}.scrollbar-none{scrollbar-width:none}.scrollbar-none::-webkit-scrollbar{display:none}@media(max-width:640px){input,textarea,select{font-size:16px!important}}
+
+/* Safe-area support for notched devices (iPhone X+, iPads with notch) */
+@layer base {
+  :root {
+    --sat: env(safe-area-inset-top);
+    --sab: env(safe-area-inset-bottom);
+    --sal: env(safe-area-inset-left);
+    --sar: env(safe-area-inset-right);
+  }
+
+  /* Prevent iOS rubber-banding from breaking fixed layouts */
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    padding-top: var(--sat);
+    padding-bottom: var(--sab);
+    padding-left: var(--sal);
+    padding-right: var(--sar);
+    min-height: 100dvh;
+  }
+}
