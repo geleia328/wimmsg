@@ -153,37 +153,33 @@ def recognize_image(image, language: str = "pt") -> str:
     if not OCR_AVAILABLE:
         raise RuntimeError("OCR indisponível: winocr/Pillow/pywin32 não foram empacotados")
     prepared = preprocess(image)
-    last_error = None
     sync = getattr(winocr, "recognize_pil_sync", None)
     if callable(sync):
+        last_error = None
         for lang in (language, "en", None):
             try:
                 result: Any = sync(prepared, lang) if lang else sync(prepared)
                 if isinstance(result, dict):
                     return str(result.get("text", ""))
                 return str(getattr(result, "text", result or ""))
-            except Exception as error:
+            except (TypeError, ValueError, RuntimeError) as error:
                 last_error = error
+        if last_error:
+            raise last_error
     async_recognize = getattr(winocr, "recognize_pil", None)
     if callable(async_recognize):
         import asyncio
+        last_error = None
         for lang in (language, "en", None):
             try:
-                async def _await_operation():
-                    operation = (
-                        async_recognize(prepared, lang)
-                        if lang
-                        else async_recognize(prepared)
-                    )
-                    return await operation
-
-                result = asyncio.run(_await_operation())
-                if isinstance(result, dict):
-                    return str(result.get("text", ""))
+                call = async_recognize(prepared, lang) if lang else async_recognize(prepared)
+                result = asyncio.run(call)
                 return str(getattr(result, "text", result or ""))
-            except Exception as error:
+            except (TypeError, ValueError, RuntimeError) as error:
                 last_error = error
+        if last_error:
+            raise last_error
     raise RuntimeError(
         "winocr incompatível: esperado recognize_pil_sync ou recognize_pil; "
-        f"versão instalada expõe: {', '.join(x for x in dir(winocr) if x.startswith('recognize'))}; último erro: {last_error}"
+        f"versão instalada expõe: {', '.join(x for x in dir(winocr) if x.startswith('recognize'))}"
     )
