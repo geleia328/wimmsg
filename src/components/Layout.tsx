@@ -52,6 +52,7 @@ const HEADER_CONFIGS: Record<string, HeaderConfig> = {
 };
 
 const NAV_PILLS = [
+  { href: "/", label: "💬 Chat", color: "amber" },
   { href: "/download", label: "📥 Download", color: "amber" },
   { href: "/accounts", label: "📡 Contas", color: "emerald" },
   { href: "/gse", label: "⚙ GSE", color: "fuchsia" },
