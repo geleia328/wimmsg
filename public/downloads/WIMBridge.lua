@@ -6,6 +6,7 @@ WIMBRIDGE_VERSION = "3.1.0"
 WIMBridgeDB = WIMBridgeDB or {}
 if WIMBridgeDB.screenEnabled == nil then WIMBridgeDB.screenEnabled = true end
 if WIMBridgeDB.stripHeight == nil then WIMBridgeDB.stripHeight = 140 end
+if WIMBridgeDB.fontSize == nil then WIMBridgeDB.fontSize = 28 end
 if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = false end
 if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = false end
 
@@ -40,13 +41,29 @@ local function ensureChatLog()
     pcall(function() LoggingChat(true) end)
 end
 
+local function applyVisualSettings()
+    local h = tonumber(WIMBridgeDB.stripHeight) or 140
+    local fs = tonumber(WIMBridgeDB.fontSize) or 28
+    if h < 30 then h = 30 end
+    if fs < 8 then fs = 8 end
+    if relayFrame then relayFrame:SetHeight(h) end
+    if relayText then
+        local font = "Fonts\\FRIZQT__.TTF"
+        pcall(function()
+            local currentFont = relayText:GetFont()
+            if currentFont then font = currentFont end
+        end)
+        pcall(function() relayText:SetFont(font, fs, "OUTLINE") end)
+    end
+end
+
 local function ensureScreenFrame()
     if relayFrame or WIMBridgeDB.screenEnabled == false then return end
     pcall(function()
         relayFrame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
         relayFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
         relayFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
-        relayFrame:SetHeight(math.max(60, math.min(260, tonumber(WIMBridgeDB.stripHeight) or 140)))
+        relayFrame:SetHeight(math.max(30, tonumber(WIMBridgeDB.stripHeight) or 140))
         relayFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
         relayFrame:SetBackdropColor(0, 0, 0, 1.0)
         relayFrame:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -60,6 +77,7 @@ local function ensureScreenFrame()
         relayText:SetTextColor(1, 0.92, 0, 1)
         relayText:SetShadowColor(0, 0, 0, 1)
         relayText:SetShadowOffset(2, -2)
+        applyVisualSettings()
         relayFrame:Hide()
     end)
 end
@@ -130,6 +148,7 @@ pcall(function()
             print("|cffffcc00WIMBridge|r whispers capturados = " .. tostring(alive.whisperSeen))
             print("|cffffcc00WIMBridge|r OCR faixa = " .. tostring(WIMBridgeDB.screenEnabled ~= false))
             print("|cffffcc00WIMBridge|r tamanho faixa = " .. tostring(WIMBridgeDB.stripHeight or 140) .. "px")
+            print("|cffffcc00WIMBridge|r fonte faixa = " .. tostring(WIMBridgeDB.fontSize or 28) .. "px")
         elseif cmd == "test" then
             showScreen("in", "Teste-Azralon", "mensagem de teste da faixa OCR")
             print("|cffffcc00WIMBridge|r teste OCR exibido na faixa.")
@@ -138,13 +157,20 @@ pcall(function()
             print("|cffffcc00WIMBridge|r faixa OCR " .. ((WIMBridgeDB.screenEnabled ~= false) and "LIGADA" or "DESLIGADA"))
         elseif cmd:match("^size%s+%d+") or cmd:match("^height%s+%d+") then
             local n = tonumber(cmd:match("(%d+)")) or 140
-            n = math.max(60, math.min(260, n))
+            n = math.max(30, n)
             WIMBridgeDB.stripHeight = n
-            if relayFrame then relayFrame:SetHeight(n) end
+            applyVisualSettings()
             print("|cffffcc00WIMBridge|r tamanho da faixa OCR = " .. tostring(n) .. "px")
             showScreen("in", "Teste-Azralon", "faixa ajustada para " .. tostring(n) .. " pixels")
+        elseif cmd:match("^font%s+%d+") or cmd:match("^fontsize%s+%d+") or cmd:match("^fonte%s+%d+") then
+            local n = tonumber(cmd:match("(%d+)")) or 28
+            n = math.max(8, n)
+            WIMBridgeDB.fontSize = n
+            applyVisualSettings()
+            print("|cffffcc00WIMBridge|r fonte da faixa OCR = " .. tostring(n) .. "px")
+            showScreen("in", "Teste-Azralon", "fonte ajustada para " .. tostring(n) .. " pixels")
         else
-            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | screen | size 140")
+            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | screen | size 140 | font 32")
         end
     end
     alive.slash = true

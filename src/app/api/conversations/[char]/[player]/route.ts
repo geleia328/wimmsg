@@ -93,3 +93,19 @@ export async function POST(
     id: inserted?.id ?? null,
   });
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ char: string; player: string }> },
+) {
+  const { char, player } = await params;
+  const character = decodeURIComponent(char).toLowerCase();
+  const targetPlayer = decodeURIComponent(player).toLowerCase();
+
+  const deleted = await db
+    .delete(messages)
+    .where(and(eq(messages.character, character), eq(messages.player, targetPlayer)))
+    .returning({ id: messages.id });
+
+  return NextResponse.json({ ok: true, deleted: deleted.length });
+}
