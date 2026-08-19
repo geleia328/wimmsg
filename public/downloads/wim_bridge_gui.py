@@ -733,7 +733,7 @@ class GseSpammer:
         self.character = character
         self.hwnd = hwnd
         self.keybind = keybind
-        self.interval_ms = max(50, min(60000, int(interval_ms)))
+        self.interval_ms = max(50, min(2000, int(interval_ms)))
         self.log = log_cb
         self.pause_event = threading.Event()  # SET = paused
         self._stop = threading.Event()
@@ -747,7 +747,7 @@ class GseSpammer:
 
     def update(self, keybind: str, interval_ms: int) -> None:
         self.keybind = keybind
-        self.interval_ms = max(50, min(60000, int(interval_ms)))
+        self.interval_ms = max(50, min(2000, int(interval_ms)))
 
     def _run(self) -> None:
         self.log(f"⚙ GSE [{self.character}] iniciado — tecla {self.keybind!r}")

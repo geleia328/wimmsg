@@ -119,21 +119,6 @@ export default function GsePage() {
     }
   };
 
-  const saveGseInterval = async (char: string, intervalMs: number, keybind: string) => {
-    setBusy(true);
-    try {
-      await fetch(`/api/gse/${encodeURIComponent(char)}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ intervalMs, keybind }),
-      });
-      setMsg(`✅ Intervalo GSE de ${char} salvo: ${intervalMs}ms`);
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const bulk = async (action: "startAll" | "stopAll") => {
     setBusy(true);
     try {
@@ -258,13 +243,17 @@ export default function GsePage() {
                   </tr>
                 ) : (
                   states.map((row) => (
-                    <GseEditableRow
-                      key={row.character}
-                      row={row}
-                      busy={busy}
-                      onToggle={() => toggleOne(row.character, !row.running)}
-                      onSave={(intervalMs, keybind) => saveGseInterval(row.character, intervalMs, keybind)}
-                    />
+                    <tr key={row.character}>
+                      <td className="px-4 py-3 font-semibold">{row.character}</td>
+                      <td className="px-4 py-3 font-mono">{row.keybind}</td>
+                      <td className="px-4 py-3">{row.intervalMs}ms</td>
+                      <td className="px-4 py-3">{row.running ? "🟢 Rodando" : "⚫ Parado"}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => toggleOne(row.character, !row.running)} className="rounded bg-slate-700 px-2 py-1 text-xs font-bold text-slate-100">
+                          {row.running ? "Parar" : "Ligar"}
+                        </button>
+                      </td>
+                    </tr>
                   ))
                 )}
               </tbody>
@@ -273,71 +262,6 @@ export default function GsePage() {
         </section>
       </div>
     </Layout>
-  );
-}
-
-function GseEditableRow({
-  row,
-  busy,
-  onToggle,
-  onSave,
-}: {
-  row: GseRow;
-  busy: boolean;
-  onToggle: () => void;
-  onSave: (intervalMs: number, keybind: string) => void;
-}) {
-  const [interval, setIntervalValue] = useState(row.intervalMs);
-  const [keybind, setKeybind] = useState(row.keybind);
-
-  useEffect(() => {
-    setIntervalValue(row.intervalMs);
-    setKeybind(row.keybind);
-  }, [row.intervalMs, row.keybind]);
-
-  return (
-    <tr>
-      <td className="px-4 py-3 font-semibold">{row.character}</td>
-      <td className="px-4 py-3">
-        <input
-          value={keybind}
-          onChange={(e) => setKeybind(e.target.value)}
-          className="w-20 rounded bg-slate-800 px-2 py-1 font-mono text-sm text-slate-100 outline-none focus:ring-2 focus:ring-amber-500/60"
-        />
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min={10}
-            max={60000}
-            step={10}
-            value={interval}
-            onChange={(e) => setIntervalValue(Number(e.target.value))}
-            className="w-28 rounded bg-slate-800 px-2 py-1 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-amber-500/60"
-          />
-          <span className="text-xs text-slate-500">ms</span>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onSave(interval, keybind)}
-            className="rounded bg-amber-500 px-2 py-1 text-xs font-bold text-slate-950 disabled:opacity-40"
-          >
-            Salvar
-          </button>
-        </div>
-      </td>
-      <td className="px-4 py-3">{row.running ? "🟢 Rodando" : "⚫ Parado"}</td>
-      <td className="px-4 py-3 text-right">
-        <button
-          disabled={busy}
-          onClick={onToggle}
-          className="rounded bg-slate-700 px-2 py-1 text-xs font-bold text-slate-100 disabled:opacity-40"
-        >
-          {row.running ? "Parar" : "Ligar"}
-        </button>
-      </td>
-    </tr>
   );
 }
 

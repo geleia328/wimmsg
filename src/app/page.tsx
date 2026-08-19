@@ -124,21 +124,6 @@ export default function HomePage() {
     }
   };
 
-  const clearActiveConversation = async () => {
-    if (!active) return;
-    const ok = window.confirm(`Apagar conversa com ${active.player}?`);
-    if (!ok) return;
-    await fetch(
-      `/api/conversations/${encodeURIComponent(active.character)}/${encodeURIComponent(active.player)}`,
-      { method: "DELETE" },
-    );
-    setConversations((prev) =>
-      prev.filter((c) => !(c.character === active.character && c.player === active.player)),
-    );
-    setMessages([]);
-    setActive(null);
-  };
-
   return (
     <div className="flex h-dvh w-full flex-col">
       <header className="relative flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-3 py-2.5 backdrop-blur sm:px-6">
@@ -160,7 +145,6 @@ export default function HomePage() {
           </div>
         </div>
         <nav className="order-last -mx-1 flex w-full items-center gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs md:order-none md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
-          <Link href="/" className="whitespace-nowrap rounded border border-amber-500 bg-amber-500/10 px-2.5 py-1 text-amber-300 hover:bg-amber-500/20 md:px-3">💬 Chat</Link>
           <Link href="/download" className="whitespace-nowrap rounded border border-amber-500/50 bg-amber-500/10 px-2.5 py-1 text-amber-300 hover:bg-amber-500/20 md:px-3">📥 Download</Link>
           <Link href="/accounts" className="whitespace-nowrap rounded border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-1 text-emerald-300 hover:bg-emerald-500/20 md:px-3">📡 Contas</Link>
           <Link href="/gse" className="whitespace-nowrap rounded border border-fuchsia-500/50 bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-300 hover:bg-fuchsia-500/20 md:px-3">⚙ GSE</Link>
@@ -258,20 +242,10 @@ export default function HomePage() {
             </div>
           ) : (
             <>
-              <div className="flex items-start justify-between gap-3 border-b border-slate-800 bg-slate-900/60 px-4 py-3">
-                <div>
-                  <button onClick={() => setActive(null)} className="mb-2 rounded border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:bg-slate-800 md:hidden">← Voltar</button>
-                  <div className="text-sm font-bold text-slate-100">{active.player}</div>
-                  <div className="text-xs text-slate-500">{active.character}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={clearActiveConversation}
-                  className="rounded border border-rose-500/60 bg-rose-500/10 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/20"
-                  title="Apagar conversa"
-                >
-                  🗑 Limpar
-                </button>
+              <div className="border-b border-slate-800 bg-slate-900/60 px-4 py-3">
+                <button onClick={() => setActive(null)} className="mb-2 rounded border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:bg-slate-800 md:hidden">← Voltar</button>
+                <div className="text-sm font-bold text-slate-100">{active.player}</div>
+                <div className="text-xs text-slate-500">{active.character}</div>
               </div>
               <div className="flex-1 space-y-2 overflow-y-auto p-4">
                 {messages.length === 0 ? (

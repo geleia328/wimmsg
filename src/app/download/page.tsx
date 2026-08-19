@@ -31,25 +31,6 @@ export default function DownloadPage() {
         <p className="mt-3 text-xs text-slate-500">Windows 10 ou 11 · ~30 MB</p>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-cyan-500/40 bg-cyan-500/5 p-6 text-center sm:p-8">
-        <div className="text-5xl">🧩</div>
-        <h2 className="mt-3 text-2xl font-bold">Addon WIMBridge v3.1.0</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Addon novo com faixa preta/amarela grande para OCR. Instale em
-          <code className="mx-1 rounded bg-slate-800 px-1.5 text-cyan-300">Interface/AddOns/WIMBridge/WIMBridge.lua</code>
-          e use <code className="rounded bg-slate-800 px-1.5 text-cyan-300">/reload</code> no jogo.
-        </p>
-        <a
-          href="/api/download/WIMBridge.lua"
-          className="mt-5 inline-block w-full rounded-xl bg-cyan-500 px-6 py-3 text-base font-bold text-slate-950 shadow-lg hover:bg-cyan-400 sm:w-auto sm:px-8"
-        >
-          🧩 Baixar WIMBridge.lua
-        </a>
-        <p className="mt-3 text-xs text-slate-500">
-          Comandos: /wimbridge who · /wimbridge test · /wimbridge size 140 · /wimbridge font 32
-        </p>
-      </div>
-
       <div className="mt-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
         <b className="text-amber-300">⚠ Aviso do Windows Defender</b>
         <p className="mt-1 text-xs">
