@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.5"
 # =============================================================================
 
 import hashlib
@@ -86,6 +86,64 @@ try:
 except Exception:  # pragma: no cover
     winocr = None  # type: ignore
     HAS_WINOCR = False
+
+def _winocr_result_to_text(result) -> str:
+    """Normalizes whatever winocr returns (object with .text, dict or str)."""
+    if result is None:
+        return ""
+    if isinstance(result, dict):
+        return str(result.get("text", "") or "")
+    text = getattr(result, "text", None)
+    if text is not None:
+        return str(text)
+    return str(result)
+
+
+def _winocr_recognize(pil_image, language: str) -> str:
+    """
+    Robust OCR across winocr 0.0.x versions.
+
+    winocr 0.0.15 (pinned in requirements.txt) exposes
+    `recognize_pil_sync` / `recognize_pil`; older bridge builds called
+    `recognize_pil_image`, which no longer exists and caused:
+    "module 'winocr' has no attribute 'recognize_pil_image'".
+    This helper tries every known API in order so the bridge works on
+    any winocr release, with or without the language argument.
+    """
+    import asyncio as _asyncio
+
+    last_error = None
+    attempts = []
+
+    sync_fn = getattr(winocr, "recognize_pil_sync", None)
+    if callable(sync_fn):
+        attempts.append((sync_fn, False))
+    async_fn = getattr(winocr, "recognize_pil", None)
+    if callable(async_fn):
+        attempts.append((async_fn, True))
+    legacy_fn = getattr(winocr, "recognize_pil_image", None)
+    if callable(legacy_fn):
+        attempts.append((legacy_fn, True))
+
+    for fn, is_async in attempts:
+        try:
+            try:
+                result = fn(pil_image, language)
+            except (TypeError, ValueError):
+                # Signature without the language argument (some winocr builds).
+                result = fn(pil_image)
+            if is_async and hasattr(result, "send"):
+                result = _asyncio.run(result)
+            return _winocr_result_to_text(result)
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(
+        "winocr: nenhuma API de OCR utilizable encontrada "
+        "(testado recognize_pil_sync, recognize_pil e recognize_pil_image)"
+    )
 
 try:
     import psutil  # type: ignore
@@ -1767,8 +1825,7 @@ class BridgeEngine:
                     }
                     shot = sct.grab(region)
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
-                    text = getattr(result, "text", None) or str(result)
+                    text = _winocr_recognize(pil, "en-US")
                     if not first_ok and text.strip():
                         first_ok = True
                         self.log(
@@ -1777,9 +1834,14 @@ class BridgeEngine:
                         )
                 except Exception as e:
                     errs += 1
-                    if errs <= 3 or errs % 50 == 0:
+                    if errs == 10:
+                        self.log(
+                            f"⚠️ OCR desistindo temporariamente em {ref.character} "
+                            f"(10 falhas seguidas) — nova tentativa em 30s."
+                        )
+                    elif errs <= 3 or errs % 50 == 0:
                         self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
-                    time.sleep(1)
+                    time.sleep(30 if errs >= 10 else 1)
                     continue
                 if "WIMRELAY" not in text and "BWRELAY" not in text:
                     time.sleep(1.2)
@@ -1875,15 +1937,19 @@ class BridgeEngine:
                         continue
                     shot = sct.grab({"left": l, "top": t, "width": w, "height": h})
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    result = asyncio.run(winocr.recognize_pil_image(pil, "pt-BR"))
-                    text = getattr(result, "text", None) or str(result)
+                    text = _winocr_recognize(pil, "pt-BR")
                 except Exception as e:
                     stats["errs"] += 1
-                    if stats["errs"] <= 3 or stats["errs"] % 50 == 0:
+                    if stats["errs"] == 10:
+                        self.log(
+                            f"⚠️ OCR WIM desistindo temporariamente em {ref.character} "
+                            f"(10 falhas seguidas) — nova tentativa em 30s."
+                        )
+                    elif stats["errs"] <= 3 or stats["errs"] % 50 == 0:
                         self.log(
                             f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
                         )
-                    time.sleep(1.5)
+                    time.sleep(30 if stats["errs"] >= 10 else 1.5)
                     continue
                 now = time.time()
                 stats["lines"] += 1
