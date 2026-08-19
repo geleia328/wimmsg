@@ -32,7 +32,7 @@ jobs:
       - name: Parse Python
         run: python -c "import ast,pathlib;ast.parse(pathlib.Path('public/downloads/wim_bridge_gui.py').read_text(encoding='utf-8'))"
       - name: Build executable
-        run: pyinstaller --onefile --noconsole --name BakersWhisper --collect-submodules pyautogui --collect-submodules pydirectinput --collect-submodules psutil --hidden-import win32gui --hidden-import win32con --hidden-import win32api --hidden-import win32process --hidden-import pywintypes --hidden-import pkg_resources.py2_warn public/downloads/wim_bridge_gui.py
+        run: pyinstaller --onefile --noconsole --name BakersWhisper --collect-submodules pyautogui --collect-submodules pydirectinput --collect-submodules psutil --hidden-import win32gui --hidden-import win32con --hidden-import win32api --hidden-import win32process --hidden-import win32ui --hidden-import winocr --hidden-import pywintypes --hidden-import pkg_resources.py2_warn public/downloads/wim_bridge_gui.py
       - name: Verify executable
         shell: pwsh
         run: if (!(Test-Path 'dist/BakersWhisper.exe')) { throw 'Executable missing' }; Get-Item dist/BakersWhisper.exe
