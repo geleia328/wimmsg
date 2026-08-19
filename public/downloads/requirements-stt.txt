@@ -1,8 +1,0 @@
-# Extras para leitura via text-to-speech + speech-to-text (bypass do WoWChatLog).
-# Instale só se ativar STT no bridge:
-#   pip install -r requirements-stt.txt
-#
-# Requer Python 3.10+ e Visual C++ Redistributable no Windows.
-numpy>=1.24
-soundcard>=0.4.3
-faster-whisper>=1.0.0
