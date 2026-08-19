@@ -1,77 +1,34 @@
-import { NextRequest } from "next/server";
-import { readFile } from "fs/promises";
-import { existsSync } from "fs";
-import path from "path";
+import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Serves files from `public/downloads/` with explicit Content-Type and
- * Content-Disposition: attachment headers. This bypasses two common issues:
- *
- *  1. Some browsers (Chrome, Edge) block .zip files served with generic
- *     application/octet-stream saying the file "isn't commonly downloaded"
- *     unless the server explicitly declares content-type: application/zip.
- *  2. Ad blockers / corporate proxies sometimes mangle direct static file
- *     downloads. Serving via an API route sidesteps most of those.
+ * Public helper that redirects to the right GitHub raw asset so the /setup
+ * and /download pages never have to hardcode URLs. Keeping this dynamic makes
+ * it trivial to swap the source later.
  */
-const ALLOWED = new Set([
-  "WIMBridge.zip",
-  "wim_bridge.py",
-  "wim_bridge_gui.py",
-  "requirements.txt",
-  "config.example.ini",
-  "WIMBridge.lua",
-  "WIMBridge.toc",
-  "build-windows.yml",
-  "bakers-whisper-1.4.0-update.zip",
-]);
-
-const MIME: Record<string, string> = {
-  ".zip": "application/zip",
-  ".py": "text/x-python; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".ini": "text/plain; charset=utf-8",
-  ".lua": "text/plain; charset=utf-8",
-  ".toc": "text/plain; charset=utf-8",
+const KNOWN: Record<string, string> = {
+  "wim_bridge_gui.py":
+    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/wim_bridge_gui.py",
+  "whisper_announcer.py":
+    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/whisper_announcer.py",
+  "requirements.txt":
+    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/requirements.txt",
+  "config.example.ini":
+    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/config.example.ini",
+  "wim_bridge.py":
+    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/wim_bridge.py",
 };
 
 export async function GET(
-  _request: NextRequest,
-  context: { params: Promise<{ file: string }> },
+  _request: Request,
+  { params }: { params: Promise<{ file: string }> },
 ) {
-  const { file } = await context.params;
-  const safe = decodeURIComponent(file);
-
-  if (!ALLOWED.has(safe)) {
-    return new Response("Not found", { status: 404 });
+  const { file } = await params;
+  const url = KNOWN[file];
+  if (!url) {
+    return NextResponse.json({ error: "unknown_file" }, { status: 404 });
   }
-
-  // Some files are directly in downloads/, WIMBridge.lua/.toc are inside the
-  // WIMBridge/ subfolder, and the workflow lives in .github/workflows/.
-  const candidates = [
-    path.join(process.cwd(), "public", "downloads", safe),
-    path.join(process.cwd(), "public", "downloads", "WIMBridge", safe),
-    path.join(process.cwd(), ".github", "workflows", safe),
-  ];
-  const found = candidates.find((p) => existsSync(p));
-  if (!found) {
-    return new Response("File missing on server", { status: 404 });
-  }
-
-  const data = await readFile(found);
-  const ext = path.extname(safe).toLowerCase();
-  const mime = MIME[ext] ?? "application/octet-stream";
-
-  const body = new Uint8Array(data);
-  return new Response(body, {
-    status: 200,
-    headers: {
-      "content-type": mime,
-      "content-disposition": `attachment; filename="${safe}"`,
-      "content-length": String(data.length),
-      "cache-control": "no-store",
-    },
-  });
+  return NextResponse.redirect(url, { status: 302 });
 }

@@ -1,0 +1,70 @@
+diff --git a/public/downloads/wim_bridge_gui.py b/public/downloads/wim_bridge_gui.py
+--- a/public/downloads/wim_bridge_gui.py
++++ b/public/downloads/wim_bridge_gui.py
+@@
+-APP_VERSION = "1.4.3"
++APP_VERSION = "1.4.4"
+@@
++def _bw_ocr_text(result):
++    if isinstance(result, dict):
++        return str(result.get("text", "") or "")
++    return str(getattr(result, "text", result or "") or "")
++
++
++def ocr_recognize(image, language: str = "en-US") -> str:
++    """Recognize a PIL image using supported winocr APIs.
++
++    winocr 0.0.15 does not expose recognize_pil_image(). It exposes
++    recognize_pil_sync() and recognize_pil(). The async recognize_pil() returns
++    a WinRT IAsyncOperation, so it must be awaited inside a coroutine.
++    """
++    if not HAS_WINOCR or winocr is None:
++        raise RuntimeError("winocr não está disponível neste executável")
++    langs = []
++    for candidate in (language, language.split("-", 1)[0] if "-" in language else language, "pt-BR", "pt", "en-US", "en", None):
++        if candidate not in langs:
++            langs.append(candidate)
++    last_error = None
++    sync_recognize = getattr(winocr, "recognize_pil_sync", None)
++    if callable(sync_recognize):
++        for lang in langs:
++            try:
++                result = sync_recognize(image, lang) if lang else sync_recognize(image)
++                return _bw_ocr_text(result)
++            except Exception as error:
++                last_error = error
++    async_recognize = getattr(winocr, "recognize_pil", None)
++    if callable(async_recognize):
++        import asyncio
++        for lang in langs:
++            try:
++                async def _await_operation():
++                    operation = async_recognize(image, lang) if lang else async_recognize(image)
++                    return await operation
++                return _bw_ocr_text(asyncio.run(_await_operation()))
++            except Exception as error:
++                last_error = error
++    exposed = ", ".join(name for name in dir(winocr) if name.startswith("recognize"))
++    raise RuntimeError(f"winocr incompatível: esperado recognize_pil_sync ou recognize_pil; APIs expostas: {exposed}; último erro: {last_error}")
+@@
+-                    result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
+-                    text = getattr(result, "text", None) or str(result)
++                    text = ocr_recognize(pil, "en-US")
+@@
+-                    result = asyncio.run(winocr.recognize_pil_image(pil, "pt-BR"))
+-                    text = getattr(result, "text", None) or str(result)
++                    text = ocr_recognize(pil, "pt-BR")
+diff --git a/public/downloads/ocr_bridge.py b/public/downloads/ocr_bridge.py
+--- a/public/downloads/ocr_bridge.py
++++ b/public/downloads/ocr_bridge.py
+@@
+-                call = async_recognize(prepared, lang) if lang else async_recognize(prepared)
+-                result = asyncio.run(call)
++                async def _await_operation():
++                    operation = async_recognize(prepared, lang) if lang else async_recognize(prepared)
++                    return await operation
++
++                result = asyncio.run(_await_operation())
++                if isinstance(result, dict):
++                    return str(result.get("text", ""))
+                 return str(getattr(result, "text", result or ""))

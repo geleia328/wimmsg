@@ -17,11 +17,9 @@ type IncomingPayload = {
     receivedAt?: string;
     /**
      * The bridge posts BOTH sides of the chat:
-     *  - "incoming" (default): a whisper RECEIVED in this window
-     *    (from the addon echo or the native `[W From]` chat log line).
-     *  - "outgoing": a whisper SENT from this window, e.g. typed in-game and
-     *    captured from the native `[W To]` chat log line. This makes sure
-     *    replies typed inside WoW are never lost and show up in the site.
+     * - "incoming" (default): a whisper RECEIVED in this window.
+     * - "outgoing": a whisper SENT from this window, captured from the native
+     *   `[W To]` chat log line so replies typed in-game are never lost.
      */
     direction?: "incoming" | "outgoing";
     status?: string;
@@ -90,8 +88,6 @@ export async function POST(request: NextRequest) {
         typeof m.character === "string",
     )
     .map((m) => {
-      // Defensive server-side parser: if an older bridge parsed the relay line
-      // incorrectly as body="WIMRELAY<OWN...>", fix it here before storing.
       const relay = parseEmbeddedRelay(m.body);
       const character = (relay?.character ?? m.character.trim()) || "unknown";
       const player = relay?.player ?? m.player.trim();
@@ -120,9 +116,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ inserted: 0 });
   }
 
-  // Belt-and-suspenders: drop rows whose content already exists within ~8s
-  // (covers relay + native + voice + history-sync-on-restart duplicates that
-  // carry different externalIds).
   const uniqueRows = await filterDuplicateContent(rows);
   if (uniqueRows.length === 0) {
     return NextResponse.json({ inserted: 0, received: rows.length });
@@ -138,8 +131,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET() {
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(messages);
-  return NextResponse.json({ ok: true, totalMessages: count });
+  const [row] = await db.select({ count: sql`count(*)::int` }).from(messages);
+  return NextResponse.json({ ok: true, totalMessages: row?.count ?? 0 });
 }
