@@ -97,7 +97,7 @@ export default function GsePage() {
         voiceRelayEnabled: false,
         combatRelayEnabled: false,
       },
-      "Modo limpo aplicado: addon/chatlog + OCR da faixa, sem voz/WIM/combat",
+      "Modo OCR principal aplicado: faixa do addon em tempo real + chatlog como fallback",
     );
   };
 
@@ -135,9 +135,9 @@ export default function GsePage() {
         <section className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
           <div className="font-bold text-amber-300">Modo recomendado</div>
           <p className="mt-1 text-xs">
-            Mantive somente o necessário: leitor do bridge, GSE, delays e OCR da
-            faixa amarela do addon. Removi da tela os controles instáveis de voz,
-            combatlog e OCR WIM da janela inteira.
+            OCR da faixa amarela do addon é o caminho principal em tempo real.
+            O chatlog fica só como fallback/histórico, porque no seu WoW ele só
+            atualiza ao fechar o jogo. Voz, combatlog e OCR WIM inteiro ficam desligados.
           </p>
           <button
             disabled={busy}
@@ -155,16 +155,16 @@ export default function GsePage() {
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             <ToggleCard
-              label="Leitor de whispers"
-              desc="Deixe ligado para WoW → site funcionar."
+              label="Leitor do bridge"
+              desc="Fica ligado para fila, scan e fallback de histórico."
               value={controls.bridgeReaderEnabled}
-              onClick={() => saveControl({ bridgeReaderEnabled: !controls.bridgeReaderEnabled }, "Leitor atualizado")}
+              onClick={() => saveControl({ bridgeReaderEnabled: true }, "Leitor mantido ligado")}
             />
             <ToggleCard
               label="OCR da faixa do addon"
-              desc="Backup visual do WIMBridge. Não é o OCR WIM inteiro."
+              desc="Principal: lê WIMRELAY em tempo real na faixa amarela."
               value={controls.ocrRelayEnabled}
-              onClick={() => saveControl({ ocrRelayEnabled: !controls.ocrRelayEnabled }, "OCR da faixa atualizado")}
+              onClick={() => saveControl({ ocrRelayEnabled: true }, "OCR principal mantido ligado")}
             />
             <ToggleCard
               label="Master GSE"

@@ -119,9 +119,10 @@ export default function DiagnosticsPage() {
           <div className="font-bold text-amber-300">Diagnóstico de mão dupla</div>
           <p className="mt-1 text-xs">
             Se os testes abaixo criam conversa no site, a API está OK. Nesse caso,
-            o problema fica entre addon/bridge/captura local. Como seu addon mostra
-            “whispers capturados”, olhe no bridge por linhas começando com <b>←</b>,
-            <b>📷 ← OCR</b> ou <b>⚡(combatlog)</b>.
+            o problema fica entre addon/bridge/OCR local. Como seu addon mostra
+            “whispers capturados”, o caminho principal é o OCR da faixa amarela
+            lendo <b>WIMRELAY</b> em tempo real. Se aparecer erro de <b>winrt</b>,
+            o .exe antigo foi compilado sem PyWinRT.
           </p>
         </div>
 
@@ -161,10 +162,10 @@ export default function DiagnosticsPage() {
           <h2 className="text-base font-bold text-slate-100">Checklist no WoW/bridge</h2>
           <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-slate-300">
             <li>No WoW: <code className="rounded bg-slate-800 px-1.5 text-amber-300">/wimbridge who</code> deve mostrar eventos OK e contador aumentando.</li>
-            <li>No WoW: <code className="rounded bg-slate-800 px-1.5 text-amber-300">/chatlog</code> e <code className="rounded bg-slate-800 px-1.5 text-amber-300">/combatlog</code> devem estar ativos.</li>
-            <li>No bridge novo: precisa aparecer <code className="rounded bg-slate-800 px-1.5 text-emerald-300">v1.4.6</code> ou maior.</li>
-            <li>Ao receber whisper real, o bridge deve logar uma linha com <b>←</b>. Se não logar, o site não recebeu nada ainda.</li>
-            <li>Se aparecer “relay não parseado”, copie a linha do log para ajustar o parser exatamente.</li>
+            <li>No WoW: a faixa amarela do addon deve aparecer quando chega whisper (<b>WIMRELAY&lt;OWN...&gt;</b>).</li>
+            <li>No bridge novo: precisa aparecer <code className="rounded bg-slate-800 px-1.5 text-emerald-300">v1.4.8</code> ou maior.</li>
+            <li>Se aparecer erro <b>No module named winrt...</b>, baixe o .exe novo gerado pela Action — o antigo não tem OCR empacotado.</li>
+            <li>Ao receber whisper real, o bridge deve logar <b>📷 ← OCR</b>. Se não logar, o OCR local ainda não está funcionando.</li>
           </ol>
         </section>
 

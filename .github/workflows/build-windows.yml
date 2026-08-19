@@ -2,17 +2,15 @@ name: Build Windows Executable
 
 on:
   push:
-    tags:
-      - "v*"
-    branches:
-      - main # compila um exe novo a cada push (artifact na aba Actions)
-  workflow_dispatch: # permite disparar manualmente pela aba Actions
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: write # necessário para criar Release
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -23,30 +21,17 @@ jobs:
           python-version: "3.11"
           architecture: "x64"
 
-      - name: Show Python info
-        run: |
-          python --version
-          python -c "import sys; print(sys.version); print(sys.executable)"
-
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install "pyinstaller==6.11.1"
-          pip install "requests>=2.31" "pydirectinput>=1.0.4" "pyautogui>=0.9.54" "pywin32>=306" "psutil>=5.9" "Pillow>=10.0"
-          # Voice relay deps — bundled into the .exe so users WITHOUT Python
-          # get real-time whisper reception (loopback audio, no mic needed).
-          pip install "SpeechRecognition>=3.10.0" "PyAudio>=0.2.14"
-          # Loopback capture (WASAPI) deps — required for voice without mic.
-          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0"
-          # OCR dep — best effort: if it ever fails, the exe still builds and
-          # OCR simply stays disabled at runtime (HAS_WINOCR guard).
-          pip install "winocr>=0.0.15" || echo "winocr unavailable - OCR will be disabled in this build"
+          pip install -r public/downloads/requirements.txt
           pip install pywin32-ctypes
-          python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
-          python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
-          python -c "import speech_recognition, pyaudio; print('voice deps OK')"
-          python -c "import soundcard, numpy, mss; print('loopback deps OK')"
-          python -c "import winocr; print('OCR deps OK')" || echo "OCR deps missing - continuing without OCR"
+          python -c "import winocr; print('winocr OK')"
+          python -c "import winrt.windows.foundation.collections; print('winrt foundation collections OK')"
+          python -c "import winrt.windows.media.ocr; print('winrt media OCR OK')"
+          python -c "import mss, PIL; print('OCR capture deps OK')"
 
       - name: Inject build constants
         shell: pwsh
@@ -55,31 +40,18 @@ jobs:
           BRIDGE_TOKEN: ${{ secrets.BRIDGE_TOKEN }}
         run: |
           $src = "public/downloads/wim_bridge_gui.py"
-          if (-not (Test-Path $src)) {
-            Write-Error "Source file not found: $src"
-            exit 1
-          }
-          # Read as UTF-8 (avoids UTF-16 corruption that PyInstaller would choke on)
           $content = [System.IO.File]::ReadAllText((Resolve-Path $src), [System.Text.Encoding]::UTF8)
-
           if ($env:API_URL) {
             $content = $content -replace 'API_URL = "https://[^"]*"', ('API_URL = "' + $env:API_URL + '"')
-            Write-Host "✓ API_URL injected: $env:API_URL"
-          } else {
-            Write-Warning "API_URL secret not set — using default in source"
+            Write-Host "✓ API_URL injected"
           }
-
           if ($env:BRIDGE_TOKEN) {
             $content = $content -replace 'BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"', ('BRIDGE_TOKEN = "' + $env:BRIDGE_TOKEN + '"')
-            Write-Host "✓ BRIDGE_TOKEN injected (length: $($env:BRIDGE_TOKEN.Length))"
-          } else {
-            Write-Warning "BRIDGE_TOKEN secret not set — .exe will run without auth"
+            Write-Host "✓ BRIDGE_TOKEN injected"
           }
-
           [System.IO.File]::WriteAllText((Resolve-Path $src), $content, [System.Text.UTF8Encoding]::new($false))
-          Write-Host "✓ Constants injected into $src"
 
-      - name: Sanity-check the injected source
+      - name: Sanity check source
         shell: pwsh
         run: |
           python -c "import ast; ast.parse(open('public/downloads/wim_bridge_gui.py', encoding='utf-8').read()); print('Python syntax OK')"
@@ -92,48 +64,38 @@ jobs:
             "--collect-submodules", "pyautogui",
             "--collect-submodules", "pydirectinput",
             "--collect-submodules", "psutil",
-            "--collect-all", "speech_recognition",
-            "--hidden-import", "pyaudio",
-            "--hidden-import", "speech_recognition",
-            "--hidden-import", "soundcard",
-            "--hidden-import", "numpy",
+            "--collect-all", "winocr",
+            "--collect-submodules", "winrt",
+            "--hidden-import", "winocr",
+            "--hidden-import", "winrt.windows.foundation",
+            "--hidden-import", "winrt.windows.foundation.collections",
+            "--hidden-import", "winrt.windows.globalization",
+            "--hidden-import", "winrt.windows.graphics.imaging",
+            "--hidden-import", "winrt.windows.media.ocr",
+            "--hidden-import", "winrt.windows.storage.streams",
             "--hidden-import", "mss",
+            "--hidden-import", "PIL.Image",
             "--hidden-import", "win32gui",
             "--hidden-import", "win32con",
             "--hidden-import", "win32api",
             "--hidden-import", "win32process",
-            "--hidden-import", "pywintypes"
+            "--hidden-import", "pywintypes",
+            "--hidden-import", "speech_recognition",
+            "--hidden-import", "pyaudio",
+            "--hidden-import", "soundcard",
+            "--hidden-import", "numpy",
+            "public/downloads/wim_bridge_gui.py"
           )
-          # Only bundle winocr when it actually installed, so the build never
-          # fails because of the OCR dependency.
-          python -c "import winocr" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            $pyargs += @("--collect-all", "winocr", "--hidden-import", "winocr")
-            Write-Host "winocr detected - bundling OCR"
-          } else {
-            Write-Host "winocr NOT detected - building without OCR"
-          }
-          $pyargs += "public/downloads/wim_bridge_gui.py"
           pyinstaller @pyargs
 
-      - name: Verify build
+      - name: Verify OCR imports in build env
         shell: pwsh
         run: |
-          if (Test-Path dist/BakersWhisper.exe) {
-            Write-Host "✅ Build successful"
-            $item = Get-Item dist/BakersWhisper.exe
-            Write-Host "   File: $($item.FullName)"
-            Write-Host "   Size: $([math]::Round($item.Length / 1MB, 2)) MB"
-          } else {
-            Write-Host "❌ Build FAILED - executable not found"
-            Write-Host "Contents of dist/:"
-            Get-ChildItem dist -ErrorAction SilentlyContinue
-            Write-Host "Contents of build/:"
-            Get-ChildItem build -ErrorAction SilentlyContinue
-            exit 1
-          }
+          if (!(Test-Path dist/BakersWhisper.exe)) { throw "Executable not found" }
+          Write-Host "✅ Build successful: dist/BakersWhisper.exe"
+          Get-Item dist/BakersWhisper.exe | Format-List FullName,Length
 
-      - name: Upload artifact (available on every run)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: BakersWhisper-Windows
@@ -141,31 +103,13 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Create Release (for tag pushes)
+      - name: Create Release for tags
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/BakersWhisper.exe
           name: Bakers Whisper ${{ github.ref_name }}
           body: |
-            ## 🥐 Bakers Whisper ${{ github.ref_name }}
-
-            ### 📥 Download
-            Baixe **BakersWhisper.exe** abaixo.
-
-            ### 🚀 Como usar
-            1. Execute o `.exe` — se o Windows bloquear, clique em **"Mais informações → Executar assim mesmo"**.
-            2. Abra o WoW em cada janela que quiser monitorar.
-            3. Dentro do jogo, digite `/chatlog` em cada janela.
-            4. No app, digite o nome do personagem (`Nome-Reino`) em cada linha.
-            5. Clique em **▶ Iniciar**.
-
-            Depois acesse o painel web e responda os whispers de qualquer lugar!
-
-            ### 🎙 Modo voz (tempo real)
-            O `.exe` já vem com reconhecimento de voz embutido — **não precisa instalar Python nem bibliotecas**.
-            Com um microfone ligado, o addon fala os whispers no jogo (nomes soletrados em alfabeto fonético)
-            e o app ouve e manda para o site em tempo real, mesmo que o seu WoW só grave o chatlog ao fechar.
-            Desative na aba ⚙ GSE do site ("Modo voz") ou no jogo com `/wimbridge voice`.
+            Build com OCR principal corrigido: winocr + PyWinRT empacotados no .exe.
           draft: false
           prerelease: false

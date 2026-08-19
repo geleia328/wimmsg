@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.4.8"
 # =============================================================================
 
 import hashlib
@@ -1822,8 +1822,12 @@ class BridgeEngine:
         matches this window's character (security against misrouting).
         """
         if not (HAS_MSS and HAS_WINOCR and HAS_WIN32):
+            reason = ""
+            if not HAS_WINOCR:
+                reason = f" winocr/PyWinRT ausente: {WIM_OCR_IMPORT_ERROR}"
             self.log(
-                f"📷 OCR indisponível para {ref.character} (requer mss+winocr)."
+                f"📷 OCR principal indisponível para {ref.character}. "
+                f"Requer mss + winocr + PyWinRT empacotados no .exe.{reason}"
             )
             return
         import asyncio
@@ -2904,6 +2908,29 @@ class App:
     def _open_url(self, url: str):
         import webbrowser
         webbrowser.open(url)
+
+
+# =============================================================================
+# Entry point
+# =============================================================================
+def main():
+    if BRIDGE_TOKEN == "REPLACE_WITH_YOUR_TOKEN":
+        # Still runs — but user is warned that the build is unconfigured.
+        pass
+    root = tk.Tk()
+    try:
+        root.iconbitmap(default="")
+    except Exception:
+        pass
+    app = App(root)
+    root.protocol("WM_DELETE_WINDOW", lambda: (app.on_stop(), root.destroy()))
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
+
+er.open(url)
 
 
 # =============================================================================

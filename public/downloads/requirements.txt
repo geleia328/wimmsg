@@ -4,14 +4,17 @@ pyautogui>=0.9.54
 pywin32>=306 ; platform_system == "Windows"
 psutil>=5.9
 Pillow>=10.0
-# Voice relay (real-time whisper reception).
-# Loopback mode captures the PC's own audio (no microphone needed).
-# Already bundled inside BakersWhisper.exe — only needed when running from source.
+mss>=9.0
+# OCR principal: Windows built-in OCR via winocr/PyWinRT.
+winocr==0.0.15 ; platform_system == "Windows"
+winrt-Windows.Foundation.Collections>=3.2.1 ; platform_system == "Windows"
+winrt-Windows.Foundation>=3.2.1 ; platform_system == "Windows"
+winrt-Windows.Globalization>=3.2.1 ; platform_system == "Windows"
+winrt-Windows.Graphics.Imaging>=3.2.1 ; platform_system == "Windows"
+winrt-Windows.Media.Ocr>=3.2.1 ; platform_system == "Windows"
+winrt-Windows.Storage.Streams>=3.2.1 ; platform_system == "Windows"
+# Optional legacy/fallback voice deps (kept installable, disabled by default in site controls).
 SpeechRecognition>=3.10.0
 PyAudio>=0.2.14 ; platform_system == "Windows"
 soundcard>=0.4.2 ; platform_system == "Windows"
 numpy>=1.24
-# Screen OCR relay (screenshot + Windows built-in OCR).
-mss>=9.0
-# Hotfix v1.4.4 validates this exact winocr API: recognize_pil_sync / recognize_pil.
-winocr==0.0.15 ; platform_system == "Windows"

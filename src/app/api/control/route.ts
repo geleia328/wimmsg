@@ -50,11 +50,12 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
     whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
-    // Deprecated/noisy capture modes are forced off. The reliable modes kept
-    // in the UI are: chatlog/addon reader + relay-strip OCR.
+    // OCR da faixa do addon is the primary real-time capture path. Chatlog/sync
+    // remains a fallback for history because this user's WoW only flushes logs
+    // when the game closes.
     voiceRelayEnabled: false,
     combatRelayEnabled: false,
-    ocrRelayEnabled: get("ocr_relay_enabled") === "yes",
+    ocrRelayEnabled: true,
     wimScreenOcrEnabled: false,
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
