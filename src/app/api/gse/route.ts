@@ -1,75 +1,17 @@
-import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { gseState } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
-import { sql } from "drizzle-orm";
+import { asc } from "drizzle-orm";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-/**
- * GET  → returns state of ALL characters (used by both the site and the
- *        Python bridge which polls to sync).
- * POST → bulk operations: { action: "startAll" | "stopAll", characters?: string[] }
- *        If `characters` is omitted, applies to every row in the table.
- */
 export async function GET() {
-  const rows = await db.select().from(gseState);
-  return NextResponse.json({
-    states: rows.map((r) => ({
-      character: r.character,
-      running: r.running === "yes",
-      keybind: r.keybind,
-      intervalMs: Number(r.intervalMs) || 100,
-      updatedAt: r.updatedAt,
-    })),
-  });
+  const rows = await db.select().from(gseState).orderBy(asc(gseState.character));
+  return Response.json({ states: rows.map((row) => ({ ...row, running: row.running === "yes", intervalMs: Number(row.intervalMs) })) });
 }
-
-export async function POST(request: NextRequest) {
-  // Bulk endpoint is called by the site too, not just the bridge, so we only
-  // enforce auth on bridge-specific header presence.
-  const authHeader = request.headers.get("authorization");
-  if (authHeader) {
-    const guard = await checkBridgeAuth(request);
-    if (!guard.ok) return guard.response;
-  }
-
-  let payload: {
-    action?: "startAll" | "stopAll";
-    characters?: string[];
-  } = {};
-  try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-  }
-
-  const target = payload.action === "startAll" ? "yes" : "no";
-  if (!["startAll", "stopAll"].includes(payload.action ?? "")) {
-    return NextResponse.json({ error: "invalid_action" }, { status: 400 });
-  }
-
-  if (payload.characters && payload.characters.length > 0) {
-    // Bulk update only the listed characters.
-    for (const c of payload.characters) {
-      await db
-        .insert(gseState)
-        .values({ character: c, running: target })
-        .onConflictDoUpdate({
-          target: gseState.character,
-          set: { running: target, updatedAt: new Date() },
-        });
-    }
-    return NextResponse.json({ ok: true, affected: payload.characters.length });
-  }
-
-  // Otherwise flip every existing row.
-  await db.execute(sql/* sql */ `
-    UPDATE ${gseState} SET running = ${target}, updated_at = now()
-  `);
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(gseState);
-  return NextResponse.json({ ok: true, affected: count });
+export async function POST(request: Request) {
+  if (request.headers.get("authorization")) { const denied = await checkBridgeAuth(request); if (denied) return denied; }
+  const data = await request.json().catch(() => ({})) as { action?: string; characters?: string[] }; const running = data.action === "startAll" ? "yes" : data.action === "stopAll" ? "no" : null;
+  if (!running) return Response.json({ error: "Ação inválida" }, { status: 400 });
+  if (data.characters?.length) for (const character of data.characters) await db.insert(gseState).values({ character: character.slice(0,128), running }).onConflictDoUpdate({ target: gseState.character, set: { running, updatedAt: new Date() } });
+  else await db.update(gseState).set({ running, updatedAt: new Date() });
+  return Response.json({ ok: true });
 }
