@@ -56,6 +56,7 @@ const NAV_PILLS = [
   { href: "/accounts", label: "📡 Contas", color: "emerald" },
   { href: "/gse", label: "⚙ GSE", color: "fuchsia" },
   { href: "/settings", label: "🔐 Config", color: "sky" },
+  { href: "/diagnostics", label: "🧪 Diagnóstico", color: "cyan" },
   { href: "/setup", label: "Setup", color: "slate" },
 ];
 
@@ -151,6 +152,7 @@ export function Layout({ children, stats }: LayoutProps) {
               emerald: { border: "border-emerald-500/50", bg: "bg-emerald-500/10", text: "text-emerald-300", hover: "hover:bg-emerald-500/20" },
               fuchsia: { border: "border-fuchsia-500/50", bg: "bg-fuchsia-500/10", text: "text-fuchsia-300", hover: "hover:bg-fuchsia-500/20" },
               sky: { border: "border-sky-500/50", bg: "bg-sky-500/10", text: "text-sky-300", hover: "hover:bg-sky-500/20" },
+              cyan: { border: "border-cyan-500/50", bg: "bg-cyan-500/10", text: "text-cyan-300", hover: "hover:bg-cyan-500/20" },
               slate: { border: "border-slate-700", bg: "bg-transparent", text: "text-slate-300", hover: "hover:bg-slate-800" },
             };
             const c = colors[pill.color];

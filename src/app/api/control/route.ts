@@ -35,7 +35,9 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
   const num = (v: string, min: number, max: number) =>
     Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
   return {
-    bridgeReaderEnabled: get("bridge_reader_enabled") === "yes",
+    // Reader is essential for two-way operation; do not allow stale DB values
+    // to leave WoW -> site disabled.
+    bridgeReaderEnabled: true,
     gseMasterEnabled: get("gse_master_enabled") === "yes",
     whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 100, 5000),
     whisperAfterSendDelayMs: num(
@@ -48,10 +50,12 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
     whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
-    voiceRelayEnabled: get("voice_relay_enabled") === "yes",
-    combatRelayEnabled: get("combat_relay_enabled") === "yes",
+    // Deprecated/noisy capture modes are forced off. The reliable modes kept
+    // in the UI are: chatlog/addon reader + relay-strip OCR.
+    voiceRelayEnabled: false,
+    combatRelayEnabled: false,
     ocrRelayEnabled: get("ocr_relay_enabled") === "yes",
-    wimScreenOcrEnabled: get("wim_screen_ocr_enabled") === "yes",
+    wimScreenOcrEnabled: false,
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }

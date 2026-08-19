@@ -37,18 +37,18 @@ const EMPTY: Controls = {
   whisperChatSendDelayMs: 1000,
   whisperCloseChatEnabled: true,
   whisperChatCloseDelayMs: 500,
-  voiceRelayEnabled: true,
-  combatRelayEnabled: true,
+  voiceRelayEnabled: false,
+  combatRelayEnabled: false,
   ocrRelayEnabled: true,
-  wimScreenOcrEnabled: true,
+  wimScreenOcrEnabled: false,
   queuePollMs: 1500,
 };
 
 export default function GsePage() {
   const [controls, setControls] = useState<Controls>(EMPTY);
   const [states, setStates] = useState<GseRow[]>([]);
-  const [saving, setSaving] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -56,16 +56,10 @@ export default function GsePage() {
         fetch("/api/control", { cache: "no-store" }),
         fetch("/api/gse", { cache: "no-store" }),
       ]);
-      if (cRes.ok) {
-        const d = (await cRes.json()) as { controls: Controls };
-        setControls(d.controls);
-      }
-      if (gRes.ok) {
-        const d = (await gRes.json()) as { states: GseRow[] };
-        setStates(d.states);
-      }
+      if (cRes.ok) setControls(((await cRes.json()) as { controls: Controls }).controls);
+      if (gRes.ok) setStates(((await gRes.json()) as { states: GseRow[] }).states);
     } catch {
-      // ignore
+      // ignore transient errors
     }
   }, []);
 
@@ -75,8 +69,8 @@ export default function GsePage() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const saveControl = async (patch: Partial<Controls>, label: string) => {
-    setSaving(label);
+  const saveControl = async (patch: Partial<Controls>, label = "Configuração salva") => {
+    setBusy(true);
     try {
       const res = await fetch("/api/control", {
         method: "POST",
@@ -84,12 +78,27 @@ export default function GsePage() {
         body: JSON.stringify(patch),
       });
       if (res.ok) {
-        const d = (await res.json()) as { controls: Controls };
-        setControls(d.controls);
+        setControls(((await res.json()) as { controls: Controls }).controls);
+        setMsg(`✅ ${label}`);
+      } else {
+        setMsg("❌ Falha ao salvar");
       }
     } finally {
-      setSaving(null);
+      setBusy(false);
     }
+  };
+
+  const safeMode = async () => {
+    await saveControl(
+      {
+        bridgeReaderEnabled: true,
+        ocrRelayEnabled: true,
+        wimScreenOcrEnabled: false,
+        voiceRelayEnabled: false,
+        combatRelayEnabled: false,
+      },
+      "Modo limpo aplicado: addon/chatlog + OCR da faixa, sem voz/WIM/combat",
+    );
   };
 
   const toggleOne = async (char: string, running: boolean) => {
@@ -122,251 +131,154 @@ export default function GsePage() {
 
   return (
     <Layout>
-      <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6">
-        <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-5xl overflow-y-auto px-4 py-6 sm:px-6">
+        <section className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
+          <div className="font-bold text-amber-300">Modo recomendado</div>
+          <p className="mt-1 text-xs">
+            Mantive somente o necessário: leitor do bridge, GSE, delays e OCR da
+            faixa amarela do addon. Removi da tela os controles instáveis de voz,
+            combatlog e OCR WIM da janela inteira.
+          </p>
+          <button
+            disabled={busy}
+            onClick={safeMode}
+            className="mt-3 rounded bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40"
+          >
+            Aplicar modo limpo recomendado
+          </button>
+          {msg && <p className="mt-2 text-xs text-slate-300">{msg}</p>}
+        </section>
+
+        <section className="mb-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
           <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
-            Controle global
+            Controles essenciais
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            {[
-              {
-                label: "Leitor de janelas/whispers",
-                desc: "Mantém scan de contas + leitura do chat log ativa.",
-                key: "bridgeReaderEnabled" as const,
-              },
-              {
-                label: "Master GSE",
-                desc: "Se desligado, nenhuma janela recebe clique/tecla GSE.",
-                key: "gseMasterEnabled" as const,
-              },
-              {
-                label: "🎙 Modo voz (tempo real)",
-                desc: "Ouve whispers pelo microfone.",
-                key: "voiceRelayEnabled" as const,
-              },
-              {
-                label: "🗡 Relay pelo combatlog",
-                desc: "Espelha whispers no WoWCombatLog.txt.",
-                key: "combatRelayEnabled" as const,
-              },
-              {
-                label: "📷 OCR da tela",
-                desc: "Lê whispers direto da tela do jogo.",
-                key: "ocrRelayEnabled" as const,
-              },
-              {
-                label: "🖥 Leitor WIM (OCR)",
-                desc: "Tira print da janela do WIM e lê a conversa.",
-                key: "wimScreenOcrEnabled" as const,
-              },
-            ].map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() =>
-                  saveControl(
-                    { [item.key]: !controls[item.key] },
-                    item.key,
-                  )
-                }
-                className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-left transition hover:bg-slate-900/60"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-bold text-slate-100">{item.label}</div>
-                    <div className="text-xs text-slate-500">{item.desc}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      saveControl(
-                        { [item.key]: !controls[item.key] },
-                        item.key,
-                      );
-                    }}
-                    className={`rounded px-4 py-2 text-xs font-bold whitespace-nowrap ${
-                      controls[item.key]
-                        ? "bg-emerald-500 text-slate-950"
-                        : "bg-slate-700 text-slate-300"
-                    }`}
-                  >
-                    {controls[item.key] ? "LIGADO" : "DESLIGADO"}
-                  </button>
-                </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <ToggleCard
+              label="Leitor de whispers"
+              desc="Deixe ligado para WoW → site funcionar."
+              value={controls.bridgeReaderEnabled}
+              onClick={() => saveControl({ bridgeReaderEnabled: !controls.bridgeReaderEnabled }, "Leitor atualizado")}
+            />
+            <ToggleCard
+              label="OCR da faixa do addon"
+              desc="Backup visual do WIMBridge. Não é o OCR WIM inteiro."
+              value={controls.ocrRelayEnabled}
+              onClick={() => saveControl({ ocrRelayEnabled: !controls.ocrRelayEnabled }, "OCR da faixa atualizado")}
+            />
+            <ToggleCard
+              label="Master GSE"
+              desc="Liga/desliga macros GSE em todas as janelas."
+              value={controls.gseMasterEnabled}
+              onClick={() => saveControl({ gseMasterEnabled: !controls.gseMasterEnabled }, "Master GSE atualizado")}
+            />
+          </div>
+        </section>
+
+        <section className="mb-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
+          <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
+            Delays do envio site → WoW
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Delay label="Abrir chat" value={controls.whisperChatOpenDelayMs} onChange={(v) => saveControl({ whisperChatOpenDelayMs: v }, "Delay salvo")} />
+            <Delay label="Foco antes de digitar" value={controls.whisperFocusDelayMs} onChange={(v) => saveControl({ whisperFocusDelayMs: v }, "Delay salvo")} />
+            <Delay label="Entre teclas" value={controls.whisperKeystrokeDelayMs} onChange={(v) => saveControl({ whisperKeystrokeDelayMs: v }, "Delay salvo")} />
+            <Delay label="Enviar Enter" value={controls.whisperChatSendDelayMs} onChange={(v) => saveControl({ whisperChatSendDelayMs: v }, "Delay salvo")} />
+            <Delay label="Fechar chat" value={controls.whisperChatCloseDelayMs} onChange={(v) => saveControl({ whisperChatCloseDelayMs: v }, "Delay salvo")} />
+            <Delay label="Poll da fila" value={controls.queuePollMs} onChange={(v) => saveControl({ queuePollMs: v }, "Delay salvo")} />
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-slate-800 bg-slate-900/40">
+          <div className="flex flex-col gap-3 border-b border-slate-800 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-bold text-slate-100">Personagens GSE</div>
+              <div className="text-xs text-slate-500">Aparecem quando o bridge reporta estado GSE.</div>
+            </div>
+            <div className="flex gap-2">
+              <button disabled={busy || states.length === 0} onClick={() => bulk("startAll")} className="rounded bg-emerald-500 px-3 py-2 text-xs font-bold text-slate-950 disabled:opacity-40">
+                ▶ Todos
               </button>
-            ))}
+              <button disabled={busy || states.length === 0} onClick={() => bulk("stopAll")} className="rounded bg-rose-500 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">
+                ⏹ Parar
+              </button>
+            </div>
           </div>
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              {
-                label: "⏱ Abrir chat no jogo",
-                key: "whisperChatOpenDelayMs" as const,
-                min: 0,
-                max: 3000,
-                step: 50,
-              },
-              {
-                label: "⏱ Delay de foco antes de digitar",
-                key: "whisperFocusDelayMs" as const,
-                min: 100,
-                max: 5000,
-                step: 100,
-              },
-              {
-                label: "⏱ Entre cada tecla digitada",
-                key: "whisperKeystrokeDelayMs" as const,
-                min: 10,
-                max: 500,
-                step: 1,
-              },
-              {
-                label: "⏱ Enviar mensagem (Enter)",
-                key: "whisperChatSendDelayMs" as const,
-                min: 0,
-                max: 3000,
-                step: 50,
-              },
-              {
-                label: "⏱ Fechar chat (Escape)",
-                key: "whisperChatCloseDelayMs" as const,
-                min: 0,
-                max: 3000,
-                step: 50,
-              },
-              {
-                label: "⏱ Depois de enviar whisper",
-                key: "whisperAfterSendDelayMs" as const,
-                min: 100,
-                max: 5000,
-                step: 100,
-              },
-              {
-                label: "⏱ Poll da fila de whisper",
-                key: "queuePollMs" as const,
-                min: 500,
-                max: 10000,
-                step: 100,
-              },
-            ].map((item) => (
-              <label key={item.key} className="text-xs text-slate-400">
-                {item.label}
-                <input
-                  type="number"
-                  min={item.min}
-                  max={item.max}
-                  step={item.step}
-                  value={controls[item.key]}
-                  onChange={(e) =>
-                    saveControl(
-                      { [item.key]: Number(e.target.value) },
-                      item.key,
-                    )
-                  }
-                  className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-                />
-              </label>
-            ))}
-          </div>
-
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <button
-              type="button"
-              onClick={() => saveControl({}, "delays")}
-              className="w-full rounded bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40 sm:w-auto"
-            >
-              💾 Salvar delays
-            </button>
-            <span className="text-xs text-slate-500">
-              delays salvos: foco {controls.whisperFocusDelayMs}ms · digitar{" "}
-              {controls.whisperKeystrokeDelayMs}ms · enviar{" "}
-              {controls.whisperChatSendDelayMs}ms · fechar{" "}
-              {controls.whisperChatCloseDelayMs}ms · pós-envio{" "}
-              {controls.whisperAfterSendDelayMs}ms
-            </span>
-          </div>
-
-          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <button
-              type="button"
-              onClick={() => bulk("startAll")}
-              disabled={busy || states.length === 0}
-              className="w-full rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400 disabled:opacity-40 sm:w-auto"
-            >
-              ▶ Iniciar TODOS ({states.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => bulk("stopAll")}
-              disabled={busy || states.length === 0}
-              className="w-full rounded-lg bg-rose-500 px-6 py-3 text-sm font-bold text-white shadow hover:bg-rose-400 disabled:opacity-40 sm:w-auto"
-            >
-              ⏹ Parar TODOS
-            </button>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="relative overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
-          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/80 to-transparent sm:hidden" />
-          <table className="w-full min-w-[680px] text-sm">
-            <thead>
-              <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
-                <th className="px-4 py-3">Personagem</th>
-                <th className="px-4 py-3">Slot</th>
-                <th className="px-4 py-3">Status janela</th>
-                <th className="px-4 py-3">Tecla GSE</th>
-                <th className="px-4 py-3">Intervalo</th>
-                <th className="px-4 py-3">GSE</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {states.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
-                    Nenhum personagem com GSE registrado.
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[620px] text-sm">
+              <thead>
+                <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
+                  <th className="px-4 py-3">Personagem</th>
+                  <th className="px-4 py-3">Tecla</th>
+                  <th className="px-4 py-3">Intervalo</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3"></th>
                 </tr>
-              ) : (
-                states.map((row) => (
-                  <tr key={row.character} className="hover:bg-slate-800/20">
-                    <td className="px-4 py-3 text-sm font-semibold">{row.character}</td>
-                    <td className="px-4 py-3 text-sm font-mono text-slate-400">wow1</td>
-                    <td className="px-4 py-3">
-                      <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                    </td>
-                    <td className="px-4 py-3 text-sm font-mono">{row.keybind}</td>
-                    <td className="px-4 py-3 text-sm">{row.intervalMs}ms</td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`inline-block h-2 w-2 rounded-full ${
-                          row.running ? "bg-emerald-500" : "bg-slate-600"
-                        }`}
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => toggleOne(row.character, !row.running)}
-                        disabled={busy}
-                        className={`rounded px-2 py-1 text-xs font-semibold ${
-                          row.running
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : "bg-slate-700 text-slate-300"
-                        }`}
-                      >
-                        {row.running ? "● ON" : "○ OFF"}
-                      </button>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {states.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-10 text-center text-sm text-slate-500">
+                      Nenhum personagem GSE registrado.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  states.map((row) => (
+                    <tr key={row.character}>
+                      <td className="px-4 py-3 font-semibold">{row.character}</td>
+                      <td className="px-4 py-3 font-mono">{row.keybind}</td>
+                      <td className="px-4 py-3">{row.intervalMs}ms</td>
+                      <td className="px-4 py-3">{row.running ? "🟢 Rodando" : "⚫ Parado"}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => toggleOne(row.character, !row.running)} className="rounded bg-slate-700 px-2 py-1 text-xs font-bold text-slate-100">
+                          {row.running ? "Parar" : "Ligar"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </Layout>
+  );
+}
+
+function ToggleCard({ label, desc, value, onClick }: { label: string; desc: string; value: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-left hover:bg-slate-900/60">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="font-bold text-slate-100">{label}</div>
+          <div className="text-xs text-slate-500">{desc}</div>
+        </div>
+        <span className={`rounded px-3 py-1 text-xs font-bold ${value ? "bg-emerald-500 text-slate-950" : "bg-slate-700 text-slate-300"}`}>
+          {value ? "ON" : "OFF"}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function Delay({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+  const [local, setLocal] = useState(value);
+  useEffect(() => setLocal(value), [value]);
+  return (
+    <label className="text-xs text-slate-400">
+      {label}
+      <div className="mt-1 flex gap-2">
+        <input
+          type="number"
+          value={local}
+          onChange={(e) => setLocal(Number(e.target.value))}
+          className="w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-amber-500/60"
+        />
+        <button type="button" onClick={() => onChange(local)} className="rounded bg-amber-500 px-2 text-xs font-bold text-slate-950">
+          OK
+        </button>
+      </div>
+    </label>
   );
 }

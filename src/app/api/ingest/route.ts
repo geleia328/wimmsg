@@ -8,22 +8,28 @@ import { sql } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type IncomingMessage = {
+  externalId?: string;
+  external_id?: string;
+  character?: string;
+  char?: string;
+  own?: string;
+  player?: string;
+  from?: string;
+  to?: string;
+  body?: string;
+  text?: string;
+  message?: string;
+  receivedAt?: string;
+  received_at?: string;
+  createdAt?: string;
+  direction?: "incoming" | "outgoing";
+  status?: string;
+};
+
 type IncomingPayload = {
-  messages: Array<{
-    externalId?: string;
-    character: string;
-    player: string;
-    body: string;
-    receivedAt?: string;
-    /**
-     * The bridge posts BOTH sides of the chat:
-     * - "incoming" (default): a whisper RECEIVED in this window.
-     * - "outgoing": a whisper SENT from this window, captured from the native
-     *   `[W To]` chat log line so replies typed in-game are never lost.
-     */
-    direction?: "incoming" | "outgoing";
-    status?: string;
-  }>;
+  messages?: IncomingMessage[];
+  message?: IncomingMessage;
 };
 
 type ParsedRelay = {
@@ -34,8 +40,13 @@ type ParsedRelay = {
 };
 
 function parseEmbeddedRelay(body: string): ParsedRelay | null {
-  const from = body.match(
-    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><FROM:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
+  const normalized = body
+    .replace(/[‹＜«]/g, "<")
+    .replace(/[›＞»]/g, ">")
+    .replace(/WIM\s*RELAY/gi, "WIMRELAY")
+    .replace(/BW\s*RELAY/gi, "BWRELAY");
+  const from = normalized.match(
+    /(?:\[WIMBRIDGE\]|WIMRELAY|BWRELAY)?\s*<\s*OWN\s*:\s*([^>]+?)\s*>\s*<\s*FROM\s*:\s*([^>]+?)\s*>\s*(?:<\s*TS\s*:[^>]+?\s*>\s*)?([\s\S]*)$/i,
   );
   if (from) {
     return {
@@ -45,8 +56,8 @@ function parseEmbeddedRelay(body: string): ParsedRelay | null {
       body: from[3].trim(),
     };
   }
-  const to = body.match(
-    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><TO:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
+  const to = normalized.match(
+    /(?:\[WIMBRIDGE\]|WIMRELAY|BWRELAY)?\s*<\s*OWN\s*:\s*([^>]+?)\s*>\s*<\s*TO\s*:\s*([^>]+?)\s*>\s*(?:<\s*TS\s*:[^>]+?\s*>\s*)?([\s\S]*)$/i,
   );
   if (to) {
     return {
@@ -68,32 +79,39 @@ export async function POST(request: NextRequest) {
   const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
 
-  let payload: IncomingPayload;
+  let payload: IncomingPayload | IncomingMessage[];
   try {
-    payload = (await request.json()) as IncomingPayload;
+    payload = (await request.json()) as IncomingPayload | IncomingMessage[];
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  if (!payload || !Array.isArray(payload.messages)) {
+  const rawMessages: IncomingMessage[] = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.messages)
+      ? payload.messages
+      : payload?.message
+        ? [payload.message]
+        : [];
+
+  if (rawMessages.length === 0) {
     return NextResponse.json({ error: "missing_messages" }, { status: 400 });
   }
 
-  const rows = payload.messages
-    .filter(
-      (m) =>
-        m &&
-        typeof m.player === "string" &&
-        typeof m.body === "string" &&
-        typeof m.character === "string",
-    )
+  const rows = rawMessages
     .map((m) => {
-      const relay = parseEmbeddedRelay(m.body);
-      const character = (relay?.character ?? m.character.trim()) || "unknown";
-      const player = relay?.player ?? m.player.trim();
-      const body = relay?.body ?? m.body;
+      const rawBody = (m.body ?? m.text ?? m.message ?? "").trim();
+      const rawCharacter = (m.character ?? m.char ?? m.own ?? "unknown").trim();
+      const rawPlayer = (m.player ?? m.from ?? m.to ?? "").trim();
+      if (!rawBody || !rawPlayer) return null;
+
+      const relay = parseEmbeddedRelay(rawBody);
+      const character = (relay?.character ?? rawCharacter).trim().toLowerCase() || "unknown";
+      const player = (relay?.player ?? rawPlayer).trim().toLowerCase();
+      const body = (relay?.body ?? rawBody).trim();
       const direction = relay?.direction ?? m.direction ?? "incoming";
       const isOutgoing = direction === "outgoing";
+      const receivedAt = m.receivedAt ?? m.received_at ?? m.createdAt;
       return {
         character,
         player,
@@ -104,13 +122,14 @@ export async function POST(request: NextRequest) {
           : ("received" as const),
         externalId:
           m.externalId ??
-          `${character}-${player}-${m.receivedAt ?? new Date().toISOString()}-${Math.random()
+          m.external_id ??
+          `${character}-${player}-${receivedAt ?? new Date().toISOString()}-${Math.random()
             .toString(36)
             .slice(2, 8)}`,
-        createdAt: m.receivedAt ? new Date(m.receivedAt) : new Date(),
+        createdAt: receivedAt ? new Date(receivedAt) : new Date(),
       };
     })
-    .filter((r) => r.player.length > 0 && r.body.length > 0);
+    .filter((r): r is NonNullable<typeof r> => Boolean(r && r.player.length > 0 && r.body.length > 0));
 
   if (rows.length === 0) {
     return NextResponse.json({ inserted: 0 });

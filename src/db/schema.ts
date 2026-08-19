@@ -136,10 +136,10 @@ export const DEFAULT_APP_CONTROLS = {
   whisper_chat_send_delay_ms: "1000",
   whisper_close_chat_enabled: "yes",
   whisper_chat_close_delay_ms: "500",
-  voice_relay_enabled: "yes",
-  combat_relay_enabled: "yes",
+  voice_relay_enabled: "no",
+  combat_relay_enabled: "no",
   ocr_relay_enabled: "yes",
-  wim_screen_ocr_enabled: "yes",
+  wim_screen_ocr_enabled: "no",
   queue_poll_ms: "1500",
 } as const;
 

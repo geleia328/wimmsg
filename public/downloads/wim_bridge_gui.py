@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.6"
 # =============================================================================
 
 import hashlib
@@ -88,18 +88,20 @@ except Exception:  # pragma: no cover
     HAS_WINOCR = False
 
 
-class OcrLanguageMissingError(RuntimeError):
-    """Raised when Windows OCR language capability is not installed."""
-
-
 def winocr_pil_text(pil_image, lang: str = "en-US") -> str:
     """
     Compatibility wrapper for different `winocr` package versions.
 
-    Handles both old Bakers Whisper helper (`recognize_pil_image`) and the
-    public winocr package (`recognize_pil` / `recognize_pil_sync`). It also
-    detects the Windows OCR language-capability error and raises a clean typed
-    exception so worker threads can stop instead of spamming logs forever.
+    Some old/internal Bakers Whisper builds called:
+        winocr.recognize_pil_image(img, "pt-BR")
+
+    But the public PyPI/GitHub `winocr` package exposes:
+        winocr.recognize_pil(img, "pt")
+        winocr.recognize_pil_sync(img, "pt")
+
+    This wrapper tries all known APIs and both full Windows locale (pt-BR)
+    and base language (pt), preventing the runtime error:
+        module 'winocr' has no attribute 'recognize_pil_image'
     """
     if not HAS_WINOCR or winocr is None:
         raise RuntimeError("winocr indisponível")
@@ -117,21 +119,22 @@ def winocr_pil_text(pil_image, lang: str = "en-US") -> str:
             return str(text)
         return str(result)
 
-    # Try safer Windows OCR locales first. Some systems support en-US but not
-    # bare en; some support pt-BR but not pt. Keep requested language first.
-    langs: list[str] = []
-    for candidate in (lang, lang.split("-", 1)[0] if lang else "", "en-US", "en"):
-        if candidate and candidate not in langs:
-            langs.append(candidate)
+    langs = []
+    if lang:
+        langs.append(lang)
+        base = lang.split("-", 1)[0]
+        if base and base not in langs:
+            langs.append(base)
+    if "en" not in langs:
+        langs.append("en")
 
     func_names = (
-        "recognize_pil_image",
-        "recognize_pil",
-        "recognize_pil_sync",
+        "recognize_pil_image",  # custom gist / old bundled helper
+        "recognize_pil",        # public winocr async API
+        "recognize_pil_sync",   # public winocr sync API
     )
 
     last_error: Exception | None = None
-    language_missing_errors: list[str] = []
     available = [name for name in func_names if hasattr(winocr, name)]
     if not available:
         raise AttributeError(
@@ -147,19 +150,8 @@ def winocr_pil_text(pil_image, lang: str = "en-US") -> str:
                     result = asyncio.run(result)
                 return extract_text(result)
             except Exception as exc:
-                msg = str(exc)
-                if "Add-WindowsCapability" in msg or "Language.OCR" in msg:
-                    language_missing_errors.append(msg)
                 last_error = exc
                 continue
-
-    if language_missing_errors:
-        raise OcrLanguageMissingError(
-            "Windows OCR language ausente. Instale nas Configurações do Windows "
-            "(Idioma > Recursos opcionais > Reconhecimento óptico de caracteres) "
-            "ou rode PowerShell como Administrador: "
-            "DISM /Online /Add-Capability /CapabilityName:Language.OCR~~~en-US~0.0.1.0"
-        )
 
     raise RuntimeError(f"winocr falhou em todas as APIs/idiomas: {last_error}")
 
@@ -792,11 +784,23 @@ ADDON_TO_RE = re.compile(
 # of [WIMBRIDGE]. Accept it anywhere in the log line, including after a private
 # channel prefix: "[4. BWxxx] [Me]: WIMRELAY<OWN:Me><FROM:Them><TS:...>body".
 RELAY_FROM_RE = re.compile(
-    r"WIMRELAY<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
+    r"(?:WIMRELAY|BWRELAY)?\s*<\s*OWN\s*:\s*(?P<own>[^>]+?)\s*>\s*<\s*FROM\s*:\s*(?P<from>[^>]+?)\s*>\s*(?:<\s*TS\s*:\s*(?P<ts>[^>]+?)\s*>\s*)?(?P<body>.*)$",
+    re.IGNORECASE | re.DOTALL,
 )
 RELAY_TO_RE = re.compile(
-    r"WIMRELAY<OWN:(?P<own>[^>]+)><TO:(?P<to>[^>]+)>(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
+    r"(?:WIMRELAY|BWRELAY)?\s*<\s*OWN\s*:\s*(?P<own>[^>]+?)\s*>\s*<\s*TO\s*:\s*(?P<to>[^>]+?)\s*>\s*(?:<\s*TS\s*:\s*(?P<ts>[^>]+?)\s*>\s*)?(?P<body>.*)$",
+    re.IGNORECASE | re.DOTALL,
 )
+
+
+def _normalize_relay_ocr(text: str) -> str:
+    """Normalize common OCR distortions of the addon relay strip."""
+    clean = text.replace("‹", "<").replace("＜", "<").replace("«", "<")
+    clean = clean.replace("›", ">").replace("＞", ">").replace("»", ">")
+    clean = clean.replace("WIM RELAY", "WIMRELAY").replace("BW RELAY", "BWRELAY")
+    clean = re.sub(r"WIM\s*RELAY", "WIMRELAY", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"BW\s*RELAY", "BWRELAY", clean, flags=re.IGNORECASE)
+    return clean
 # WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
 # as long as /chatlog is on):
 #   [W From] [Sender-Realm]: message
@@ -813,15 +817,23 @@ NATIVE_TAG_RE = re.compile(
 NATIVE_NAME_RE = re.compile(
     r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$"
 )
+PLAYER_PAT = r"[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?"
 FALLBACKS_IN = [
-    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+sussurra:\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^De\s+(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
+    # English native WoW variants
+    re.compile(rf"^(?P<from>{PLAYER_PAT})\s+whispers?(?:\s+to\s+you)?:\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^(?:From|Whisper\s+From)\s+(?P<from>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
+    # Portuguese native WoW variants
+    re.compile(rf"^(?P<from>{PLAYER_PAT})\s+sussurra(?:\s+para\s+você)?:\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^(?P<from>{PLAYER_PAT})\s+te\s+sussurra:\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^De\s+(?P<from>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^Sussurro\s+de\s+(?P<from>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
+    # WIM-style visual copy/log snippets: "12:34 [Player]: body"
+    re.compile(rf"^(?:\d{{1,2}}:\d{{2}}\s*)?(?P<from>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
 ]
 FALLBACKS_OUT = [
-    re.compile(r"^(?:To|Para)\s+(?P<to>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^Você\s+sussurra\s+para\s+(?P<to>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^You\s+whisper\s+to\s+(?P<to>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^(?:To|Para|Whisper\s+To|Sussurro\s+para)\s+(?P<to>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^Você\s+sussurra\s+para\s+(?P<to>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
+    re.compile(rf"^You\s+whisper\s+to\s+(?P<to>{PLAYER_PAT}):\s+(?P<body>.+)$", re.IGNORECASE),
 ]
 
 
@@ -846,7 +858,7 @@ def parse_whisper(line: str, own_default: str) -> Optional[tuple[str, str, str, 
     if not stripped:
         return None
 
-    addon_clean = _strip_wow_markup(stripped)
+    addon_clean = _normalize_relay_ocr(_strip_wow_markup(stripped))
     # The addon may relay through a private WoW channel, so the chat log line
     # can contain a prefix like "[4. BWRealm123] [Player]: " before the
     # [WIMBRIDGE] marker. Use search(), not match().
@@ -1242,14 +1254,16 @@ class BridgeEngine:
             if c.chat_log and c.chat_log.exists():
                 self._sync_historical_messages(c)
 
-        # De-dup chat logs — one tailer per file.
-        seen: set[Path] = set()
+        # Start ONE chatlog tailer PER CHARACTER, even when several WoW windows
+        # share the same installation folder / WoWChatLog.txt. Older builds
+        # de-duped by file path; with multi-boxing this can make inbound whispers
+        # disappear or be attributed only to the first mapped character. Server
+        # content-dedupe prevents exact duplicates, while this guarantees
+        # WoW -> site visibility.
         for c in chars:
             if not c.chat_log:
                 continue
-            if c.chat_log in seen:
-                continue
-            seen.add(c.chat_log)
+            self.log(f"📖 chatlog ativo para {c.character}: {c.chat_log}")
             t = threading.Thread(target=self._incoming, args=(c,), daemon=True)
             t.start()
             self.threads.append(t)
@@ -1848,7 +1862,7 @@ class BridgeEngine:
                         first_ok = True
                         self.log(
                             f"📷 OCR lendo a janela {ref.character}: "
-                            f"{len(text)} chars na primeira leitura."
+                            f"{len(text)} chars. Texto: {text.strip()[:180]}"
                         )
                 except Exception as e:
                     errs += 1
@@ -1856,25 +1870,38 @@ class BridgeEngine:
                         self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
                     time.sleep(1)
                     continue
-                if "WIMRELAY" not in text and "BWRELAY" not in text:
+                relay_text = _normalize_relay_ocr(text)
+                upper_relay = relay_text.upper()
+                has_relay_marker = "WIMRELAY" in upper_relay or "BWRELAY" in upper_relay
+                has_relay_tags = "OWN" in upper_relay and ("FROM" in upper_relay or "TO" in upper_relay)
+                if not has_relay_marker and not has_relay_tags:
                     time.sleep(1.2)
                     continue
-                parsed = parse_whisper(text, ref.character)
+                parsed = parse_whisper(relay_text, ref.character)
                 if not parsed:
+                    errs += 1
+                    if errs <= 5 or errs % 25 == 0:
+                        self.log(
+                            f"🔎 OCR viu relay mas não parseou em {ref.character}: "
+                            f"{relay_text.strip()[:220]}"
+                        )
                     time.sleep(1.2)
                     continue
                 direction, own_raw, other, body = parsed
-                # SECURITY: the payload must belong to THIS window. If the OWN
-                # tag names a different character, discard — it means we read a
-                # foreign frame and must never misroute a buyer's message.
+                # OCR often confuses letters in OWN (ex: l/I, rn/m). The safe
+                # source of truth is the window this worker is screenshotting,
+                # not the OCR-read OWN tag. So we route to ref.character and only
+                # log mismatches for diagnostics instead of dropping the whisper.
                 if (
                     own_raw
                     and ref.character
                     and own_raw.strip().lower() != ref.character.strip().lower()
                 ):
-                    time.sleep(1.2)
-                    continue
-                own = self._canonical_char(own_raw) or ref.character
+                    self.log(
+                        f"🔎 OCR OWN diferente em {ref.character}: lido={own_raw!r}; "
+                        "roteando pela janela mapeada."
+                    )
+                own = ref.character or self._canonical_char(own_raw) or own_raw
                 if not own or not other or not body:
                     time.sleep(1.2)
                     continue
@@ -1950,27 +1977,19 @@ class BridgeEngine:
                         continue
                     shot = sct.grab({"left": l, "top": t, "width": w, "height": h})
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    text = winocr_pil_text(pil, "pt-BR")
-                except OcrLanguageMissingError as e:
-                    self.log(
-                        f"⚠️ OCR WIM desativado em {ref.character}: {e}"
-                    )
-                    self.log(
-                        "💡 Dica rápida: se não quiser usar OCR WIM, desligue 'Leitor WIM por OCR' em /gse. "
-                        "O OCR da faixa/combatlog/chatlog podem continuar funcionando."
-                    )
-                    return
+                    # Use en-US for whole-window WIM OCR too. The public winocr
+                    # package frequently fails on Windows machines without the
+                    # Portuguese OCR capability installed, logging:
+                    # Add-WindowsCapability -Online -Name "Language.OCR~~~en-US~0.0.1.0"
+                    # The relay-strip OCR already works with en-US on these
+                    # systems, and WIM OCR only needs player names/text routing.
+                    text = winocr_pil_text(pil, "en-US")
                 except Exception as e:
                     stats["errs"] += 1
-                    if stats["errs"] <= 3:
+                    if stats["errs"] <= 3 or stats["errs"] % 50 == 0:
                         self.log(
                             f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
                         )
-                    elif stats["errs"] == 10:
-                        self.log(
-                            f"⚠️ OCR WIM desistindo temporariamente em {ref.character} (10 falhas seguidas) — nova tentativa em 30s."
-                        )
-                        time.sleep(30)
                     time.sleep(1.5)
                     continue
                 now = time.time()
@@ -2051,13 +2070,18 @@ class BridgeEngine:
         WoWChatLog.txt only flushes on logout. The emote text carries the same
         BWRELAY/WIMRELAY payload, so parse_whisper understands it.
         """
+        unparsed = 0
         for line in tail_file(path, self.stop_event, self.log):
-            if "BWRELAY" not in line and "WIMRELAY" not in line:
+            relay_line = _normalize_relay_ocr(line)
+            if "BWRELAY" not in relay_line.upper() and "WIMRELAY" not in relay_line.upper():
                 continue
             if not self._get_controls().get("combatRelayEnabled", True):
                 continue
-            parsed = parse_whisper(line, "")
+            parsed = parse_whisper(relay_line, "")
             if not parsed:
+                unparsed += 1
+                if unparsed <= 5 or unparsed % 25 == 0:
+                    self.log(f"🔎 combatlog relay não parseado: {relay_line.strip()[:220]}")
                 continue
             direction, own_raw, other, body = parsed
             own = self._canonical_char(own_raw) or own_raw
@@ -2901,3 +2925,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

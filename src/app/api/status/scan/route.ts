@@ -11,11 +11,15 @@ type WindowPayload = {
   windowTitle?: string;
   pid?: string;
   hwnd?: string;
-  foreground?: string;
-  matched?: string;
-  slot?: string;
+  foreground?: string | boolean;
+  matched?: string | boolean;
+  slot?: string | number;
   realm?: string;
 };
+
+function yesNo(value: string | boolean | undefined): "yes" | "no" {
+  return value === true || value === "yes" || value === "true" ? "yes" : "no";
+}
 
 /**
  * POST → the Python bridge upserts the windows it currently sees. We key by
@@ -42,6 +46,7 @@ export async function POST(request: NextRequest) {
   for (const w of incoming) {
     if (!w.hwnd && !w.windowTitle) continue;
     const hwnd = w.hwnd ?? w.pid ?? w.windowTitle ?? "";
+    const slot = w.slot === undefined ? "" : String(w.slot);
     await db
       .insert(clientWindows)
       .values({
@@ -49,9 +54,9 @@ export async function POST(request: NextRequest) {
         windowTitle: w.windowTitle ?? "",
         pid: w.pid ?? "",
         hwnd,
-        foreground: w.foreground === "yes" ? "yes" : "no",
-        matched: w.matched === "yes" ? "yes" : "no",
-        slot: w.slot ?? "",
+        foreground: yesNo(w.foreground),
+        matched: yesNo(w.matched),
+        slot,
         realm: w.realm ?? "",
         lastSeen: new Date(),
       })
@@ -61,9 +66,9 @@ export async function POST(request: NextRequest) {
           character: w.character ?? "",
           windowTitle: w.windowTitle ?? "",
           pid: w.pid ?? "",
-          foreground: w.foreground === "yes" ? "yes" : "no",
-          matched: w.matched === "yes" ? "yes" : "no",
-          slot: w.slot ?? "",
+          foreground: yesNo(w.foreground),
+          matched: yesNo(w.matched),
+          slot,
           realm: w.realm ?? "",
           lastSeen: new Date(),
         },
