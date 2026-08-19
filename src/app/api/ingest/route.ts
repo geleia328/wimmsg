@@ -39,6 +39,20 @@ type ParsedRelay = {
   body: string;
 };
 
+function isLikelyPlayerName(player: string): boolean {
+  const p = player.trim().toLowerCase();
+  if (p.length < 3 || p.length > 64) return false;
+  if (!/[a-zà-ÿ]/i.test(p)) return false;
+  if (/^\d+$/.test(p)) return false;
+  if (["unknown", "guild", "party", "raid", "system", "wim", "general", "comercio", "trade"].includes(p)) return false;
+  return true;
+}
+
+function isLikelyPollutedBody(body: string): boolean {
+  const b = body.toLowerCase();
+  return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(b);
+}
+
 function parseEmbeddedRelay(body: string): ParsedRelay | null {
   const normalized = body
     .replace(/[‹＜«]/g, "<")
@@ -114,6 +128,11 @@ export async function POST(request: NextRequest) {
       const body = (relay?.body ?? rawBody).trim();
       const direction = relay?.direction ?? m.direction ?? "incoming";
       const isOutgoing = direction === "outgoing";
+      if (!isLikelyPlayerName(player)) return null;
+      if (!isOutgoing && isLikelyPollutedBody(body)) return null;
+      // Whole-window WIM OCR from older bridge builds used externalId wim-* and
+      // is the main source of random ads/UI pollution. Strip OCR uses ocr-*.
+      if (!isOutgoing && (m.externalId ?? m.external_id ?? "").startsWith("wim-")) return null;
       const receivedAt = m.receivedAt ?? m.received_at ?? m.createdAt;
       return {
         character,

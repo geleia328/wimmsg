@@ -1169,10 +1169,12 @@ DEFAULT_CONTROLS = {
     "whisperChatSendDelayMs": 1000,
     "whisperCloseChatEnabled": True,
     "whisperChatCloseDelayMs": 500,
-    "voiceRelayEnabled": True,
-    "combatRelayEnabled": True,
+    "voiceRelayEnabled": False,
+    "combatRelayEnabled": False,
     "ocrRelayEnabled": True,
-    "wimScreenOcrEnabled": True,
+    "wimScreenOcrEnabled": False,
+    "ocrStripTopPx": 28,
+    "ocrStripHeightPx": 140,
     "queuePollMs": 1500,
 }
 
@@ -1356,22 +1358,9 @@ class BridgeEngine:
                 f"📷 OCR individual por janela ativo ({len(ocr_seen)} janela(s))."
             )
 
-        # WIM screen reader: OCR of the whole window, no addon/logs needed.
-        wim_seen: set[int] = set()
-        for c in chars:
-            if c.hwnd in wim_seen:
-                continue
-            wim_seen.add(c.hwnd)
-            t9 = threading.Thread(
-                target=self._wim_ocr_worker, args=(c,), daemon=True
-            )
-            t9.start()
-            self.threads.append(t9)
-        if wim_seen:
-            self.log(
-                f"🖥 leitor WIM por OCR ativo ({len(wim_seen)} janela(s)) — "
-                "funciona SEM addon e SEM arquivos de log."
-            )
+        # IMPORTANT: do NOT start whole-window WIM OCR anymore. It reads trade,
+        # guild, objective tracker and random UI text, polluting the site with
+        # fake conversations. The only OCR target is the addon strip at the top.
 
         self.log(
             f"🥐 {APP_NAME} {APP_VERSION} — loopback + OCR + combatlog + voz. "
@@ -1879,11 +1868,16 @@ class BridgeEngine:
                     if width < 120:
                         time.sleep(1)
                         continue
+                    controls = self._get_controls()
+                    strip_top = int(controls.get("ocrStripTopPx", 28) or 28)
+                    strip_height = int(controls.get("ocrStripHeightPx", 140) or 140)
+                    strip_top = max(0, min(200, strip_top))
+                    strip_height = max(60, min(260, strip_height))
                     region = {
                         "left": l + 2,
-                        "top": t + 28,
+                        "top": t + strip_top,
                         "width": width,
-                        "height": 104,
+                        "height": strip_height,
                     }
                     shot = sct.grab(region)
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")

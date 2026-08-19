@@ -17,6 +17,8 @@ type Controls = {
   combatRelayEnabled: boolean;
   ocrRelayEnabled: boolean;
   wimScreenOcrEnabled: boolean;
+  ocrStripTopPx: number;
+  ocrStripHeightPx: number;
   queuePollMs: number;
 };
 
@@ -40,7 +42,9 @@ const EMPTY: Controls = {
   voiceRelayEnabled: false,
   combatRelayEnabled: false,
   ocrRelayEnabled: true,
-  wimScreenOcrEnabled: true,
+  wimScreenOcrEnabled: false,
+  ocrStripTopPx: 28,
+  ocrStripHeightPx: 140,
   queuePollMs: 1500,
 };
 
@@ -135,9 +139,9 @@ export default function GsePage() {
         <section className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
           <div className="font-bold text-amber-300">Modo recomendado</div>
           <p className="mt-1 text-xs">
-            OCR é o caminho principal em tempo real: a faixa amarela do addon
-            é lida primeiro, e o OCR da janela WIM inteira fica como auxiliar.
-            Chatlog é só fallback/histórico, porque no seu WoW ele só atualiza ao fechar.
+            OCR é o caminho principal em tempo real, mas somente a faixa preta/amarela
+            criada pelo addon será capturada. O OCR do chat/WIM inteiro fica desligado
+            para evitar anúncios, guild, comércio e textos aleatórios no site.
           </p>
           <button
             disabled={busy}
@@ -153,7 +157,7 @@ export default function GsePage() {
           <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
             Controles essenciais
           </div>
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-3">
             <ToggleCard
               label="Leitor do bridge"
               desc="Fica ligado para fila, scan e fallback de histórico."
@@ -161,16 +165,10 @@ export default function GsePage() {
               onClick={() => saveControl({ bridgeReaderEnabled: true }, "Leitor mantido ligado")}
             />
             <ToggleCard
-              label="OCR da faixa"
-              desc="Principal: lê WIMRELAY no topo da tela."
+              label="OCR somente da faixa"
+              desc="Principal: lê apenas a faixa preta/amarela do addon."
               value={controls.ocrRelayEnabled}
-              onClick={() => saveControl({ ocrRelayEnabled: true }, "OCR da faixa mantido ligado")}
-            />
-            <ToggleCard
-              label="OCR WIM auxiliar"
-              desc="Lê a janela WIM inteira e também procura WIMRELAY."
-              value={controls.wimScreenOcrEnabled}
-              onClick={() => saveControl({ wimScreenOcrEnabled: true }, "OCR WIM auxiliar mantido ligado")}
+              onClick={() => saveControl({ ocrRelayEnabled: true, wimScreenOcrEnabled: false }, "OCR da faixa mantido ligado")}
             />
             <ToggleCard
               label="Master GSE"
@@ -178,6 +176,21 @@ export default function GsePage() {
               value={controls.gseMasterEnabled}
               onClick={() => saveControl({ gseMasterEnabled: !controls.gseMasterEnabled }, "Master GSE atualizado")}
             />
+          </div>
+        </section>
+
+        <section className="mb-6 rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4 sm:p-5">
+          <div className="mb-3 text-xs uppercase tracking-wider text-cyan-300">
+            Área OCR da faixa preta/amarela
+          </div>
+          <p className="mb-3 text-xs text-slate-400">
+            O bridge vai recortar somente esta área no topo da janela do WoW.
+            Ajuste se a faixa do addon estiver maior/menor. Recomendo altura 120–160.
+            No addon, use também <code className="rounded bg-slate-800 px-1 text-amber-300">/wimbridge size 140</code>.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Delay label="Offset do topo (px)" value={controls.ocrStripTopPx} onChange={(v) => saveControl({ ocrStripTopPx: v }, "Topo OCR salvo")} />
+            <Delay label="Altura da faixa (px)" value={controls.ocrStripHeightPx} onChange={(v) => saveControl({ ocrStripHeightPx: v }, "Altura OCR salva")} />
           </div>
         </section>
 

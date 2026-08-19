@@ -25,6 +25,8 @@ type Controls = {
   combatRelayEnabled: boolean;
   ocrRelayEnabled: boolean;
   wimScreenOcrEnabled: boolean;
+  ocrStripTopPx: number;
+  ocrStripHeightPx: number;
   queuePollMs: number;
 };
 
@@ -56,7 +58,9 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     voiceRelayEnabled: false,
     combatRelayEnabled: false,
     ocrRelayEnabled: true,
-    wimScreenOcrEnabled: true,
+    wimScreenOcrEnabled: false,
+    ocrStripTopPx: num(get("ocr_strip_top_px"), 0, 200),
+    ocrStripHeightPx: num(get("ocr_strip_height_px"), 60, 260),
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
@@ -116,6 +120,8 @@ export async function POST(request: NextRequest) {
     [payload.whisperKeystrokeDelayMs, "whisper_keystroke_delay_ms", 10, 500],
     [payload.whisperChatSendDelayMs, "whisper_chat_send_delay_ms", 0, 3000],
     [payload.whisperChatCloseDelayMs, "whisper_chat_close_delay_ms", 0, 3000],
+    [payload.ocrStripTopPx, "ocr_strip_top_px", 0, 200],
+    [payload.ocrStripHeightPx, "ocr_strip_height_px", 60, 260],
     [payload.queuePollMs, "queue_poll_ms", 500, 10000],
   ];
   for (const [val, key, min, max] of numPairs) {

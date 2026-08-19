@@ -2,9 +2,10 @@
 -- Objetivo: mostrar uma faixa grande, limpa e exclusiva para OCR em tempo real.
 -- O bridge deve ler SOMENTE essa faixa, ignorando chat normal/anúncios.
 
-WIMBRIDGE_VERSION = "3.0.0"
+WIMBRIDGE_VERSION = "3.1.0"
 WIMBridgeDB = WIMBridgeDB or {}
 if WIMBridgeDB.screenEnabled == nil then WIMBridgeDB.screenEnabled = true end
+if WIMBridgeDB.stripHeight == nil then WIMBridgeDB.stripHeight = 140 end
 if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = false end
 if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = false end
 
@@ -45,7 +46,7 @@ local function ensureScreenFrame()
         relayFrame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
         relayFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
         relayFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
-        relayFrame:SetHeight(92)
+        relayFrame:SetHeight(math.max(60, math.min(260, tonumber(WIMBridgeDB.stripHeight) or 140)))
         relayFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
         relayFrame:SetBackdropColor(0, 0, 0, 1.0)
         relayFrame:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -128,14 +129,22 @@ pcall(function()
             print("|cffffcc00WIMBridge|r eventos = " .. (alive.events and "OK" or "FALHA"))
             print("|cffffcc00WIMBridge|r whispers capturados = " .. tostring(alive.whisperSeen))
             print("|cffffcc00WIMBridge|r OCR faixa = " .. tostring(WIMBridgeDB.screenEnabled ~= false))
+            print("|cffffcc00WIMBridge|r tamanho faixa = " .. tostring(WIMBridgeDB.stripHeight or 140) .. "px")
         elseif cmd == "test" then
             showScreen("in", "Teste-Azralon", "mensagem de teste da faixa OCR")
             print("|cffffcc00WIMBridge|r teste OCR exibido na faixa.")
         elseif cmd == "screen" then
             WIMBridgeDB.screenEnabled = not (WIMBridgeDB.screenEnabled ~= false)
             print("|cffffcc00WIMBridge|r faixa OCR " .. ((WIMBridgeDB.screenEnabled ~= false) and "LIGADA" or "DESLIGADA"))
+        elseif cmd:match("^size%s+%d+") or cmd:match("^height%s+%d+") then
+            local n = tonumber(cmd:match("(%d+)")) or 140
+            n = math.max(60, math.min(260, n))
+            WIMBridgeDB.stripHeight = n
+            if relayFrame then relayFrame:SetHeight(n) end
+            print("|cffffcc00WIMBridge|r tamanho da faixa OCR = " .. tostring(n) .. "px")
+            showScreen("in", "Teste-Azralon", "faixa ajustada para " .. tostring(n) .. " pixels")
         else
-            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | screen")
+            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | screen | size 140")
         end
     end
     alive.slash = true

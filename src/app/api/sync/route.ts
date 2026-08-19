@@ -8,6 +8,18 @@ import { sql } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function isLikelyPlayerName(player: string): boolean {
+  const p = player.trim().toLowerCase();
+  if (p.length < 3 || p.length > 64) return false;
+  if (!/[a-zà-ÿ]/i.test(p)) return false;
+  if (/^\d+$/.test(p)) return false;
+  return !["unknown", "guild", "party", "raid", "system", "wim", "general", "comercio", "trade"].includes(p);
+}
+
+function isLikelyPollutedBody(body: string): boolean {
+  return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(body);
+}
+
 type SyncPayload = {
   messages?: Array<{
     externalId?: string;
@@ -53,6 +65,9 @@ export async function POST(request: NextRequest) {
       const player = (m.player ?? "").trim().toLowerCase();
       const body = (m.body ?? "").trim();
       const createdAt = m.receivedAt ? new Date(m.receivedAt) : new Date();
+      if (!isLikelyPlayerName(player)) return null;
+      if (direction === "incoming" && isLikelyPollutedBody(body)) return null;
+      if (direction === "incoming" && (m.externalId ?? "").startsWith("wim-")) return null;
       return {
         character,
         player,
@@ -67,7 +82,8 @@ export async function POST(request: NextRequest) {
           `sync-${character}-${player}-${createdAt.toISOString()}-${body.slice(0, 16)}`,
         createdAt,
       };
-    });
+    })
+    .filter((r): r is NonNullable<typeof r> => Boolean(r));
 
   if (rows.length === 0) return NextResponse.json({ inserted: 0, received: 0 });
 

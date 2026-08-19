@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { filterDuplicateContent } from "@/lib/dedupe";
 
 export const runtime = "nodejs";
@@ -35,6 +35,7 @@ export async function GET(
       and(
         eq(messages.character, character),
         eq(messages.player, targetPlayer),
+        sql`${messages.body} !~* '(no do canal|intervalo|flood\\s*&\\s*queue|status:\\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\\s*-\\s*cidade|guilda ativa|recruta dps|lf craft)'`,
       ),
     )
     .orderBy(asc(messages.createdAt))
