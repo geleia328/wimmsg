@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.5"
+APP_VERSION = "1.4.2"
 # =============================================================================
 
 import hashlib
@@ -87,63 +87,81 @@ except Exception:  # pragma: no cover
     winocr = None  # type: ignore
     HAS_WINOCR = False
 
-def _winocr_result_to_text(result) -> str:
-    """Normalizes whatever winocr returns (object with .text, dict or str)."""
-    if result is None:
-        return ""
-    if isinstance(result, dict):
-        return str(result.get("text", "") or "")
-    text = getattr(result, "text", None)
-    if text is not None:
-        return str(text)
-    return str(result)
+
+class OcrLanguageMissingError(RuntimeError):
+    """Raised when Windows OCR language capability is not installed."""
 
 
-def _winocr_recognize(pil_image, language: str) -> str:
+def winocr_pil_text(pil_image, lang: str = "en-US") -> str:
     """
-    Robust OCR across winocr 0.0.x versions.
+    Compatibility wrapper for different `winocr` package versions.
 
-    winocr 0.0.15 (pinned in requirements.txt) exposes
-    `recognize_pil_sync` / `recognize_pil`; older bridge builds called
-    `recognize_pil_image`, which no longer exists and caused:
-    "module 'winocr' has no attribute 'recognize_pil_image'".
-    This helper tries every known API in order so the bridge works on
-    any winocr release, with or without the language argument.
+    Handles both old Bakers Whisper helper (`recognize_pil_image`) and the
+    public winocr package (`recognize_pil` / `recognize_pil_sync`). It also
+    detects the Windows OCR language-capability error and raises a clean typed
+    exception so worker threads can stop instead of spamming logs forever.
     """
-    import asyncio as _asyncio
+    if not HAS_WINOCR or winocr is None:
+        raise RuntimeError("winocr indisponível")
 
-    last_error = None
-    attempts = []
+    import inspect
+    import asyncio
 
-    sync_fn = getattr(winocr, "recognize_pil_sync", None)
-    if callable(sync_fn):
-        attempts.append((sync_fn, False))
-    async_fn = getattr(winocr, "recognize_pil", None)
-    if callable(async_fn):
-        attempts.append((async_fn, True))
-    legacy_fn = getattr(winocr, "recognize_pil_image", None)
-    if callable(legacy_fn):
-        attempts.append((legacy_fn, True))
+    def extract_text(result) -> str:
+        if result is None:
+            return ""
+        if isinstance(result, dict):
+            return str(result.get("text") or "")
+        text = getattr(result, "text", None)
+        if text is not None:
+            return str(text)
+        return str(result)
 
-    for fn, is_async in attempts:
-        try:
-            try:
-                result = fn(pil_image, language)
-            except (TypeError, ValueError):
-                # Signature without the language argument (some winocr builds).
-                result = fn(pil_image)
-            if is_async and hasattr(result, "send"):
-                result = _asyncio.run(result)
-            return _winocr_result_to_text(result)
-        except Exception as e:  # noqa: BLE001
-            last_error = e
+    # Try safer Windows OCR locales first. Some systems support en-US but not
+    # bare en; some support pt-BR but not pt. Keep requested language first.
+    langs: list[str] = []
+    for candidate in (lang, lang.split("-", 1)[0] if lang else "", "en-US", "en"):
+        if candidate and candidate not in langs:
+            langs.append(candidate)
 
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError(
-        "winocr: nenhuma API de OCR utilizable encontrada "
-        "(testado recognize_pil_sync, recognize_pil e recognize_pil_image)"
+    func_names = (
+        "recognize_pil_image",
+        "recognize_pil",
+        "recognize_pil_sync",
     )
+
+    last_error: Exception | None = None
+    language_missing_errors: list[str] = []
+    available = [name for name in func_names if hasattr(winocr, name)]
+    if not available:
+        raise AttributeError(
+            "winocr instalado não possui recognize_pil_image/recognize_pil/recognize_pil_sync"
+        )
+
+    for name in available:
+        fn = getattr(winocr, name)
+        for candidate_lang in langs:
+            try:
+                result = fn(pil_image, candidate_lang)
+                if inspect.isawaitable(result):
+                    result = asyncio.run(result)
+                return extract_text(result)
+            except Exception as exc:
+                msg = str(exc)
+                if "Add-WindowsCapability" in msg or "Language.OCR" in msg:
+                    language_missing_errors.append(msg)
+                last_error = exc
+                continue
+
+    if language_missing_errors:
+        raise OcrLanguageMissingError(
+            "Windows OCR language ausente. Instale nas Configurações do Windows "
+            "(Idioma > Recursos opcionais > Reconhecimento óptico de caracteres) "
+            "ou rode PowerShell como Administrador: "
+            "DISM /Online /Add-Capability /CapabilityName:Language.OCR~~~en-US~0.0.1.0"
+        )
+
+    raise RuntimeError(f"winocr falhou em todas as APIs/idiomas: {last_error}")
 
 try:
     import psutil  # type: ignore
@@ -1825,7 +1843,7 @@ class BridgeEngine:
                     }
                     shot = sct.grab(region)
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    text = _winocr_recognize(pil, "en-US")
+                    text = winocr_pil_text(pil, "en-US")
                     if not first_ok and text.strip():
                         first_ok = True
                         self.log(
@@ -1834,14 +1852,9 @@ class BridgeEngine:
                         )
                 except Exception as e:
                     errs += 1
-                    if errs == 10:
-                        self.log(
-                            f"⚠️ OCR desistindo temporariamente em {ref.character} "
-                            f"(10 falhas seguidas) — nova tentativa em 30s."
-                        )
-                    elif errs <= 3 or errs % 50 == 0:
+                    if errs <= 3 or errs % 50 == 0:
                         self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
-                    time.sleep(30 if errs >= 10 else 1)
+                    time.sleep(1)
                     continue
                 if "WIMRELAY" not in text and "BWRELAY" not in text:
                     time.sleep(1.2)
@@ -1937,19 +1950,28 @@ class BridgeEngine:
                         continue
                     shot = sct.grab({"left": l, "top": t, "width": w, "height": h})
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    text = _winocr_recognize(pil, "pt-BR")
+                    text = winocr_pil_text(pil, "pt-BR")
+                except OcrLanguageMissingError as e:
+                    self.log(
+                        f"⚠️ OCR WIM desativado em {ref.character}: {e}"
+                    )
+                    self.log(
+                        "💡 Dica rápida: se não quiser usar OCR WIM, desligue 'Leitor WIM por OCR' em /gse. "
+                        "O OCR da faixa/combatlog/chatlog podem continuar funcionando."
+                    )
+                    return
                 except Exception as e:
                     stats["errs"] += 1
-                    if stats["errs"] == 10:
-                        self.log(
-                            f"⚠️ OCR WIM desistindo temporariamente em {ref.character} "
-                            f"(10 falhas seguidas) — nova tentativa em 30s."
-                        )
-                    elif stats["errs"] <= 3 or stats["errs"] % 50 == 0:
+                    if stats["errs"] <= 3:
                         self.log(
                             f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
                         )
-                    time.sleep(30 if stats["errs"] >= 10 else 1.5)
+                    elif stats["errs"] == 10:
+                        self.log(
+                            f"⚠️ OCR WIM desistindo temporariamente em {ref.character} (10 falhas seguidas) — nova tentativa em 30s."
+                        )
+                        time.sleep(30)
+                    time.sleep(1.5)
                     continue
                 now = time.time()
                 stats["lines"] += 1
