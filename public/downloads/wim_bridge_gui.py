@@ -800,7 +800,33 @@ def _normalize_relay_ocr(text: str) -> str:
     clean = clean.replace("WIM RELAY", "WIMRELAY").replace("BW RELAY", "BWRELAY")
     clean = re.sub(r"WIM\s*RELAY", "WIMRELAY", clean, flags=re.IGNORECASE)
     clean = re.sub(r"BW\s*RELAY", "BWRELAY", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s+", " ", clean).strip()
     return clean
+
+
+SCREEN_BW_RE = re.compile(
+    r"\bB\s*W\s+(?P<kind>FROM|TO)\s+"
+    r"(?P<player>[A-Za-zÀ-ÿ0-9_'\-]{2,32}(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)"
+    r"\s*[:\-]\s*(?P<body>.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def parse_screen_bw_line(text: str, own_default: str) -> Optional[tuple[str, str, str, str]]:
+    """Parse the new large OCR strip: 'BW FROM Player-Reino: message'."""
+    clean = _normalize_relay_ocr(text)
+    m = SCREEN_BW_RE.search(clean)
+    if not m:
+        return None
+    kind = m.group("kind").upper()
+    player = m.group("player").strip()
+    body = m.group("body").strip()
+    # Cut off common UI garbage if OCR reads below the strip.
+    body = re.split(r"\s+(?:World of Warcraft|FPS|MS|Objetivos|Missões|Guild|General)\b", body, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+    if not player or not body:
+        return None
+    direction = "incoming" if kind == "FROM" else "outgoing"
+    return direction, own_default, player, body
 # WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
 # as long as /chatlog is on):
 #   [W From] [Sender-Realm]: message
@@ -1854,10 +1880,10 @@ class BridgeEngine:
                         time.sleep(1)
                         continue
                     region = {
-                        "left": l + 6,
+                        "left": l + 2,
                         "top": t + 28,
                         "width": width,
-                        "height": 60,
+                        "height": 104,
                     }
                     shot = sct.grab(region)
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
@@ -1875,36 +1901,33 @@ class BridgeEngine:
                     time.sleep(1)
                     continue
                 relay_text = _normalize_relay_ocr(text)
-                upper_relay = relay_text.upper()
-                has_relay_marker = "WIMRELAY" in upper_relay or "BWRELAY" in upper_relay
-                has_relay_tags = "OWN" in upper_relay and ("FROM" in upper_relay or "TO" in upper_relay)
-                if not has_relay_marker and not has_relay_tags:
-                    time.sleep(1.2)
-                    continue
-                parsed = parse_whisper(relay_text, ref.character)
+                parsed = parse_screen_bw_line(relay_text, ref.character)
+                if not parsed:
+                    upper_relay = relay_text.upper()
+                    has_relay_marker = "WIMRELAY" in upper_relay or "BWRELAY" in upper_relay
+                    has_relay_tags = "OWN" in upper_relay and ("FROM" in upper_relay or "TO" in upper_relay)
+                    if not has_relay_marker and not has_relay_tags:
+                        time.sleep(1.2)
+                        continue
+                    parsed = parse_whisper(relay_text, ref.character)
+
                 if not parsed:
                     errs += 1
                     if errs <= 5 or errs % 25 == 0:
                         self.log(
-                            f"🔎 OCR viu relay mas não parseou em {ref.character}: "
+                            f"🔎 OCR viu faixa mas não parseou em {ref.character}: "
                             f"{relay_text.strip()[:220]}"
                         )
                     time.sleep(1.2)
                     continue
+
                 direction, own_raw, other, body = parsed
-                # OCR often confuses letters in OWN (ex: l/I, rn/m). The safe
-                # source of truth is the window this worker is screenshotting,
-                # not the OCR-read OWN tag. So we route to ref.character and only
-                # log mismatches for diagnostics instead of dropping the whisper.
-                if (
-                    own_raw
-                    and ref.character
-                    and own_raw.strip().lower() != ref.character.strip().lower()
-                ):
-                    self.log(
-                        f"🔎 OCR OWN diferente em {ref.character}: lido={own_raw!r}; "
-                        "roteando pela janela mapeada."
-                    )
+                # The site already knows outgoing messages created there; send
+                # only real incoming buyer whispers to avoid visual pollution.
+                if direction != "incoming":
+                    time.sleep(1.2)
+                    continue
+
                 own = ref.character or self._canonical_char(own_raw) or own_raw
                 if not own or not other or not body:
                     time.sleep(1.2)

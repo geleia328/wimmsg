@@ -106,6 +106,9 @@ export async function POST(request: NextRequest) {
       if (!rawBody || !rawPlayer) return null;
 
       const relay = parseEmbeddedRelay(rawBody);
+      const looksLikeBrokenRelay = /WIM\s*RELAY|BW\s*RELAY|<\s*OWN\s*:|<\s*FROM\s*:|<\s*TO\s*:/i.test(rawBody);
+      if (!relay && looksLikeBrokenRelay) return null;
+
       const character = (relay?.character ?? rawCharacter).trim().toLowerCase() || "unknown";
       const player = (relay?.player ?? rawPlayer).trim().toLowerCase();
       const body = (relay?.body ?? rawBody).trim();
