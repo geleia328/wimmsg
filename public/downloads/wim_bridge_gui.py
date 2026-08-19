@@ -24,9 +24,10 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 # =============================================================================
 
+import asyncio
 import hashlib
 import json
 import os
@@ -86,6 +87,59 @@ try:
 except Exception:  # pragma: no cover
     winocr = None  # type: ignore
     HAS_WINOCR = False
+
+
+def ocr_recognize(image, language: str = "en") -> str:
+    """
+    Recognize a PIL image with the Windows built-in OCR engine.
+
+    winocr exposes `recognize_pil_sync` (sync) and `recognize_pil` (coroutine).
+    It does NOT expose `recognize_pil_image` — calling that raises
+    "module 'winocr' has no attribute 'recognize_pil_image'". This helper probes
+    the real API and also falls back through language tags, because a language
+    pack that is not installed on the machine makes the call raise instead of
+    returning text.
+    """
+    if not HAS_WINOCR or winocr is None or image is None:
+        return ""
+
+    # Windows OCR wants BCP-47 tags it actually has installed. Try the caller's
+    # preference first, then generic variants, then the engine default.
+    if language and language.lower().startswith("pt"):
+        langs = ("pt-BR", "pt", "en-US", "en", None)
+    elif language:
+        langs = ("en-US", "en", None)
+    else:
+        langs = (None,)
+
+    def _text(result) -> str:
+        if isinstance(result, dict):
+            return str(result.get("text", "") or "")
+        return str(getattr(result, "text", "") or "")
+
+    last_error: Exception | None = None
+
+    sync = getattr(winocr, "recognize_pil_sync", None)
+    if callable(sync):
+        for lang in langs:
+            try:
+                return _text(sync(image, lang) if lang else sync(image))
+            except Exception as error:  # unsupported language / engine hiccup
+                last_error = error
+
+    async_recognize = getattr(winocr, "recognize_pil", None)
+    if callable(async_recognize):
+        for lang in langs:
+            try:
+                call = async_recognize(image, lang) if lang else async_recognize(image)
+                return _text(asyncio.run(call))
+            except Exception as error:
+                last_error = error
+
+    available = ", ".join(x for x in dir(winocr) if x.startswith("recognize")) or "nenhuma"
+    raise RuntimeError(
+        f"winocr incompatível (APIs disponíveis: {available}). Último erro: {last_error}"
+    )
 
 try:
     import psutil  # type: ignore
@@ -917,10 +971,28 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
         if "Combat" in path.name
         else "digite /chatlog no jogo"
     )
+    listed_dir = False
     while not path.exists() and not stop_event.is_set():
         if time.time() - last_wait_log > 60:
             last_wait_log = time.time()
             log_cb(f"⏳ Aguardando {path.name} — {hint}.")
+        if not listed_dir:
+            # Diagnostic: show what actually exists in the Logs folder, so a
+            # wrong install path (or logging never enabled) is obvious instead
+            # of an endless "waiting" message.
+            listed_dir = True
+            try:
+                folder = path.parent
+                if folder.exists():
+                    found = sorted(p.name for p in folder.glob("*.txt"))
+                    log_cb(
+                        f"📂 {folder} contém: "
+                        + (", ".join(found) if found else "nenhum .txt")
+                    )
+                else:
+                    log_cb(f"📂 Pasta de logs não existe: {folder}")
+            except Exception:
+                pass
         for _ in range(10):
             if stop_event.is_set():
                 return
@@ -1258,9 +1330,9 @@ class BridgeEngine:
             )
 
         self.log(
-            f"🥐 {APP_NAME} {APP_VERSION} — loopback + OCR + combatlog + voz. "
-            "Se esta linha NÃO apareceu, o .exe é ANTIGO: baixe o artifact do "
-            "run mais recente da Action 'Build Windows Executable'."
+            f"🥐 {APP_NAME} {APP_VERSION} — OCR API corrigida "
+            "(recognize_pil_sync/recognize_pil). Se você NÃO vê a versão 1.4.3 "
+            "aqui, o .exe é ANTIGO: recompile a Action 'Build Windows Executable'."
         )
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
@@ -1767,8 +1839,7 @@ class BridgeEngine:
                     }
                     shot = sct.grab(region)
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
-                    text = getattr(result, "text", None) or str(result)
+                    text = ocr_recognize(pil, "en")
                     if not first_ok and text.strip():
                         first_ok = True
                         self.log(
@@ -1777,7 +1848,19 @@ class BridgeEngine:
                         )
                 except Exception as e:
                     errs += 1
-                    if errs <= 3 or errs % 50 == 0:
+                    if errs <= 3:
+                        self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
+                    # A broken/incompatible winocr never fixes itself: stop the
+                    # worker instead of logging the same error thousands of
+                    # times, and tell the user exactly what to do.
+                    if errs >= 5 and "recognize" in str(e):
+                        self.log(
+                            f"🛑 OCR desligado para {ref.character}: winocr incompatível. "
+                            "Use /combatlog no jogo (tempo real) e recompile o .exe "
+                            "com o bridge 1.4.3."
+                        )
+                        return
+                    if errs % 200 == 0:
                         self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
                     time.sleep(1)
                     continue
@@ -1875,11 +1958,21 @@ class BridgeEngine:
                         continue
                     shot = sct.grab({"left": l, "top": t, "width": w, "height": h})
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    result = asyncio.run(winocr.recognize_pil_image(pil, "pt-BR"))
-                    text = getattr(result, "text", None) or str(result)
+                    text = ocr_recognize(pil, "pt")
                 except Exception as e:
                     stats["errs"] += 1
-                    if stats["errs"] <= 3 or stats["errs"] % 50 == 0:
+                    if stats["errs"] <= 3:
+                        self.log(
+                            f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
+                        )
+                    if stats["errs"] >= 5 and "recognize" in str(e):
+                        self.log(
+                            f"🛑 Leitor WIM desligado para {ref.character}: winocr "
+                            "incompatível. Use /combatlog no jogo (tempo real) e "
+                            "recompile o .exe com o bridge 1.4.3."
+                        )
+                        return
+                    if stats["errs"] % 200 == 0:
                         self.log(
                             f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
                         )
