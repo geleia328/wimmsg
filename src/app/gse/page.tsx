@@ -40,7 +40,7 @@ const EMPTY: Controls = {
   voiceRelayEnabled: false,
   combatRelayEnabled: false,
   ocrRelayEnabled: true,
-  wimScreenOcrEnabled: false,
+  wimScreenOcrEnabled: true,
   queuePollMs: 1500,
 };
 
@@ -135,9 +135,9 @@ export default function GsePage() {
         <section className="mb-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
           <div className="font-bold text-amber-300">Modo recomendado</div>
           <p className="mt-1 text-xs">
-            OCR da faixa amarela do addon é o caminho principal em tempo real.
-            O chatlog fica só como fallback/histórico, porque no seu WoW ele só
-            atualiza ao fechar o jogo. Voz, combatlog e OCR WIM inteiro ficam desligados.
+            OCR é o caminho principal em tempo real: a faixa amarela do addon
+            é lida primeiro, e o OCR da janela WIM inteira fica como auxiliar.
+            Chatlog é só fallback/histórico, porque no seu WoW ele só atualiza ao fechar.
           </p>
           <button
             disabled={busy}
@@ -153,7 +153,7 @@ export default function GsePage() {
           <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
             Controles essenciais
           </div>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <ToggleCard
               label="Leitor do bridge"
               desc="Fica ligado para fila, scan e fallback de histórico."
@@ -161,10 +161,16 @@ export default function GsePage() {
               onClick={() => saveControl({ bridgeReaderEnabled: true }, "Leitor mantido ligado")}
             />
             <ToggleCard
-              label="OCR da faixa do addon"
-              desc="Principal: lê WIMRELAY em tempo real na faixa amarela."
+              label="OCR da faixa"
+              desc="Principal: lê WIMRELAY no topo da tela."
               value={controls.ocrRelayEnabled}
-              onClick={() => saveControl({ ocrRelayEnabled: true }, "OCR principal mantido ligado")}
+              onClick={() => saveControl({ ocrRelayEnabled: true }, "OCR da faixa mantido ligado")}
+            />
+            <ToggleCard
+              label="OCR WIM auxiliar"
+              desc="Lê a janela WIM inteira e também procura WIMRELAY."
+              value={controls.wimScreenOcrEnabled}
+              onClick={() => saveControl({ wimScreenOcrEnabled: true }, "OCR WIM auxiliar mantido ligado")}
             />
             <ToggleCard
               label="Master GSE"

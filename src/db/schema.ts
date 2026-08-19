@@ -139,7 +139,7 @@ export const DEFAULT_APP_CONTROLS = {
   voice_relay_enabled: "no",
   combat_relay_enabled: "no",
   ocr_relay_enabled: "yes",
-  wim_screen_ocr_enabled: "no",
+  wim_screen_ocr_enabled: "yes",
   queue_poll_ms: "1500",
 } as const;
 

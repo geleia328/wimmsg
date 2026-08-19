@@ -1953,9 +1953,17 @@ class BridgeEngine:
 
         from PIL import Image
 
-        # Tolerant: OCR may render [Name] as (Name), |Name| or Name.
-        line_re = re.compile(
-            r"^\s*(\d{1,2}:\d{2})\s*[\[\(\|]?\s*([^:\]\)\|]{1,32}?)\s*[\]\)\|]?\s*[:\-]\s*(\S.{0,200})$"
+        # Tolerant OCR parser. The OCR often does NOT preserve line breaks, so
+        # we search the whole recognized text for repeated chunks like:
+        #   18:52 [Gasquatro]: bravo
+        #   18:52 [Simplat]: testando no game
+        # Body is non-greedy and stops before the next HH:MM [Name]: marker.
+        chat_re = re.compile(
+            r"(?P<time>\d{1,2}:\d{2})\s*[\[\(\|]?\s*"
+            r"(?P<name>[A-Za-zÀ-ÿ0-9_'\-]{2,32}(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)"
+            r"\s*[\]\)\|]?\s*[:\-]\s*"
+            r"(?P<body>.+?)(?=\s+\d{1,2}:\d{2}\s*[\[\(\|]?[A-Za-zÀ-ÿ0-9_'\-]{2,32}\s*[\]\)\|]?\s*[:\-]|$)",
+            re.IGNORECASE | re.DOTALL,
         )
         own_base = (ref.character.split("-")[0] or "").strip().lower()
         seen: dict = {}
@@ -2006,13 +2014,53 @@ class BridgeEngine:
                 except Exception:
                     pass
                 seen = {k: v for k, v in seen.items() if now - v < 300}
-                for raw in text.splitlines():
-                    m = line_re.match(raw.strip())
-                    if not m:
-                        continue
+
+                # 1) PRIMARY REAL-TIME PATH: addon relay frame/text.
+                # If the whole-window OCR sees WIMRELAY/BWRELAY (or even just
+                # <OWN...><FROM...> after OCR drops the marker), parse it first.
+                relay_text = _normalize_relay_ocr(text)
+                upper_relay = relay_text.upper()
+                has_relay = (
+                    "WIMRELAY" in upper_relay
+                    or "BWRELAY" in upper_relay
+                    or ("OWN" in upper_relay and ("FROM" in upper_relay or "TO" in upper_relay))
+                )
+                if has_relay:
+                    parsed = parse_whisper(relay_text, ref.character)
+                    if parsed:
+                        direction, own_raw, other, body = parsed
+                        own = ref.character or self._canonical_char(own_raw) or own_raw
+                        if direction == "incoming" and own and other and body and not self._recent_dup(own, other, body):
+                            self._remember_whisper(own, other, body)
+                            bucket = int(now // 8)
+                            ok = self._ingest_retry(
+                                [
+                                    {
+                                        "externalId": make_ext_id(own, other, body, f"wimrelay-ocr-{bucket}"),
+                                        "character": own,
+                                        "player": other,
+                                        "body": body,
+                                        "direction": "incoming",
+                                        "status": "received",
+                                        "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                    }
+                                ]
+                            )
+                            if ok:
+                                stats["cand"] += 1
+                                stats["sent"] += 1
+                                self.log(f"🖥 📷 ← WIMRELAY-OCR [{own}] {other}: {body}")
+                    elif stats["errs"] <= 5:
+                        self.log(f"🔎 OCR WIM viu relay mas não parseou: {relay_text.strip()[:220]}")
+
+                # 2) SECONDARY PATH: visible WIM chat history in the window.
+                compact_text = re.sub(r"[\r\n]+", " ", text)
+                compact_text = re.sub(r"\s+", " ", compact_text).strip()
+                for m in chat_re.finditer(compact_text):
                     stats["cand"] += 1
-                    name = m.group(2).strip()
-                    body = m.group(3).strip()
+                    name = m.group("name").strip()
+                    body = m.group("body").strip()
+                    body = re.sub(r"\s+", " ", body).strip()
                     low = name.lower()
                     if (
                         not name

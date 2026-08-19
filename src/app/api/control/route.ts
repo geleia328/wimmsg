@@ -56,7 +56,7 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     voiceRelayEnabled: false,
     combatRelayEnabled: false,
     ocrRelayEnabled: true,
-    wimScreenOcrEnabled: false,
+    wimScreenOcrEnabled: true,
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
