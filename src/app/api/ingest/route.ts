@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { appSettings, messages } from "@/db/schema";
+import { messages } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
 import { filterDuplicateContent } from "@/lib/dedupe";
 import { sql } from "drizzle-orm";
@@ -51,32 +51,6 @@ function isLikelyPlayerName(player: string): boolean {
 function isLikelyPollutedBody(body: string): boolean {
   const b = body.toLowerCase();
   return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(b);
-}
-
-async function filterDeletedConversationGrace<
-  T extends { character: string; player: string; createdAt: Date },
->(rows: T[]): Promise<T[]> {
-  if (rows.length === 0) return rows;
-  try {
-    const tombstones = await db
-      .select({ key: appSettings.key, value: appSettings.value })
-      .from(appSettings)
-      .where(sql`${appSettings.key} like 'deleted_conversation:%'`);
-    if (tombstones.length === 0) return rows;
-    const deleted = new Map<string, number>();
-    for (const t of tombstones) {
-      deleted.set(t.key.replace(/^deleted_conversation:/, ""), Number(t.value) || 0);
-    }
-    const GRACE_MS = 120_000;
-    return rows.filter((r) => {
-      const key = `${r.character.toLowerCase()}:${r.player.toLowerCase()}`;
-      const deletedAt = deleted.get(key);
-      if (!deletedAt) return true;
-      return new Date(r.createdAt).getTime() > deletedAt + GRACE_MS;
-    });
-  } catch {
-    return rows;
-  }
 }
 
 function parseEmbeddedRelay(body: string): ParsedRelay | null {
@@ -183,12 +157,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ inserted: 0 });
   }
 
-  const visibleRows = await filterDeletedConversationGrace(rows);
-  if (visibleRows.length === 0) {
-    return NextResponse.json({ inserted: 0, received: rows.length, skipped: "recently_deleted" });
-  }
-
-  const uniqueRows = await filterDuplicateContent(visibleRows);
+  const uniqueRows = await filterDuplicateContent(rows);
   if (uniqueRows.length === 0) {
     return NextResponse.json({ inserted: 0, received: rows.length });
   }

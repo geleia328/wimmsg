@@ -87,9 +87,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  // The controls page is the operational dashboard used during gameplay.
-  // Do not require admin token here; otherwise "Modo recomendado" fails for
-  // the browser while the bridge itself is already authenticated separately.
+  const guard = checkAdminAuth(request);
+  if (!guard.ok) return guard.response;
+
   let payload: Partial<Controls> = {};
   try {
     payload = (await request.json()) as Partial<Controls>;
