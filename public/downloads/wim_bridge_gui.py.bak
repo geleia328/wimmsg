@@ -1333,7 +1333,7 @@ class BridgeEngine:
                 continue
             combat_seen.add(combat_path)
             t7 = threading.Thread(
-                target=lambda *args: None, args=(combat_path,), daemon=True
+                target=self._combat_tail, args=(combat_path,), daemon=True
             )
             t7.start()
             self.threads.append(t7)
@@ -2677,19 +2677,6 @@ class App:
         for hwnd, row in self.rows.items():
             w: DetectedWindow = row["win"]
             name = row["entry"].get().strip()
-            new_slot_str = row["slot_entry"].get().strip()
-            new_title = row["title_entry"].get().strip()
-
-            try:
-                new_slot = int(new_slot_str)
-                w.slot = new_slot
-            except ValueError:
-                pass
-                
-            if new_title and new_title != w.title:
-                if rename_hwnd(w.hwnd, new_title):
-                    w.title = new_title
-
             if not w.slot:
                 continue
             key = f"slot:{w.slot}"
@@ -2701,6 +2688,7 @@ class App:
                 )
                 count += 1
             elif key in self.mappings:
+                # Empty field intentionally clears that slot's saved name.
                 self.mappings.pop(key, None)
         self.config.mappings = self.mappings
         save_config(self.config)
@@ -2793,20 +2781,28 @@ class App:
         row = tk.Frame(self.table_inner, bg=CARD)
         row.pack(fill="x", padx=8, pady=2)
 
-        # Slot entry (editable)
-        slot_entry = tk.Entry(
-            row, bg="#0f172a", fg=ACCENT, insertbackground=FG, relief="flat", font=("Consolas", 10, "bold"), width=8
-        )
-        slot_txt = f"{win.slot}" if win.slot else ""
-        slot_entry.insert(0, slot_txt)
-        slot_entry.pack(side="left", padx=(0, 4))
+        # Slot label (wowN)
+        slot_txt = f"wow{win.slot}" if win.slot else "?"
+        tk.Label(
+            row,
+            text=slot_txt,
+            bg=CARD,
+            fg=ACCENT,
+            font=("Consolas", 10, "bold"),
+            width=8,
+            anchor="w",
+        ).pack(side="left")
 
-        # Current window title (editable)
-        title_entry = tk.Entry(
-            row, bg="#0f172a", fg=FG, insertbackground=FG, relief="flat", font=("Segoe UI", 9), width=24
-        )
-        title_entry.insert(0, win.title)
-        title_entry.pack(side="left", padx=(0, 4))
+        # Current window title (may already be wowN if renamed)
+        tk.Label(
+            row,
+            text=(win.title[:22] + "…") if len(win.title) > 24 else win.title,
+            bg=CARD,
+            fg=FG,
+            font=("Segoe UI", 9),
+            width=24,
+            anchor="w",
+        ).pack(side="left")
 
         # Character entry — pre-fill from persisted map keyed by slot.
         # This lets each wowN keep a different own-character name even when all
@@ -2850,7 +2846,7 @@ class App:
             anchor="w",
         ).pack(side="left")
 
-        self.rows[win.hwnd] = {"entry": entry, "slot_entry": slot_entry, "title_entry": title_entry, "log_lbl": log_lbl, "win": win}
+        self.rows[win.hwnd] = {"entry": entry, "log_lbl": log_lbl, "win": win}
 
     def on_start(self):
         # Optionally rename every detected window to wow1, wow2, ...
