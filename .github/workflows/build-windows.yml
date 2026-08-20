@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - main # compila um exe novo a cada push (artifact na aba Actions)
   workflow_dispatch: # permite disparar manualmente pela aba Actions
 
 jobs:
@@ -15,10 +13,10 @@ jobs:
       contents: write # necessário para criar Release
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           architecture: "x64"
@@ -33,20 +31,9 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install "pyinstaller==6.11.1"
           pip install "requests>=2.31" "pydirectinput>=1.0.4" "pyautogui>=0.9.54" "pywin32>=306" "psutil>=5.9" "Pillow>=10.0"
-          # Voice relay deps — bundled into the .exe so users WITHOUT Python
-          # get real-time whisper reception (loopback audio, no mic needed).
-          pip install "SpeechRecognition>=3.10.0" "PyAudio>=0.2.14"
-          # Loopback capture (WASAPI) deps — required for voice without mic.
-          pip install "soundcard>=0.4.2" "numpy>=1.24" "mss>=9.0"
-          # OCR dep — best effort: if it ever fails, the exe still builds and
-          # OCR simply stays disabled at runtime (HAS_WINOCR guard).
-          pip install "winocr>=0.0.15" || echo "winocr unavailable - OCR will be disabled in this build"
           pip install pywin32-ctypes
           python -c "import win32gui, win32con, win32process, win32api; print('pywin32 OK')"
           python -c "import psutil, requests, pyautogui, pydirectinput; print('deps OK')"
-          python -c "import speech_recognition, pyaudio; print('voice deps OK')"
-          python -c "import soundcard, numpy, mss; print('loopback deps OK')"
-          python -c "import winocr; print('OCR deps OK')" || echo "OCR deps missing - continuing without OCR"
 
       - name: Inject build constants
         shell: pwsh
@@ -85,36 +72,18 @@ jobs:
           python -c "import ast; ast.parse(open('public/downloads/wim_bridge_gui.py', encoding='utf-8').read()); print('Python syntax OK')"
 
       - name: Build with PyInstaller
-        shell: pwsh
         run: |
-          $pyargs = @(
-            "--onefile", "--noconsole", "--name", "BakersWhisper",
-            "--collect-submodules", "pyautogui",
-            "--collect-submodules", "pydirectinput",
-            "--collect-submodules", "psutil",
-            "--collect-all", "speech_recognition",
-            "--hidden-import", "pyaudio",
-            "--hidden-import", "speech_recognition",
-            "--hidden-import", "soundcard",
-            "--hidden-import", "numpy",
-            "--hidden-import", "mss",
-            "--hidden-import", "win32gui",
-            "--hidden-import", "win32con",
-            "--hidden-import", "win32api",
-            "--hidden-import", "win32process",
-            "--hidden-import", "pywintypes"
-          )
-          # Only bundle winocr when it actually installed, so the build never
-          # fails because of the OCR dependency.
-          python -c "import winocr" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            $pyargs += @("--collect-all", "winocr", "--hidden-import", "winocr")
-            Write-Host "winocr detected - bundling OCR"
-          } else {
-            Write-Host "winocr NOT detected - building without OCR"
-          }
-          $pyargs += "public/downloads/wim_bridge_gui.py"
-          pyinstaller @pyargs
+          pyinstaller --onefile --noconsole --name "BakersWhisper" `
+            --collect-submodules pyautogui `
+            --collect-submodules pydirectinput `
+            --collect-submodules psutil `
+            --hidden-import win32gui `
+            --hidden-import win32con `
+            --hidden-import win32api `
+            --hidden-import win32process `
+            --hidden-import pywintypes `
+            --hidden-import pkg_resources.py2_warn `
+            public/downloads/wim_bridge_gui.py
 
       - name: Verify build
         shell: pwsh
@@ -161,11 +130,5 @@ jobs:
             5. Clique em **▶ Iniciar**.
 
             Depois acesse o painel web e responda os whispers de qualquer lugar!
-
-            ### 🎙 Modo voz (tempo real)
-            O `.exe` já vem com reconhecimento de voz embutido — **não precisa instalar Python nem bibliotecas**.
-            Com um microfone ligado, o addon fala os whispers no jogo (nomes soletrados em alfabeto fonético)
-            e o app ouve e manda para o site em tempo real, mesmo que o seu WoW só grave o chatlog ao fechar.
-            Desative na aba ⚙ GSE do site ("Modo voz") ou no jogo com `/wimbridge voice`.
           draft: false
           prerelease: false

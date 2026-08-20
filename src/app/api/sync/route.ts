@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
-import { filterDuplicateContent } from "@/lib/dedupe";
 import { eq, and, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -19,39 +18,6 @@ type SyncPayload = {
     receivedAt?: string;
   }>;
 };
-
-type ParsedRelay = {
-  direction: "incoming" | "outgoing";
-  character: string;
-  player: string;
-  body: string;
-};
-
-function parseEmbeddedRelay(body: string): ParsedRelay | null {
-  const from = body.match(
-    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><FROM:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
-  );
-  if (from) {
-    return {
-      direction: "incoming",
-      character: from[1].trim(),
-      player: from[2].trim(),
-      body: from[3].trim(),
-    };
-  }
-  const to = body.match(
-    /(?:\[WIMBRIDGE\]|WIMRELAY)<OWN:([^>]+)><TO:([^>]+)>(?:<TS:[^>]+>)?(.*)$/,
-  );
-  if (to) {
-    return {
-      direction: "outgoing",
-      character: to[1].trim(),
-      player: to[2].trim(),
-      body: to[3].trim(),
-    };
-  }
-  return null;
-}
 
 /**
  * POST /api/sync — bridge sends historical messages from log file
@@ -81,23 +47,18 @@ export async function POST(request: NextRequest) {
         typeof m.character === "string",
     )
     .map((m) => {
-      const relay = parseEmbeddedRelay(m.body);
-      const character = (relay?.character ?? m.character.trim()) || "unknown";
-      const player = relay?.player ?? m.player.trim();
-      const body = relay?.body ?? m.body;
-      const direction = relay?.direction ?? m.direction ?? "incoming";
-      const isOutgoing = direction === "outgoing";
+      const isOutgoing = m.direction === "outgoing";
       return {
-        character,
-        player,
-        body,
+        character: m.character.trim() || "unknown",
+        player: m.player.trim(),
+        body: m.body,
         direction: isOutgoing ? ("outgoing" as const) : ("incoming" as const),
         status: isOutgoing
           ? ((m.status ?? "sent") as "sent" | "failed")
           : ("received" as const),
         externalId:
           m.externalId ??
-          `sync-${character}-${player}-${Date.now()}-${Math.random()
+          `sync-${m.character}-${m.player}-${Date.now()}-${Math.random()
             .toString(36)
             .slice(2, 8)}`,
         createdAt: m.receivedAt ? new Date(m.receivedAt) : new Date(),
@@ -109,15 +70,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ inserted: 0 });
   }
 
-  // Never duplicate history on repeated "Iniciar" clicks.
-  const uniqueRows = await filterDuplicateContent(rows);
-  if (uniqueRows.length === 0) {
-    return NextResponse.json({ inserted: 0, received: rows.length });
-  }
-
   const inserted = await db
     .insert(messages)
-    .values(uniqueRows)
+    .values(rows)
     .onConflictDoNothing({ target: messages.externalId })
     .returning({ id: messages.id });
 

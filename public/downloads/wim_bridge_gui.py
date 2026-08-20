@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.0.7"
 # =============================================================================
 
 import hashlib
@@ -36,56 +36,14 @@ import sys
 import threading
 import time
 import tkinter as tk
-from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Optional
 
 import requests
-
-# Optional voice relay: the addon SPEAKS each whisper (names spelled with the
-# NATO phonetic alphabet so they are never misheard) and the bridge listens on
-# the microphone, transcribes and posts to the site — completely independent
-# from WoWChatLog.txt.
-try:
-    import speech_recognition as sr  # type: ignore
-
-    HAS_SPEECH = True
-except Exception:  # pragma: no cover - library optional
-    sr = None  # type: ignore
-    HAS_SPEECH = False
-
-# Loopback audio capture: records what the PC is PLAYING (the addon's TTS
-# narration) without needing a microphone at all (WASAPI loopback).
-try:
-    import soundcard as sc  # type: ignore
-    import numpy as np  # type: ignore
-
-    HAS_LOOPBACK = True
-except Exception:  # pragma: no cover
-    sc = None  # type: ignore
-    np = None  # type: ignore
-    HAS_LOOPBACK = False
-
-# Screen OCR fallback: screenshot the relay frame drawn by the addon and read
-# it with the Windows built-in OCR engine (winocr).
-try:
-    import mss  # type: ignore
-
-    HAS_MSS = True
-except Exception:  # pragma: no cover
-    mss = None  # type: ignore
-    HAS_MSS = False
-
-try:
-    import winocr  # type: ignore
-
-    HAS_WINOCR = True
-except Exception:  # pragma: no cover
-    winocr = None  # type: ignore
-    HAS_WINOCR = False
 
 try:
     import psutil  # type: ignore
@@ -266,14 +224,6 @@ class ApiClient:
         r.raise_for_status()
         return r.json().get("controls", {})
 
-    def sync(self, msgs: list[dict]) -> int:
-        """Send historical messages (from log file at startup)."""
-        if not msgs:
-            return 0
-        r = self.s.post(self._url("/api/sync"), json={"messages": msgs}, timeout=15)
-        r.raise_for_status()
-        return int(r.json().get("inserted", 0))
-
     def health(self) -> tuple[bool, str]:
         """Return (ok, human_message) for UI/log diagnostics."""
         try:
@@ -342,14 +292,50 @@ def _exe_for_pid(pid: int) -> str:
 
 def _log_from_exe(exe_path: str) -> str:
     """
-    Derives WoWChatLog.txt path from Wow.exe path.
-    Typical: C:/.../World of Warcraft/_retail_/Wow.exe
-             → C:/.../World of Warcraft/_retail_/Logs/WoWChatLog.txt
+    Derive the chat log from Wow.exe, supporting BOTH layouts used by WoW:
+
+      C:/World of Warcraft/_retail_/Wow.exe
+      → C:/World of Warcraft/Logs/WoWChatLog.txt   (official/current layout)
+      → C:/World of Warcraft/_retail_/Logs/WoWChatLog.txt (some installs)
+
+    The old bridge picked only the second path and could silently wait forever
+    even while the friend was sending whispers.
     """
     if not exe_path:
         return ""
-    p = Path(exe_path).parent / "Logs" / "WoWChatLog.txt"
-    return str(p)
+    exe = Path(exe_path)
+    local_log = exe.parent / "Logs" / "WoWChatLog.txt"
+    install_log = exe.parent.parent / "Logs" / "WoWChatLog.txt"
+    # Prefer whichever file already exists. If /chatlog has not created one
+    # yet, prefer the install-root path used by current Retail clients.
+    if install_log.exists():
+        return str(install_log)
+    if local_log.exists():
+        return str(local_log)
+    return str(install_log)
+
+
+def log_path_candidates(exe_path: str, selected: str = "") -> list[Path]:
+    """Return unique possible WoWChatLog locations, newest/official first."""
+    candidates: list[Path] = []
+    if selected:
+        candidates.append(Path(selected))
+    if exe_path:
+        exe = Path(exe_path)
+        candidates.extend(
+            [
+                exe.parent.parent / "Logs" / "WoWChatLog.txt",
+                exe.parent / "Logs" / "WoWChatLog.txt",
+            ]
+        )
+    result: list[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p).lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(p)
+    return result
 
 
 def enum_wow_windows() -> list[DetectedWindow]:
@@ -405,74 +391,13 @@ def enum_wow_windows() -> list[DetectedWindow]:
 
 
 def focus_hwnd(hwnd: int) -> bool:
-    """
-    Robust focus. A plain SetForegroundWindow often fails because Windows only
-    allows the *foreground* process to steal focus, and because WoW windows are
-    recreated (new HWND) after restarts. We use the Alt-key trick + thread
-    input attach, restore if minimized, and verify with GetForegroundWindow.
-    """
     if not HAS_WIN32:
         return False
     try:
-        if not win32gui.IsWindow(hwnd):
-            return False
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-
-        fore = win32gui.GetForegroundWindow()
-        if fore and fore != hwnd:
-            attached = False
-            fore_tid = 0
-            cur_tid = 0
-            try:
-                import win32api  # type: ignore
-                import win32process  # type: ignore
-
-                fore_tid = win32process.GetWindowThreadProcessId(fore)[0]
-                cur_tid = win32api.GetCurrentThreadId()
-                if fore_tid and fore_tid != cur_tid:
-                    attached = bool(
-                        win32process.AttachThreadInput(cur_tid, fore_tid, True)
-                    )
-            except Exception:
-                attached = False
-            try:
-                try:
-                    import win32api  # type: ignore
-
-                    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-                except Exception:
-                    pass
-                win32gui.SetForegroundWindow(hwnd)
-            finally:
-                try:
-                    import win32api  # type: ignore
-
-                    win32api.keybd_event(
-                        win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0
-                    )
-                except Exception:
-                    pass
-                if attached:
-                    try:
-                        import win32process  # type: ignore
-
-                        win32process.AttachThreadInput(cur_tid, fore_tid, False)
-                    except Exception:
-                        pass
-        else:
-            win32gui.SetForegroundWindow(hwnd)
-
-        try:
-            win32gui.BringWindowToTop(hwnd)
-        except Exception:
-            pass
-
-        for _ in range(12):
-            if win32gui.GetForegroundWindow() == hwnd:
-                return True
-            time.sleep(0.1)
-        return False
+        win32gui.SetForegroundWindow(hwnd)
+        return True
     except Exception:
         return False
 
@@ -639,6 +564,20 @@ def paste_ctrl_v() -> bool:
         return False
 
 
+def press_ctrl_a() -> None:
+    """Ctrl+A — select everything in the focused text field (clears leftover
+    text from the chat box before we paste the new command)."""
+    try:
+        if HAS_PYDIRECTINPUT:
+            pydirectinput.keyDown("ctrl")
+            pydirectinput.press("a")
+            pydirectinput.keyUp("ctrl")
+        else:
+            pyautogui.hotkey("ctrl", "a")
+    except Exception:
+        pass
+
+
 def press_key(name: str) -> None:
     """Press a single key with the active input library."""
     if HAS_PYDIRECTINPUT:
@@ -665,8 +604,7 @@ class GseSpammer:
         self.character = character
         self.hwnd = hwnd
         self.keybind = keybind
-        # Allow any interval the user configures on the site (50ms .. 10 min).
-        self.interval_ms = max(50, min(600_000, int(interval_ms)))
+        self.interval_ms = max(50, min(2000, int(interval_ms)))
         self.log = log_cb
         self.pause_event = threading.Event()  # SET = paused
         self._stop = threading.Event()
@@ -680,7 +618,7 @@ class GseSpammer:
 
     def update(self, keybind: str, interval_ms: int) -> None:
         self.keybind = keybind
-        self.interval_ms = max(50, min(600_000, int(interval_ms)))
+        self.interval_ms = max(50, min(2000, int(interval_ms)))
 
     def _run(self) -> None:
         self.log(f"⚙ GSE [{self.character}] iniciado — tecla {self.keybind!r}")
@@ -708,45 +646,37 @@ class GseSpammer:
 # omit the milliseconds (or even the year).
 TIMESTAMP_RE = re.compile(r"^\d+/\d+(?:/\d+)?\s+\d+:\d+:\d+(?:\.\d+)?\s+")
 ADDON_RE = re.compile(
-    r"\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?P<body>.*)$"
+    r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><(?P<kind>FROM|TO):(?P<other>[^>]+)>"
+    r"(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
 )
-ADDON_TO_RE = re.compile(
-    r"\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><TO:(?P<to>[^>]+)>(?P<body>.*)$"
-)
-# Some builds/addon versions relay through a compact WIMRELAY marker instead
-# of [WIMBRIDGE]. Accept it anywhere in the log line, including after a private
-# channel prefix: "[4. BWxxx] [Me]: WIMRELAY<OWN:Me><FROM:Them><TS:...>body".
-RELAY_FROM_RE = re.compile(
-    r"WIMRELAY<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
-)
-RELAY_TO_RE = re.compile(
-    r"WIMRELAY<OWN:(?P<own>[^>]+)><TO:(?P<to>[^>]+)>(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
+# Transport emitted by the addon to the same character. It is a real whisper
+# (therefore present in the native chat log) but is converted back to the
+# original incoming message below.
+RELAY_RE = re.compile(
+    r"^\[WIMRELAY\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>"
+    r"<TS:(?P<ts>[^>]+)>(?P<body>.*)$"
 )
 # WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
 # as long as /chatlog is on):
-#   [W From] [Sender-Realm]: message
-#   [W To]   [Recipient-Realm]: message
-# Localized clients / WIM can produce variants like:
-#   [De] [Sender-Realm]: message
-#   [Para] [Recipient-Realm]: message
-#   [Sussurro de] [Sender-Realm]: message
-#   Sender-Realm sussurra: message
-NATIVE_TAG_RE = re.compile(
-    r"^\[(?P<kind>W From|W To|From|To|De|Para|Sussurro de|Sussurro para|Whisper From|Whisper To)\]\s+(?P<rest>.*)$",
-    re.IGNORECASE,
-)
+#   10/8 12:34:56.789  [W From] [Sender-Realm]: message
+#   10/8 12:34:56.789  [W To]   [Recipient-Realm]: message
+# Older clients may omit the brackets around the name.
+NATIVE_TAG_RE = re.compile(r"^\[W (?P<kind>From|To)\]\s+(?P<rest>.*)$")
 NATIVE_NAME_RE = re.compile(
     r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$"
 )
-FALLBACKS_IN = [
-    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+sussurra:\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^De\s+(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
-]
-FALLBACKS_OUT = [
-    re.compile(r"^(?:To|Para)\s+(?P<to>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^Você\s+sussurra\s+para\s+(?P<to>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
-    re.compile(r"^You\s+whisper\s+to\s+(?P<to>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?):\s+(?P<body>.+)$", re.IGNORECASE),
+NATIVE_WHISPER_RE = re.compile(
+    r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+))\s+"
+    r"(?:whispers?|sussurra)\s*:?\s*(?P<body>.*)$",
+    re.IGNORECASE,
+)
+NATIVE_TO_LEGACY_RE = re.compile(
+    r"^To\s+(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+)):\s*(?P<body>.*)$",
+    re.IGNORECASE,
+)
+FALLBACKS = [
+    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+whispers?:\s+(?P<body>.+)$"),
+    re.compile(r"^(?P<from>[A-Za-zÀ-ÿ0-9_'\-]+(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)\s+sussurra:\s+(?P<body>.+)$"),
 ]
 
 
@@ -758,170 +688,149 @@ def _strip_wow_markup(text: str) -> str:
     return clean.strip()
 
 
-def parse_whisper(line: str, own_default: str) -> Optional[tuple[str, str, str, str]]:
+def log_ts_of(line: str) -> str:
+    """Extract the chat-log timestamp of a line ("10/8 12:34:56.789" →
+    "10/8 12:34:56") — used as part of the deterministic externalId."""
+    m = TIMESTAMP_RE.match(line)
+    if not m:
+        return ""
+    ts = m.group(0).strip()
+    return ts.split(".")[0] if "." in ts else ts
+
+
+def ext_ts_to_iso(ts: str) -> str:
+    """Convert a timestamp key to an ISO-ish date for the site's receivedAt.
+
+    - Digits → WoW epoch seconds (from the addon <TS:...> tag).
+    - "M/D HH:MM:SS" → chat log timestamp (assume current year, local time).
+    Falls back to now() when it can't be parsed.
     """
-    Returns (direction, character, player, body) or None.
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if not ts:
+        return now_iso
+    if re.fullmatch(r"\d{9,11}", ts):
+        try:
+            dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+            if 2000 <= dt.year <= 2100:
+                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            pass
+        return now_iso
+    m = re.match(r"(\d+)/(\d+)(?:/(\d+))?\s+(\d+):(\d+):(\d+)", ts)
+    if m:
+        try:
+            month, day = int(m.group(1)), int(m.group(2))
+            year = int(m.group(3)) if m.group(3) else datetime.now().year
+            hh, mm, ss = int(m.group(4)), int(m.group(5)), int(m.group(6))
+            return datetime(year, month, day, hh, mm, ss).isoformat()
+        except ValueError:
+            pass
+    return now_iso
+
+
+def parse_whisper(
+    line: str, own_default: str
+) -> Optional[tuple[str, str, str, str, str]]:
+    """
+    Returns (direction, character, player, body, ts) or None.
       direction  : "incoming" (window received) | "outgoing" (window sent)
       character  : YOUR character (the window that owns this log line)
       player     : the other side
       body       : message text (markup stripped)
+      ts         : timestamp key for idempotency — the addon's <TS:...> epoch
+                   when present, otherwise the chat-log line timestamp.
     """
     raw = line.rstrip("\r\n")
     stripped = TIMESTAMP_RE.sub("", raw).strip()
     if not stripped:
         return None
+    log_ts = log_ts_of(raw)
 
-    addon_clean = _strip_wow_markup(stripped)
-    # The addon may relay through a private WoW channel, so the chat log line
-    # can contain a prefix like "[4. BWRealm123] [Player]: " before the
-    # [WIMBRIDGE] marker. Use search(), not match().
-    m = ADDON_RE.search(addon_clean)
+    m = ADDON_RE.match(_strip_wow_markup(stripped))
     if m:
         own = m.group("own").strip() or own_default
+        direction = "incoming" if m.group("kind") == "FROM" else "outgoing"
         return (
-            "incoming",
+            direction,
             own,
-            m.group("from").strip(),
+            m.group("other").strip(),
             m.group("body").strip(),
-        )
-
-    m = ADDON_TO_RE.search(addon_clean)
-    if m:
-        own = m.group("own").strip() or own_default
-        return (
-            "outgoing",
-            own,
-            m.group("to").strip(),
-            m.group("body").strip(),
-        )
-
-    m = RELAY_FROM_RE.search(addon_clean)
-    if m:
-        own = m.group("own").strip() or own_default
-        return (
-            "incoming",
-            own,
-            m.group("from").strip(),
-            m.group("body").strip(),
-        )
-
-    m = RELAY_TO_RE.search(addon_clean)
-    if m:
-        own = m.group("own").strip() or own_default
-        return (
-            "outgoing",
-            own,
-            m.group("to").strip(),
-            m.group("body").strip(),
+            m.group("ts") or log_ts,
         )
 
     clean = _strip_wow_markup(stripped)
 
+    # Addon relay: the native log line is usually [W To] own: [WIMRELAY]...;
+    # convert it into the original incoming friend → own message.
+    relay = RELAY_RE.match(clean)
+    if relay:
+        return (
+            "incoming",
+            relay.group("own").strip() or own_default,
+            relay.group("from").strip(),
+            relay.group("body").strip(),
+            relay.group("ts").strip(),
+        )
+
     tag = NATIVE_TAG_RE.match(clean)
     if tag:
         name_m = NATIVE_NAME_RE.match(tag.group("rest"))
+        if not name_m:
+            # Some WoW/WIM versions write "[W From] [Name] whispers: body"
+            # instead of "[W From] [Name]: body".
+            name_m = NATIVE_WHISPER_RE.match(tag.group("rest"))
         if name_m:
             other = (name_m.group("name") or name_m.group("name2") or "").strip()
             body = name_m.group("body").strip()
             if other:
-                kind = tag.group("kind").lower()
-                if kind in ("w from", "from", "de", "sussurro de", "whisper from"):
-                    return "incoming", own_default, other, body
-                return "outgoing", own_default, other, body
+                relay_body = RELAY_RE.match(body)
+                if relay_body:
+                    return (
+                        "incoming",
+                        relay_body.group("own").strip() or own_default,
+                        relay_body.group("from").strip(),
+                        relay_body.group("body").strip(),
+                        relay_body.group("ts").strip(),
+                    )
+                if tag.group("kind") == "From":
+                    return "incoming", own_default, other, body, log_ts
+                return "outgoing", own_default, other, body, log_ts
 
-    # Legacy/WIM fallbacks: strip brackets so "[Name-Realm] whispers: body"
-    # also matches. These catch many localized client variations.
+    # Older clients use "To Name: body" for a sent whisper.
+    legacy_to = NATIVE_TO_LEGACY_RE.match(clean)
+    if legacy_to:
+        other = (legacy_to.group("name") or legacy_to.group("name2") or "").strip()
+        body = legacy_to.group("body").strip()
+        relay = RELAY_RE.match(body)
+        if relay:
+            return (
+                "incoming",
+                relay.group("own").strip() or own_default,
+                relay.group("from").strip(),
+                relay.group("body").strip(),
+                relay.group("ts").strip(),
+            )
+        if other:
+            return "outgoing", own_default, other, body, log_ts
+
+    # Legacy fallbacks: some logs/chat addons print "Name whispers: body".
+    # Strip brackets so "[Name-Realm] whispers: body" also matches.
     clean_nobrackets = clean.replace("[", "").replace("]", "")
-    for pat in FALLBACKS_IN:
+    for pat in FALLBACKS:
         m = pat.match(clean_nobrackets)
         if m:
-            return "incoming", own_default, m.group("from").strip(), m.group("body").strip()
-    for pat in FALLBACKS_OUT:
-        m = pat.match(clean_nobrackets)
-        if m:
-            return "outgoing", own_default, m.group("to").strip(), m.group("body").strip()
+            return "incoming", own_default, m.group("from").strip(), m.group("body").strip(), log_ts
     return None
 
 
-# =============================================================================
-# Voice relay parser (NATO phonetic alphabet)
-# =============================================================================
-# The addon speaks:
-#   "Wimbridge. Own <nato-name>. From <nato-name>. Message <body>. Endbridge."
-# Names are spelled with NATO words so speech-to-text never mangles them.
-NATO_TO_CHAR = {
-    "alpha": "a", "alfa": "a", "bravo": "b", "charlie": "c", "delta": "d",
-    "echo": "e", "eko": "e", "foxtrot": "f", "golf": "g", "hotel": "h",
-    "india": "i", "juliet": "j", "juliett": "j", "kilo": "k", "lima": "l",
-    "mike": "m", "november": "n", "oscar": "o", "papa": "p", "quebec": "q",
-    "romeo": "r", "sierra": "s", "tango": "t", "uniform": "u", "victor": "v",
-    "whiskey": "w", "xray": "x", "yankee": "y", "zulu": "z",
-    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
-    "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
-    "niner": "9", "dash": "-", "hyphen": "-",
-}
+def tail_file(path: Path, stop_event: threading.Event, log_cb, start_offset=None):
+    """Yield lines forever. Handles rotation.
 
-
-def parse_voice_transcript(text: str) -> Optional[tuple[str, str, str, str]]:
+    `start_offset` (bytes) resumes from where a history replay stopped, so no
+    line is lost between the replay and the live tail.
     """
-    Returns (direction, own, other, body) from a spoken relay line, or None.
-    """
-    words = re.findall(r"[a-z0-9]+", (text or "").lower())
-    if not words:
-        return None
-
-    def idx_after(start: int, markers: set) -> int:
-        for i in range(start, len(words)):
-            if words[i] in markers:
-                return i
-        return -1
-
-    head = idx_after(0, {"wimbridge", "wim"})
-    if head < 0:
-        return None
-    own_i = idx_after(head, {"own"})
-    if own_i < 0:
-        return None
-    link_i = idx_after(own_i, {"from", "to"})
-    if link_i < 0:
-        return None
-    kind = words[link_i]
-    msg_i = idx_after(link_i, {"message", "messages"})
-    if msg_i < 0:
-        return None
-    end_i = idx_after(msg_i, {"endbridge", "end"})
-
-    def decode(a: int, b: int) -> str:
-        out = []
-        for w in words[a:b]:
-            if w in NATO_TO_CHAR:
-                out.append(NATO_TO_CHAR[w])
-            elif len(w) == 1 and w.isalnum():
-                out.append(w)
-        return "".join(out)
-
-    own = decode(own_i + 1, link_i)
-    other = decode(link_i + 1, msg_i)
-    tail = end_i if end_i >= 0 else len(words)
-    body = " ".join(words[msg_i + 1 : tail]).strip()
-    if not own or not other or not body:
-        return None
-    direction = "incoming" if kind == "from" else "outgoing"
-    return direction, own, other, body
-
-
-def tail_file(path: Path, stop_event: threading.Event, log_cb):
-    """Yield new lines forever. Handles rotation."""
-    last_wait_log = 0.0
-    hint = (
-        "digite /combatlog no jogo (é o log de COMBATE, diferente de /chatlog)"
-        if "Combat" in path.name
-        else "digite /chatlog no jogo"
-    )
     while not path.exists() and not stop_event.is_set():
-        if time.time() - last_wait_log > 60:
-            last_wait_log = time.time()
-            log_cb(f"⏳ Aguardando {path.name} — {hint}.")
+        log_cb(f"⏳ Aguardando {path.name} — digite /chatlog no jogo.")
         for _ in range(10):
             if stop_event.is_set():
                 return
@@ -929,18 +838,23 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
     if stop_event.is_set():
         return
     fh = open(path, "r", encoding="utf-8", errors="replace")
-    fh.seek(0, os.SEEK_END)
+    if start_offset is not None and start_offset > 0:
+        try:
+            fh.seek(start_offset)
+            size = fh.tell()
+        except OSError:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+    else:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
     try:
         inode = os.stat(path).st_ino
     except (AttributeError, OSError):
         inode = None
-    size = fh.tell()
-    last_read = time.time()
-    reopened_logged = 0.0
     while not stop_event.is_set():
         line = fh.readline()
         if line:
-            last_read = time.time()
             yield line
             continue
         time.sleep(0.4)
@@ -954,90 +868,25 @@ def tail_file(path: Path, stop_event: threading.Event, log_cb):
         except AttributeError:
             new_inode = None
         if (new_inode is not None and new_inode != inode) or st.st_size < size:
-            # Log rotation / truncation.
             fh.close()
             fh = open(path, "r", encoding="utf-8", errors="replace")
             inode = new_inode
             size = 0
-            last_read = time.time()
-        elif st.st_size > size and time.time() - last_read > 2.0:
-            # File grew but our handle sees nothing: Windows may be keeping a
-            # stale buffered view of the file the game has open. Reopen with a
-            # fresh handle positioned at the last known size.
-            pos = size
-            try:
-                fh.close()
-            except Exception:
-                pass
-            fh = open(path, "r", encoding="utf-8", errors="replace")
-            try:
-                fh.seek(pos)
-            except OSError:
-                fh.seek(0, os.SEEK_END)
-            try:
-                inode = os.stat(path).st_ino
-            except (AttributeError, OSError):
-                inode = None
-            if time.time() - reopened_logged > 30:
-                reopened_logged = time.time()
-                log_cb(
-                    f"📄 {path.name} cresceu sem o handle ver — reabrindo "
-                    "para ler em tempo real."
-                )
         else:
             size = st.st_size
     fh.close()
 
 
-def log_ts_of(line: str) -> str:
-    """Extract the chat-log timestamp of a line ("10/8 12:34:56.789 ..." ->
-    "10/8 12:34:56"). Stable across reads, used for deterministic ids."""
-    m = TIMESTAMP_RE.match(line)
-    if not m:
-        return ""
-    ts = m.group(0).strip()
-    return ts.split(".")[0] if "." in ts else ts
-
-
-def ext_ts_to_iso(ts: str) -> str:
-    """Convert a timestamp key to ISO for receivedAt.
-    - digits        -> epoch seconds (from addon <TS:...>)
-    - "M/D HH:MM:SS"-> chat log timestamp (assume current year, local time)
-    Falls back to now()."""
-    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    if not ts:
-        return now_iso
-    if re.fullmatch(r"\d{9,11}", ts):
-        try:
-            dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
-            if 2000 <= dt.year <= 2100:
-                return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-        except Exception:
-            return now_iso
-    m = re.match(r"(\d+)/(\d+)(?:/(\d+))?\s+(\d+):(\d+):(\d+)", ts)
-    if m:
-        try:
-            month, day = int(m.group(1)), int(m.group(2))
-            year = int(m.group(3)) if m.group(3) else datetime.now().year
-            hh, mm, ss = int(m.group(4)), int(m.group(5)), int(m.group(6))
-            return datetime(year, month, day, hh, mm, ss).isoformat()
-        except ValueError:
-            return now_iso
-    return now_iso
-
-
 def make_ext_id(character: str, player: str, body: str, ts: str = "") -> str:
+    """Deterministic externalId.
+
+    Uses the whisper's own timestamp (addon <TS> or chat-log timestamp) so
+    re-reading the SAME line (log replay, addon dump, log rotation) always
+    yields the same id → the site upserts idempotently and never duplicates.
     """
-    DETERMINISTIC external id. The same log line always produces the same id,
-    so re-reading the log on every "Iniciar" (history sync) hits the unique
-    index and NEVER duplicates rows. `ts` must be the line's own timestamp
-    (log_ts_of / <TS> tag), not the current time.
-    """
-    key = (
-        f"bw|{character.strip().lower()}|{player.strip().lower()}|"
-        f"{body}|{ts}"
-    )
-    h = hashlib.sha1(key.encode("utf-8")).hexdigest()
+    h = hashlib.sha1(
+        f"bw|{character}|{player}|{body}|{ts}".encode("utf-8")
+    ).hexdigest()
     return f"in-{h[:24]}"
 
 
@@ -1052,14 +901,12 @@ DEFAULT_CONTROLS = {
     "whisperFocusDelayMs": 2000,
     "whisperAfterSendDelayMs": 1000,
     "whisperChatOpenDelayMs": 1000,
+    "whisperWReadyDelayMs": 1000,
+    "whisperSpaceDelayMs": 1000,
     "whisperKeystrokeDelayMs": 100,
     "whisperChatSendDelayMs": 1000,
-    "whisperCloseChatEnabled": True,
-    "whisperChatCloseDelayMs": 500,
-    "voiceRelayEnabled": True,
-    "combatRelayEnabled": True,
-    "ocrRelayEnabled": True,
-    "wimScreenOcrEnabled": True,
+    "whisperCloseChatEnabled": False,
+    "whisperChatCloseDelayMs": 400,
     "queuePollMs": 1500,
 }
 
@@ -1070,6 +917,7 @@ class RuntimeCharacter:
     hwnd: int
     window_title: str
     chat_log: Path
+    log_candidates: list[Path] = field(default_factory=list)
 
 
 class BridgeEngine:
@@ -1091,6 +939,48 @@ class BridgeEngine:
         # and messages the bridge itself typed are already recorded by the site.
         self.recent_whispers: deque = deque(maxlen=400)
         self.recent_whispers_lock = threading.Lock()
+        # Persisted history of whispers the bridge itself sent. Used during
+        # log replay to skip `[W To]` echoes of our own sends (the site already
+        # has those rows from the queue ack) so history never duplicates.
+        self.sent_history: list[tuple[str, str, str]] = []
+        self.sent_history_lock = threading.Lock()
+        self.sent_history_path = app_data_dir() / "sent_history.json"
+        self._load_sent_history()
+        # Characters whose addon history was already dumped this session.
+        self.dumped_history: set[str] = set()
+        self.dumped_history_lock = threading.Lock()
+
+    # ------------------------------------------------------------------ #
+    # Sent-history persistence (avoids duplicating [W To] on log replay)
+    # ------------------------------------------------------------------ #
+    def _load_sent_history(self) -> None:
+        try:
+            if self.sent_history_path.exists():
+                data = json.loads(self.sent_history_path.read_text(encoding="utf-8"))
+                entries = data if isinstance(data, list) else []
+                self.sent_history = [
+                    (str(e[0]), str(e[1]), str(e[2])) for e in entries if isinstance(e, list) and len(e) == 3
+                ][-800:]
+        except Exception:
+            self.sent_history = []
+
+    def _persist_sent(self, character: str, player: str, body: str) -> None:
+        with self.sent_history_lock:
+            entry = (character, player, body)
+            self.sent_history.append(entry)
+            self.sent_history = self.sent_history[-800:]
+            payload = [[c, p, b] for (c, p, b) in self.sent_history]
+        try:
+            self.sent_history_path.write_text(json.dumps(payload), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _was_bridge_sent(self, character: str, player: str, body: str) -> bool:
+        with self.sent_history_lock:
+            for (c, p, b) in self.sent_history:
+                if c == character and p == player and b == body:
+                    return True
+        return False
 
     def _recent_dup(self, character: str, player: str, body: str) -> bool:
         """True if this exact whisper was already processed in the last ~15s."""
@@ -1108,68 +998,23 @@ class BridgeEngine:
         with self.recent_whispers_lock:
             self.recent_whispers.append((character, player, body, time.time()))
 
-    def _sync_historical_messages(self, ref: RuntimeCharacter) -> None:
-        """
-        Read the last N lines from the chat log file and ingest them as
-        historical messages. This captures whispers that were sent/received
-        BEFORE the bridge started (as long as /chatlog was active).
-        """
-        if not ref.chat_log or not ref.chat_log.exists():
-            return
-        try:
-            # Read last 100 lines to catch recent history
-            with open(ref.chat_log, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-            
-            # Keep only last 100 lines to avoid huge payloads
-            lines = lines[-100:] if len(lines) > 100 else lines
-            
-            buffer = []
-            for line in lines:
-                parsed = parse_whisper(line, ref.character)
-                if parsed:
-                    direction, character, other, body = parsed
-                    character = character or ref.character
-                    line_ts = log_ts_of(line)
-                    # Skip if already in recent dedup (from this session)
-                    if self._recent_dup(character, other, body):
-                        continue
-                    self._remember_whisper(character, other, body)
-                    buffer.append(
-                        {
-                            # Deterministic: same as the live tail produced,
-                            # so restarting never duplicates.
-                            "externalId": make_ext_id(character, other, body, line_ts),
-                            "character": character,
-                            "player": other,
-                            "body": body,
-                            "direction": direction,
-                            "status": "sent" if direction == "outgoing" else "received",
-                            "receivedAt": ext_ts_to_iso(line_ts),
-                        }
-                    )
-            
-            if buffer:
-                try:
-                    self.api.sync(buffer)
-                    self.log(f"📜 Histórico sincronizado: {len(buffer)} mensagens de {ref.character}")
-                except Exception as e:
-                    self.log(f"❌ falha ao sincronizar histórico: {e}")
-        except Exception as e:
-            self.log(f"❌ erro lendo histórico: {e}")
-
     def start(self, chars: list[RuntimeCharacter]) -> None:
         self.chars = chars
         self.stop_event.clear()
-
-        # First, sync historical messages from existing log files
-        for c in chars:
-            if c.chat_log and c.chat_log.exists():
-                self._sync_historical_messages(c)
+        with self.dumped_history_lock:
+            self.dumped_history.clear()
 
         # De-dup chat logs — one tailer per file.
         seen: set[Path] = set()
         for c in chars:
+            candidates = c.log_candidates or [c.chat_log]
+            existing = next((p for p in candidates if p.exists()), None)
+            if existing is not None:
+                c.chat_log = existing
+            self.log(
+                f"📄 [{c.character}] WoWChatLog candidates: "
+                + " | ".join(f"{p} ({'OK' if p.exists() else 'aguardando'})" for p in candidates)
+            )
             if not c.chat_log:
                 continue
             if c.chat_log in seen:
@@ -1197,72 +1042,12 @@ class BridgeEngine:
         t5.start()
         self.threads.append(t5)
 
-        # Voice relay listener — hears the addon speaking whispers and posts
-        # them to the site without depending on WoWChatLog.txt at all.
-        t6 = threading.Thread(target=self._voice_listener, daemon=True)
+        # History syncer — asks each window's addon to dump its stored
+        # whispers once (when its window is detected online).
+        t6 = threading.Thread(target=self._history_syncer, daemon=True)
         t6.start()
         self.threads.append(t6)
 
-        # Combat-log relay: WoWCombatLog.txt flushes almost instantly, so the
-        # addon mirrors every whisper there via a custom emote (BWRELAY...).
-        # One tailer per combat log file.
-        combat_seen: set[Path] = set()
-        for c in chars:
-            if not c.chat_log:
-                continue
-            combat_path = c.chat_log.parent / "WoWCombatLog.txt"
-            if combat_path in combat_seen:
-                continue
-            combat_seen.add(combat_path)
-            t7 = threading.Thread(
-                target=self._combat_tail, args=(combat_path,), daemon=True
-            )
-            t7.start()
-            self.threads.append(t7)
-        if combat_seen:
-            self.log(
-                "🗡 relay combatlog ativo: lendo WoWCombatLog.txt em tempo real."
-            )
-
-        # Screen OCR relay: ONE dedicated worker PER WINDOW. With 20 windows
-        # this guarantees messages are never cross-attributed: each worker only
-        # screenshots its own hwnd and rejects payloads whose OWN tag does not
-        # match its window's character.
-        ocr_seen: set[int] = set()
-        for c in chars:
-            if c.hwnd in ocr_seen:
-                continue
-            ocr_seen.add(c.hwnd)
-            t8 = threading.Thread(target=self._ocr_worker, args=(c,), daemon=True)
-            t8.start()
-            self.threads.append(t8)
-        if ocr_seen:
-            self.log(
-                f"📷 OCR individual por janela ativo ({len(ocr_seen)} janela(s))."
-            )
-
-        # WIM screen reader: OCR of the whole window, no addon/logs needed.
-        wim_seen: set[int] = set()
-        for c in chars:
-            if c.hwnd in wim_seen:
-                continue
-            wim_seen.add(c.hwnd)
-            t9 = threading.Thread(
-                target=self._wim_ocr_worker, args=(c,), daemon=True
-            )
-            t9.start()
-            self.threads.append(t9)
-        if wim_seen:
-            self.log(
-                f"🖥 leitor WIM por OCR ativo ({len(wim_seen)} janela(s)) — "
-                "funciona SEM addon e SEM arquivos de log."
-            )
-
-        self.log(
-            f"🥐 {APP_NAME} {APP_VERSION} — loopback + OCR + combatlog + voz. "
-            "Se esta linha NÃO apareceu, o .exe é ANTIGO: baixe o artifact do "
-            "run mais recente da Action 'Build Windows Executable'."
-        )
         self.log(f"✅ Bridge iniciado com {len(chars)} personagem(ns).")
 
     def stop(self) -> None:
@@ -1281,9 +1066,8 @@ class BridgeEngine:
         return None
 
     def _find_char_by_name(self, name: str) -> Optional[RuntimeCharacter]:
-        wanted = (name or "").strip().lower()
         for c in self.chars:
-            if c.character == name or c.character.strip().lower() == wanted:
+            if c.character == name:
                 return c
         return None
 
@@ -1341,14 +1125,47 @@ class BridgeEngine:
         if count:
             self.log(f"⏹ {count} GSE parado(s): {reason}")
 
+    def _wait_for_chat_log(self, ref: RuntimeCharacter) -> None:
+        """Wait for whichever supported WoW log path appears first.
+
+        The automatic addon enables logging after login, so the file may not
+        exist when Start is clicked. We check both root/Logs and _retail_/Logs
+        instead of waiting forever on the wrong one.
+        """
+        candidates = ref.log_candidates or [ref.chat_log]
+        last_log = 0.0
+        while not self.stop_event.is_set():
+            for path in candidates:
+                if path.exists():
+                    if ref.chat_log != path:
+                        ref.chat_log = path
+                        self.log(f"✅ [{ref.character}] WoWChatLog encontrado: {path}")
+                    return
+            now = time.time()
+            if now - last_log > 10:
+                self.log(
+                    f"⏳ [{ref.character}] aguardando WoWChatLog.txt; "
+                    "confira se o addon carregou e se LoggingChat está ativo."
+                )
+                last_log = now
+            time.sleep(2)
+
     def _incoming(self, ref: RuntimeCharacter) -> None:
+        self._wait_for_chat_log(ref)
+        if self.stop_event.is_set():
+            return
+        # 1) History replay: ingest EVERYTHING already in the chat log file
+        #    (whispers received before the bridge started or while it was off).
+        offset = self._replay_existing_log(ref)
+
+        # 2) Live tail: resume from where the replay stopped so no line is
+        #    ever lost between the two phases.
         buffer: list[dict] = []
         last_flush = time.time()
         lines_seen = 0
         last_whisper_at: Optional[float] = None
         hint_emitted = False
-        suspicious_logged = 0
-        for line in tail_file(ref.chat_log, self.stop_event, self.log):
+        for line in tail_file(ref.chat_log, self.stop_event, self.log, start_offset=offset):
             if not self._get_controls().get("bridgeReaderEnabled", True):
                 # Reader disabled from the site: keep the tailer alive, but do
                 # not parse/ingest messages until re-enabled.
@@ -1357,8 +1174,8 @@ class BridgeEngine:
             lines_seen += 1
             parsed = parse_whisper(line, ref.character)
             if parsed:
-                direction, character, other, body = parsed
-                character = character or ref.character
+                direction, character, other, body, ts = parsed
+                character = self._canonical_char(character or ref.character)
                 if self._recent_dup(character, other, body):
                     # Same whisper already captured (addon echo + native log
                     # line, or a message the bridge itself typed).
@@ -1370,23 +1187,16 @@ class BridgeEngine:
                 hint_emitted = False
                 buffer.append(
                     {
-                        "externalId": make_ext_id(
-                            character, other, body, log_ts_of(line)
-                        ),
+                        "externalId": make_ext_id(character, other, body, ts),
                         "character": character,
                         "player": other,
                         "body": body,
                         "direction": direction,
                         "status": "sent" if direction == "outgoing" else "received",
-                        "receivedAt": ext_ts_to_iso(log_ts_of(line)),
+                        "receivedAt": ext_ts_to_iso(ts),
                     }
                 )
-            elif suspicious_logged < 10:
-                raw_lower = line.lower()
-                if any(k in raw_lower for k in ["wimbridge", "whisper", "sussurra", "sussurro", "[w ", "[de]", "[para]", "cbsies", "juper"]):
-                    suspicious_logged += 1
-                    self.log(f"🔎 linha com cara de whisper não parseada: {line.strip()[:240]}")
-            if lines_seen > 30 and (last_whisper_at is None or time.time() - last_whisper_at > 180) and not hint_emitted:
+            elif lines_seen > 30 and (last_whisper_at is None or time.time() - last_whisper_at > 180) and not hint_emitted:
                 # Watching the log but no whisper line was ever parsed. Surface
                 # the two most common setup mistakes instead of failing silently.
                 hint_emitted = True
@@ -1398,12 +1208,246 @@ class BridgeEngine:
                 )
             if buffer and (len(buffer) >= 10 or time.time() - last_flush > 1.5):
                 try:
-                    self.api.ingest(buffer)
+                    batch_size = len(buffer)
+                    inserted = self.api.ingest(buffer)
+                    if inserted == 0:
+                        self.log(
+                            f"ℹ {batch_size} whisper(s) lido(s) do jogo, "
+                            "mas já existiam no site (duplicata evitada)."
+                        )
+                    else:
+                        self.log(f"☁ {inserted} whisper(s) enviado(s) ao site em tempo real.")
                     buffer.clear()
                     last_flush = time.time()
                 except Exception as e:
                     self.log(f"❌ ingest falhou: {e}")
                     time.sleep(2)
+
+    def _canonical_char(self, name: str) -> str:
+        """Normalize an addon-echoed OWN name to the configured character
+        (case-insensitive), so conversations never split across two spellings."""
+        if not name:
+            return name
+        for c in self.chars:
+            if c.character.lower() == name.lower():
+                return c.character
+        return name
+
+    def _replay_existing_log(self, ref: RuntimeCharacter) -> int:
+        """Re-read the existing chat log and ingest every whisper line found.
+
+        Returns the byte offset where the replay stopped (the live tailer
+        resumes from there). Deterministic externalIds make this idempotent —
+        re-reading the same file never duplicates messages on the site.
+        """
+        if not self._get_controls().get("bridgeReaderEnabled", True):
+            return 0
+        path = ref.chat_log
+        if not path.exists():
+            return 0
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return 0
+        if size == 0:
+            return 0
+
+        chunk = ""
+        end_offset = 0
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(max(0, size - 2_000_000))  # last ~2MB of history
+                fh.readline()  # drop partial first line
+                chunk = fh.read()
+                end_offset = fh.tell()
+        except OSError:
+            return 0
+        if not chunk:
+            return end_offset
+
+        buffer: list[dict] = []
+        last_flush = time.time()
+        restored = 0
+
+        def flush() -> None:
+            nonlocal restored
+            if not buffer:
+                return
+            try:
+                inserted = self.api.ingest(buffer)
+                restored += inserted
+            except Exception as e:
+                self.log(f"❌ replay do histórico falhou: {e}")
+            buffer.clear()
+
+        # Parse the whole replay first. The addon echo and native [W From]
+        # line may both exist for one whisper. Prefer the addon record when it
+        # exists, but NEVER discard native lines merely because some unrelated
+        # old [WIMBRIDGE] line exists in the same 2MB file.
+        parsed_records: list[tuple[tuple[str, str, str, str, str], bool]] = []
+        addon_incoming_keys: set[tuple[str, str, str]] = set()
+        for line in chunk.splitlines():
+            parsed = parse_whisper(line, ref.character)
+            if not parsed:
+                continue
+            direction, character, other, body, ts = parsed
+            character = self._canonical_char(character or ref.character)
+            is_addon = "[WIMBRIDGE]" in line
+            record = (direction, character, other, body, ts)
+            parsed_records.append((record, is_addon))
+            if is_addon and direction == "incoming":
+                addon_incoming_keys.add(
+                    (character.lower(), other.lower(), body)
+                )
+
+        for (direction, character, other, body, ts), is_addon in parsed_records:
+            if direction == "incoming" and not is_addon:
+                # Only skip the corresponding native line, not all native
+                # lines in the file.
+                if (character.lower(), other.lower(), body) in addon_incoming_keys:
+                    continue
+            if direction == "outgoing":
+                # Skip [W To] echoes of messages the BRIDGE itself sent: the
+                # site already has those rows from the queue ack.
+                if self._was_bridge_sent(character, other, body):
+                    continue
+            buffer.append(
+                {
+                    "externalId": make_ext_id(character, other, body, ts),
+                    "character": character,
+                    "player": other,
+                    "body": body,
+                    "direction": direction,
+                    "status": "sent" if direction == "outgoing" else "received",
+                    "receivedAt": ext_ts_to_iso(ts),
+                }
+            )
+            if len(buffer) >= 10:
+                flush()
+            if time.time() - last_flush > 1.5 and buffer:
+                flush()
+                last_flush = time.time()
+        flush()
+
+        if restored > 0:
+            self.log(
+                f"📜 {restored} mensagem(ns) do histórico de {path.name} "
+                f"restaurada(s) para o site."
+            )
+        return end_offset
+
+    def _type_command(self, ref: RuntimeCharacter, command: str) -> None:
+        """Focus the window, open the chat, paste `command`, send it, and close
+        the chat again — with all the safety delays. Shared by whisper sends
+        and the addon history dump (/wimbridge dump)."""
+        if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
+            raise RuntimeError("pyautogui/pydirectinput não disponíveis")
+
+        # Pause EVERY GSE spammer while we type.
+        with self.spammers_lock:
+            paused_spammers = list(self.spammers.values())
+        for s in paused_spammers:
+            s.pause_event.set()
+
+        try:
+            with _send_lock:
+                controls = self._get_controls()
+                # PISOS de segurança: cada etapa espera no MÍNIMO o valor
+                # abaixo antes de mandar a próxima tecla. O jogo não recebe
+                # input novo antes de terminar a ação anterior — mensagem
+                # "picada" e chat bugando eram teclas rápidas demais.
+                focus_delay = max(
+                    0.5, int(controls.get("whisperFocusDelayMs", 1000)) / 1000.0
+                )
+                open_delay = max(
+                    0.5, int(controls.get("whisperChatOpenDelayMs", 2000)) / 1000.0
+                )
+                keystroke_delay = max(
+                    0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
+                )
+                send_delay = max(
+                    0.4, int(controls.get("whisperChatSendDelayMs", 800)) / 1000.0
+                )
+                # ATENÇÃO: o WoW JÁ fecha o campo de chat sozinho depois de
+                # enviar. Pressionar ESC com o chat fechado ABRE O MENU do
+                # jogo — por isso o default é desligado.
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", False))
+                close_delay = max(
+                    0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
+                )
+                after_delay = max(
+                    0.3, int(controls.get("whisperAfterSendDelayMs", 800)) / 1000.0
+                )
+                if not focus_hwnd(ref.hwnd):
+                    raise RuntimeError(f"não consegui focar janela {ref.window_title!r}")
+                # 1) Espera a janela receber o foco de verdade.
+                time.sleep(focus_delay)
+                press_key("enter")  # abre o campo de chat
+                # 2) Espera o campo de chat abrir COMPLETAMENTE antes de
+                #    escrever qualquer coisa (este é o delay que estava
+                #    rápido demais — o início da mensagem era engolido).
+                time.sleep(open_delay)
+                # 3) Limpa qualquer texto que tenha ficado no campo (ex.: uma
+                #    mensagem anterior que falhou) para o comando nunca se
+                #    misturar com restos.
+                press_ctrl_a()
+                time.sleep(0.25)
+                # 4) Atomic paste via clipboard: o comando inteiro chega de
+                #    uma vez.
+                pasted = False
+                if HAS_WIN32:
+                    pasted = set_clipboard_text(command) and paste_ctrl_v()
+                if not pasted:
+                    # Fallback: digita com pausa generosa entre teclas.
+                    if HAS_PYDIRECTINPUT:
+                        for ch in command:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(command, interval=keystroke_delay)
+                # 5) Espera o jogo processar o texto inteiro antes do Enter.
+                time.sleep(send_delay)
+                press_key("enter")  # envia o whisper
+                if close_enabled:
+                    # Somente se o usuário ligar explicitamente (alguns setups
+                    # mantêm o chat aberto após enviar).
+                    time.sleep(close_delay)
+                    press_key("esc")
+                # 6) Estabilidade antes de liberar o GSE de volta.
+                time.sleep(after_delay)
+        finally:
+            for s in paused_spammers:
+                s.pause_event.clear()
+
+    def _history_syncer(self) -> None:
+        """Dumps each window's addon-stored whisper history once per session
+        (the dump lines flow through the chat log and are ingested)."""
+        last_warn: dict[str, float] = {}
+        while not self.stop_event.is_set():
+            if not self._get_controls().get("bridgeReaderEnabled", True):
+                time.sleep(1)
+                continue
+            with self.dumped_history_lock:
+                pending = [
+                    c for c in self.chars if c.character not in self.dumped_history
+                ]
+            for ref in pending:
+                if self.stop_event.is_set():
+                    return
+                try:
+                    self._type_command(ref, "/wimbridge dump")
+                    with self.dumped_history_lock:
+                        self.dumped_history.add(ref.character)
+                    self.log(f"📜 histórico do addon sincronizado para {ref.character}.")
+                except Exception as e:
+                    now = time.time()
+                    if now - last_warn.get(ref.character, 0) > 30:
+                        last_warn[ref.character] = now
+                        self.log(
+                            f"⚠ histórico de {ref.character} ainda não sincronizado "
+                            f"({e}) — tentando de novo quando a janela abrir."
+                        )
+                time.sleep(1.5)  # gap between windows
+            time.sleep(2)
 
     def _outgoing(self) -> None:
         while not self.stop_event.is_set():
@@ -1425,59 +1469,39 @@ class BridgeEngine:
                     # Do NOT mark failed. If the buyer/whisper reply is queued
                     # while that WoW window is closed, keep it pending so it can
                     # be sent automatically when the character/window comes back.
-                    if not hasattr(self, "_wait_logged"):
-                        self._wait_logged = {}
-                    if time.time() - self._wait_logged.get(mid, 0) > 30:
-                        self._wait_logged[mid] = time.time()
-                        self.log(
-                            f"⏳ #{mid}: aguardando janela/personagem '{character}' abrir/mapear"
-                        )
+                    self.log(
+                        f"⏳ #{mid}: aguardando janela/personagem '{character}' abrir/mapeiar"
+                    )
                     continue
                 self.log(f"→ #{mid} [{character} → {player}]: {body}")
-                sent = False
-                for attempt in range(1, 4):
+                try:
+                    self._send(ref, player, body)
+                    self.api.ack(mid, "sent")
+                except Exception as e:
+                    self.log(f"❌ envio #{mid}: {e}")
                     try:
-                        self._send(ref, player, body)
-                        self.api.ack(mid, "sent")
-                        sent = True
-                        break
-                    except Exception as e:
-                        self.log(
-                            f"⚠ envio #{mid} tentativa {attempt}/3 falhou: {e}"
-                        )
-                        if attempt >= 3:
-                            break
-                        # Self-heal: the window may have been recreated (new
-                        # hwnd) or lost focus. Re-resolve by stable title and
-                        # retry with growing backoff. Never drop the message.
-                        self._heal_ref(ref)
-                        time.sleep(1.5 * attempt)
-                if not sent:
-                    self.log(
-                        f"❌ envio #{mid} esgotou 3 tentativas; mantém na fila "
-                        "para nova rodada (não marca failed para não perder)."
-                    )
+                        self.api.ack(mid, "failed", error=str(e))
+                    except Exception:
+                        pass
                 time.sleep(0.3)
             poll_ms = int(self._get_controls().get("queuePollMs", 1500))
-            # Honor the value from /gse (0.25s .. 60s).
-            time.sleep(max(0.25, min(60.0, poll_ms / 1000.0)))
-
-    def _ctrl_ms(self, key: str, default_ms: int) -> float:
-        """Read a delay (ms) from live controls and return seconds."""
-        try:
-            raw = self._get_controls().get(key, default_ms)
-            ms = int(raw)
-        except (TypeError, ValueError):
-            ms = default_ms
-        ms = max(0, min(60_000, ms))
-        return ms / 1000.0
+            time.sleep(max(0.5, min(10.0, poll_ms / 1000.0)))
 
     def _send(self, ref: RuntimeCharacter, player: str, body: str) -> None:
+        """
+        ORDEM OFICIAL DE ENVIO (definida pelo usuário para evitar bugs):
+          1) focar a janela ......... aguardar 2s   (whisperFocusDelayMs)
+          2) pressionar Enter ....... aguardar 1s   (whisperChatOpenDelayMs)
+          3) colar /w Nome-Server ... aguardar 1s   (whisperWReadyDelayMs)
+          4) pressionar ESPAÇO ...... aguardar 1s   (whisperSpaceDelayMs)
+             → O WoW EXIGE o espaço para abrir o modo whisper!
+          5) colar a mensagem ....... aguardar 1s   (whisperChatSendDelayMs)
+          6) pressionar Enter ....... aguardar 1s   (whisperAfterSendDelayMs)
+        """
         if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
             raise RuntimeError("pyautogui/pydirectinput não disponíveis")
 
-        # Pause EVERY GSE spammer while we type: simulated keys must never
-        # interleave with GSE PostMessages, otherwise characters get eaten
+        # Pausa TODOS os spammers GSE durante a digitação.
         with self.spammers_lock:
             paused_spammers = list(self.spammers.values())
         for s in paused_spammers:
@@ -1485,543 +1509,94 @@ class BridgeEngine:
 
         try:
             with _send_lock:
-                # Delays come from the site /gse page (app_settings via /api/control).
-                # Mapping of the UI fields → send steps:
-                #   whisperFocusDelayMs     → after focusing the window
-                #   whisperChatOpenDelayMs  → after Enter (open chat) AND after /w + space
-                #   whisperKeystrokeDelayMs → between chars only on typewrite fallback
-                #   whisperChatSendDelayMs  → after pasting the message, before final Enter
-                #   whisperAfterSendDelayMs → after final Enter
-                #   whisperChatCloseDelayMs → after Escape (if close is enabled)
-                focus_s = self._ctrl_ms("whisperFocusDelayMs", 2000)
-                open_s = self._ctrl_ms("whisperChatOpenDelayMs", 1000)
-                key_s = self._ctrl_ms("whisperKeystrokeDelayMs", 100)
-                send_s = self._ctrl_ms("whisperChatSendDelayMs", 1000)
-                after_s = self._ctrl_ms("whisperAfterSendDelayMs", 1000)
-                close_s = self._ctrl_ms("whisperChatCloseDelayMs", 500)
-                close_enabled = bool(
-                    self._get_controls().get("whisperCloseChatEnabled", True)
+                controls = self._get_controls()
+                focus_delay = max(
+                    0.5, int(controls.get("whisperFocusDelayMs", 2000)) / 1000.0
+                )
+                open_delay = max(
+                    0.3, int(controls.get("whisperChatOpenDelayMs", 1000)) / 1000.0
+                )
+                w_ready_delay = max(
+                    0.3, int(controls.get("whisperWReadyDelayMs", 1000)) / 1000.0
+                )
+                space_delay = max(
+                    0.3, int(controls.get("whisperSpaceDelayMs", 1000)) / 1000.0
+                )
+                keystroke_delay = max(
+                    0.05, int(controls.get("whisperKeystrokeDelayMs", 100)) / 1000.0
+                )
+                send_delay = max(
+                    0.3, int(controls.get("whisperChatSendDelayMs", 1000)) / 1000.0
+                )
+                close_enabled = bool(controls.get("whisperCloseChatEnabled", False))
+                close_delay = max(
+                    0.3, int(controls.get("whisperChatCloseDelayMs", 400)) / 1000.0
+                )
+                after_delay = max(
+                    0.3, int(controls.get("whisperAfterSendDelayMs", 1000)) / 1000.0
                 )
 
-                # Foca a janela (com retry e re-resolução de HWND stale).
-                self._focus_ref(ref)
+                if not focus_hwnd(ref.hwnd):
+                    raise RuntimeError(
+                        f"não consegui focar janela {ref.window_title!r}"
+                    )
 
-                # Passo 1: Focar janela e aguardar (configurável)
-                self.log(f"   ⏳ [1/6] Focando janela ({focus_s:.2f}s)...")
-                time.sleep(focus_s)
+                # 1) Janela focada → aguardar o tempo configurado (2s).
+                time.sleep(focus_delay)
 
-                # Passo 2: Pressionar Enter e aguardar (abrir chat)
-                self.log("   ⌨️ [2/6] Pressionando Enter...")
+                # 2) Enter abre o campo de chat → aguardar (1s).
                 press_key("enter")
-                self.log(f"   ⏳ [2/6] Aguardando {open_s:.2f}s...")
-                time.sleep(open_s)
+                time.sleep(open_delay)
 
-                # Passo 3: Colar /w nome-server
-                cmd_prefix = f"/w {player}"
-                self.log(f"   📝 [3/6] Colando: {cmd_prefix}")
+                # Segurança: limpa qualquer texto residual no campo.
+                press_ctrl_a()
+                time.sleep(0.25)
+
+                # 3) Colar "/w Nome-Server" → aguardar (1s).
+                w_cmd = f"/w {player}"
+                pasted_w = False
                 if HAS_WIN32:
-                    set_clipboard_text(cmd_prefix)
-                    time.sleep(0.2)
-                    paste_ctrl_v()
-                    time.sleep(0.3)  # Tempo para o texto aparecer
-                else:
-                    # Fallback: digitar devagar
-                    for ch in cmd_prefix:
-                        press_key(ch)
-                        time.sleep(key_s)
+                    pasted_w = set_clipboard_text(w_cmd) and paste_ctrl_v()
+                if not pasted_w:
+                    if HAS_PYDIRECTINPUT:
+                        for ch in w_cmd:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(w_cmd, interval=keystroke_delay)
+                time.sleep(w_ready_delay)
 
-                self.log(f"   ⏳ [3/6] Aguardando {open_s:.2f}s...")
-                time.sleep(open_s)
-
-                # ESPAÇO para o WIM abrir o chat de whisper
-                self.log("   ⌨️ [4/6] Pressionando ESPAÇO...")
+                # 4) ESPAÇO — o WoW exige espaço após /w Nome para abrir o
+                #    modo whisper → aguardar (1s).
                 press_key("space")
+                time.sleep(space_delay)
 
-                self.log(f"   ⏳ [4/6] Aguardando {open_s:.2f}s (WIM abre)...")
-                time.sleep(open_s)
-
-                # Passo 5: Colar a mensagem
-                preview = body[:40] + ("..." if len(body) > 40 else "")
-                self.log(f"   📝 [5/6] Colando mensagem: {preview}")
+                # 5) Colar a mensagem → aguardar (1s).
+                pasted_body = False
                 if HAS_WIN32:
-                    set_clipboard_text(body)
-                    time.sleep(0.2)
-                    paste_ctrl_v()
-                    time.sleep(0.3)
-                else:
-                    for ch in body:
-                        press_key(ch)
-                        time.sleep(key_s)
-                self.log(f"   ⏳ [5/6] Aguardando {send_s:.2f}s...")
-                time.sleep(send_s)
+                    pasted_body = set_clipboard_text(body) and paste_ctrl_v()
+                if not pasted_body:
+                    if HAS_PYDIRECTINPUT:
+                        for ch in body:
+                            pydirectinput.write(ch, interval=keystroke_delay)
+                    else:
+                        pyautogui.typewrite(body, interval=keystroke_delay)
+                time.sleep(send_delay)
 
-                # Passo 6: Pressionar Enter (enviar)
-                self.log("   📤 [6/6] Enviando (Enter)...")
+                # 6) Enter envia o whisper → aguardar (1s).
                 press_key("enter")
-                self.log(f"   ⏳ [6/6] Aguardando {after_s:.2f}s...")
-                time.sleep(after_s)
-
-                # Registrar o que foi enviado (para dedup)
-                self._remember_whisper(ref.character, player, body)
-
-                # Fechar chat com Escape (opcional, mas recomendado)
                 if close_enabled:
-                    if close_s > 0:
-                        time.sleep(close_s)
+                    time.sleep(close_delay)
                     press_key("esc")
-                    self.log("   🔒 Chat fechado")
+                time.sleep(after_delay)
 
-                self.log("   ✅ Mensagem enviada com sucesso")
-
+                # Remember what we just typed: the game echoes the sent whisper
+                # to the chat log as [W To] — skip it so the site doesn't show
+                # the same outgoing message twice (live + replay + restarts).
+                self._remember_whisper(ref.character, player, body)
+                self._persist_sent(ref.character, player, body)
         finally:
             for s in paused_spammers:
                 s.pause_event.clear()
-
-    def _handle_voice_text(self, text: str) -> None:
-        """Parse a transcribed narration line and POST it to the site."""
-        parsed = parse_voice_transcript(text)
-        if not parsed:
-            return
-        direction, own_raw, other, body = parsed
-        own = self._canonical_char(own_raw) or own_raw
-        if not own or not other or not body:
-            return
-        if self._recent_dup(own, other, body):
-            return
-        self._remember_whisper(own, other, body)
-        bucket = int(time.time() // 10)
-        ok = self._ingest_retry(
-            [
-                {
-                    "externalId": f"voice-{bucket}-{make_ext_id(own, other, body)}",
-                    "character": own,
-                    "player": other,
-                    "body": body,
-                    "direction": direction,
-                    "status": "sent" if direction == "outgoing" else "received",
-                    "receivedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                }
-            ]
-        )
-        if ok:
-            arrow = "→" if direction == "outgoing" else "←"
-            self.log(f"🎙 {arrow} voz [{own}] {other}: {body}")
-
-    def _voice_listener(self) -> None:
-        """
-        Speech-to-text relay WITHOUT a microphone: captures the audio the PC
-        is PLAYING (WASAPI loopback) — i.e. the addon's own TTS narration —
-        and transcribes it. Falls back to a real microphone only if loopback
-        is unavailable. The addon speaks:
-          "Wimbridge. Own <NATO name>. From/To <NATO name>. Message <body>. Endbridge."
-        Names are NATO-spelled so transcription is exact. Does NOT depend on
-        WoWChatLog.txt at all.
-        """
-        if not HAS_SPEECH:
-            self.log(
-                "🎙 modo VOZ indisponível nesta instalação. No BakersWhisper.exe "
-                "oficial ele já vem embutido; se roda do código-fonte use "
-                "'pip install -r requirements.txt'."
-            )
-            return
-
-        rec = sr.Recognizer()
-
-        # ---- Preferred: loopback (internal PC audio, no microphone) ----
-        if HAS_LOOPBACK:
-            spk = None
-            try:
-                spk = sc.default_speaker()
-            except Exception as e:
-                self.log(f"🎙 alto-falante padrão falhou ({e}); tentando outros...")
-                try:
-                    for s in sc.all_speakers():
-                        try:
-                            spk = s
-                            break
-                        except Exception:
-                            continue
-                except Exception:
-                    spk = None
-            if spk is not None:
-              try:
-                rate = 16000
-                with spk.recorder(samplerate=rate, channels=1) as recorder:
-                    self.log(
-                        f"🎙 VOZ via LOOPBACK no dispositivo '{getattr(spk, 'name', '?')}': "
-                        "transcrevendo a narração interna do PC em tempo real."
-                    )
-                    first_voice = True
-                    while not self.stop_event.is_set():
-                        if not self._get_controls().get("voiceRelayEnabled", True):
-                            time.sleep(0.5)
-                            continue
-                        data = recorder.record(num_frames=rate * 3)
-                        if data is None:
-                            continue
-                        peak = float(np.abs(data).max()) if data.size else 0.0
-                        if peak < 0.005:
-                            continue  # silence — skip STT call
-                        pcm = (np.clip(data, -1.0, 1.0) * 32767.0).astype(
-                            "<i2"
-                        ).tobytes()
-                        audio = sr.AudioData(pcm, rate, 2)
-                        try:
-                            text = rec.recognize_google(audio, language="en-US")
-                        except Exception:
-                            continue
-                        if first_voice and text:
-                            first_voice = False
-                            self.log(f"🎙 loopback ouviu a primeira narração: '{text[:80]}'")
-                        self._handle_voice_text(text)
-                    return
-              except Exception as e:
-                self.log(f"🎙 loopback falhou ({e}); tentando microfone...")
-
-        # ---- Fallback: physical microphone ----
-        try:
-            mic = sr.Microphone()
-        except Exception as e:
-            self.log(
-                f"🎙 nem loopback nem microfone disponíveis: {e}. "
-                "O resto do app funciona normalmente."
-            )
-            return
-
-        rec.pause_threshold = 0.6
-
-        def _on_audio(recognizer, audio) -> None:
-            try:
-                if not self._get_controls().get("voiceRelayEnabled", True):
-                    return
-                text = recognizer.recognize_google(audio, language="en-US")
-            except Exception:
-                return
-            self._handle_voice_text(text)
-
-        try:
-            stop_fn = rec.listen_in_background(mic, _on_audio, phrase_time_limit=12)
-            self.log(
-                "🎙 modo VOZ ativo via MICROFONE (loopback indisponível): "
-                "aponte o microfone para o som do WoW."
-            )
-            while not self.stop_event.is_set():
-                time.sleep(0.5)
-            try:
-                stop_fn(wait_for_stop=False)
-            except Exception:
-                pass
-        except Exception as e:
-            self.log(f"🎙 listener de voz falhou: {e}")
-
-    def _heal_ref(self, ref: "RuntimeCharacter") -> bool:
-        """
-        Self-healing: if a window was recreated (new HWND) or disappeared,
-        re-resolve it by the stable renamed title (wow1, wow2...). Returns
-        True when the ref is usable again.
-        """
-        try:
-            if ref.hwnd and win32gui.IsWindow(ref.hwnd):
-                return True
-        except Exception:
-            pass
-        try:
-            for w in enum_wow_windows():
-                if ref.window_title and w.title == ref.window_title:
-                    ref.hwnd = w.hwnd
-                    self.log(
-                        f"🔧 janela '{ref.window_title}' re-resolvida "
-                        f"(hwnd {w.hwnd})."
-                    )
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def _ingest_retry(self, payload: list) -> bool:
-        """POST /api/ingest with backoff so transient failures never lose data."""
-        for attempt in range(1, 4):
-            try:
-                self.api.ingest(payload)
-                return True
-            except Exception as e:
-                if attempt >= 3:
-                    self.log(f"❌ ingest falhou após 3 tentativas: {e}")
-                    return False
-                time.sleep(1.0 * attempt)
-        return False
-
-    def _ocr_worker(self, ref: "RuntimeCharacter") -> None:
-        """
-        Per-window screen OCR worker. Each WoW window gets its OWN thread that
-        only screenshots that window's relay strip, so with 20 windows there is
-        never cross-attribution: a payload is accepted ONLY if its OWN tag
-        matches this window's character (security against misrouting).
-        """
-        if not (HAS_MSS and HAS_WINOCR and HAS_WIN32):
-            self.log(
-                f"📷 OCR indisponível para {ref.character} (requer mss+winocr)."
-            )
-            return
-        import asyncio
-
-        from PIL import Image
-
-        # Tiny stagger so 20 workers don't screenshot in the same instant.
-        time.sleep(0.15 * (abs(hash(ref.character)) % 7))
-        errs = 0
-        first_ok = False
-        self.log(f"📷 OCR engine iniciado para {ref.character} (faixa relay).")
-        with mss.mss() as sct:
-            while not self.stop_event.is_set():
-                if not self._get_controls().get("ocrRelayEnabled", True):
-                    time.sleep(1)
-                    continue
-                try:
-                    if not self._heal_ref(ref):
-                        time.sleep(2)
-                        continue
-                    l, t, r, b = win32gui.GetWindowRect(ref.hwnd)
-                    width = min(1500, max(0, r - l - 12))
-                    if width < 120:
-                        time.sleep(1)
-                        continue
-                    region = {
-                        "left": l + 6,
-                        "top": t + 28,
-                        "width": width,
-                        "height": 60,
-                    }
-                    shot = sct.grab(region)
-                    pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    result = asyncio.run(winocr.recognize_pil_image(pil, "en-US"))
-                    text = getattr(result, "text", None) or str(result)
-                    if not first_ok and text.strip():
-                        first_ok = True
-                        self.log(
-                            f"📷 OCR lendo a janela {ref.character}: "
-                            f"{len(text)} chars na primeira leitura."
-                        )
-                except Exception as e:
-                    errs += 1
-                    if errs <= 3 or errs % 50 == 0:
-                        self.log(f"⚠️ OCR falhou ({errs}x) em {ref.character}: {e}")
-                    time.sleep(1)
-                    continue
-                if "WIMRELAY" not in text and "BWRELAY" not in text:
-                    time.sleep(1.2)
-                    continue
-                parsed = parse_whisper(text, ref.character)
-                if not parsed:
-                    time.sleep(1.2)
-                    continue
-                direction, own_raw, other, body = parsed
-                # SECURITY: the payload must belong to THIS window. If the OWN
-                # tag names a different character, discard — it means we read a
-                # foreign frame and must never misroute a buyer's message.
-                if (
-                    own_raw
-                    and ref.character
-                    and own_raw.strip().lower() != ref.character.strip().lower()
-                ):
-                    time.sleep(1.2)
-                    continue
-                own = self._canonical_char(own_raw) or ref.character
-                if not own or not other or not body:
-                    time.sleep(1.2)
-                    continue
-                if self._recent_dup(own, other, body):
-                    time.sleep(1.2)
-                    continue
-                self._remember_whisper(own, other, body)
-                ok = self._ingest_retry(
-                    [
-                        {
-                            "externalId": make_ext_id(
-                                own, other, body, f"ocr-{int(time.time() // 8)}"
-                            ),
-                            "character": own,
-                            "player": other,
-                            "body": body,
-                            "direction": direction,
-                            "status": "sent" if direction == "outgoing" else "received",
-                            "receivedAt": time.strftime(
-                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                            ),
-                        }
-                    ]
-                )
-                if ok:
-                    arrow = "→" if direction == "outgoing" else "←"
-                    self.log(f"📷 {arrow} OCR [{own}] {other}: {body}")
-                time.sleep(1.2)
-
-    def _wim_ocr_worker(self, ref: "RuntimeCharacter") -> None:
-        """
-        OUT-OF-GAME reader: OCRs the whole WoW window and extracts the WIM
-        conversation lines ("HH:MM [Name]: text"). Works WITHOUT the addon and
-        WITHOUT any log file being created — it just reads what is on screen.
-        Only INCOMING lines (speaker != this window's character) are ingested,
-        so routing is always safe: the window defines the own character and
-        the speaker defines the buyer.
-        """
-        if not (HAS_MSS and HAS_WINOCR and HAS_WIN32):
-            self.log(
-                f"🖥 leitor WIM indisponível para {ref.character} (mss+winocr)."
-            )
-            return
-        import asyncio
-
-        from PIL import Image
-
-        # Tolerant: OCR may render [Name] as (Name), |Name| or Name.
-        line_re = re.compile(
-            r"^\s*(\d{1,2}:\d{2})\s*[\[\(\|]?\s*([^:\]\)\|]{1,32}?)\s*[\]\)\|]?\s*[:\-]\s*(\S.{0,200})$"
-        )
-        own_base = (ref.character.split("-")[0] or "").strip().lower()
-        seen: dict = {}
-        stats = {"lines": 0, "cand": 0, "own": 0, "sent": 0, "errs": 0}
-        last_hb = time.time()
-        dbg_path = app_data_dir() / f"ocr_{ref.window_title or ref.character}.txt"
-        self.log(f"🖥 OCR WIM engine iniciado para {ref.character}.")
-        time.sleep(0.3 * (abs(hash(ref.character)) % 5))
-        with mss.mss() as sct:
-            while not self.stop_event.is_set():
-                if not self._get_controls().get("wimScreenOcrEnabled", True):
-                    time.sleep(1)
-                    continue
-                try:
-                    if not self._heal_ref(ref):
-                        time.sleep(2)
-                        continue
-                    l, t, r, b = win32gui.GetWindowRect(ref.hwnd)
-                    w = max(0, r - l)
-                    h = max(0, b - t)
-                    if w < 200 or h < 200:
-                        time.sleep(1)
-                        continue
-                    shot = sct.grab({"left": l, "top": t, "width": w, "height": h})
-                    pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-                    result = asyncio.run(winocr.recognize_pil_image(pil, "pt-BR"))
-                    text = getattr(result, "text", None) or str(result)
-                except Exception as e:
-                    stats["errs"] += 1
-                    if stats["errs"] <= 3 or stats["errs"] % 50 == 0:
-                        self.log(
-                            f"⚠️ OCR WIM falhou ({stats['errs']}x) em {ref.character}: {e}"
-                        )
-                    time.sleep(1.5)
-                    continue
-                now = time.time()
-                stats["lines"] += 1
-                # DEBUG: dump what the OCR sees so we can diagnose silently
-                # failing reads. Open this file to see exactly what the bridge
-                # is reading from the WoW window.
-                try:
-                    dbg_path.write_text(text[:2000], encoding="utf-8")
-                except Exception:
-                    pass
-                seen = {k: v for k, v in seen.items() if now - v < 300}
-                for raw in text.splitlines():
-                    m = line_re.match(raw.strip())
-                    if not m:
-                        continue
-                    stats["cand"] += 1
-                    name = m.group(2).strip()
-                    body = m.group(3).strip()
-                    low = name.lower()
-                    if (
-                        not name
-                        or not body
-                        or low in ("guild", "party", "raid", "system", "wim", "officer")
-                    ):
-                        continue
-                    name_base = name.split("-")[0].strip().lower()
-                    if name_base == own_base:
-                        stats["own"] += 1
-                        continue  # outgoing — o site já sabe; evita rota errada
-                    key = ("in", name_base, body.lower())
-                    if key in seen:
-                        continue
-                    seen[key] = now
-                    if self._recent_dup(ref.character, name, body):
-                        continue
-                    self._remember_whisper(ref.character, name, body)
-                    bucket = int(now // 300)
-                    ok = self._ingest_retry(
-                        [
-                            {
-                                "externalId": make_ext_id(
-                                    ref.character, name, body, f"wim-{bucket}"
-                                ),
-                                "character": ref.character,
-                                "player": name,
-                                "body": body,
-                                "direction": "incoming",
-                                "status": "received",
-                                "receivedAt": time.strftime(
-                                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                                ),
-                            }
-                        ]
-                    )
-                    if ok:
-                        stats["sent"] += 1
-                        self.log(
-                            f"🖥 ← WIM-OCR [{ref.character}] {name}: {body}"
-                        )
-                # Heartbeat every 30s: proves the reader is alive and shows
-                # how many whisper-shaped lines it saw (cand) vs own (own).
-                if now - last_hb > 30:
-                    last_hb = now
-                    self.log(
-                        f"🖥 OCR [{ref.character}] vivo: {stats['lines']} leituras, "
-                        f"{stats['cand']} linhas de whisper, {stats['own']} próprias, "
-                        f"{stats['sent']} enviadas ao site, {stats['errs']} erros OCR. "
-                        f"Debug: {dbg_path}"
-                    )
-                time.sleep(2.0)
-
-    def _combat_tail(self, path: Path) -> None:
-        """
-        Real-time relay via WoWCombatLog.txt. The addon mirrors every whisper
-        as a custom emote (SendChatMessage(..., "EMOTE")), and the combat log
-        writes EMOTE lines to disk almost instantly — even on clients where
-        WoWChatLog.txt only flushes on logout. The emote text carries the same
-        BWRELAY/WIMRELAY payload, so parse_whisper understands it.
-        """
-        for line in tail_file(path, self.stop_event, self.log):
-            if "BWRELAY" not in line and "WIMRELAY" not in line:
-                continue
-            if not self._get_controls().get("combatRelayEnabled", True):
-                continue
-            parsed = parse_whisper(line, "")
-            if not parsed:
-                continue
-            direction, own_raw, other, body = parsed
-            own = self._canonical_char(own_raw) or own_raw
-            if not own or not other or not body:
-                continue
-            if self._recent_dup(own, other, body):
-                continue
-            self._remember_whisper(own, other, body)
-            line_ts = log_ts_of(line)
-            ok = self._ingest_retry(
-                [
-                    {
-                        "externalId": make_ext_id(own, other, body, line_ts),
-                        "character": own,
-                        "player": other,
-                        "body": body,
-                        "direction": direction,
-                        "status": "sent" if direction == "outgoing" else "received",
-                        "receivedAt": ext_ts_to_iso(line_ts),
-                    }
-                ]
-            )
-            if ok:
-                arrow = "→" if direction == "outgoing" else "←"
-                self.log(f"{arrow} ⚡(combatlog) [{own}] {other}: {body}")
 
     def _gse_syncer(self) -> None:
         """
@@ -2089,7 +1664,7 @@ class BridgeEngine:
                 wins = enum_wow_windows()
                 payload = []
                 for w in wins:
-                    matched = self._find_char_by_win(w)
+                    matched = self._find_char_by_hwnd(w.hwnd)
                     char_name = matched.character if matched else ""
                     payload.append(
                         {
@@ -2119,47 +1694,6 @@ class BridgeEngine:
             if c.hwnd == hwnd:
                 return c
         return None
-
-    def _find_char_by_win(self, w: "DetectedWindow") -> Optional[RuntimeCharacter]:
-        """
-        Match a detected window to a configured character. HWNDs change when
-        WoW restarts or a window is recreated, but the renamed title (wow1,
-        wow2...) is stable — so we also match by title and keep the stored
-        HWND fresh. This fixes "não consegui focar janela 'wow1'" after the
-        game has been open for a while / restarted.
-        """
-        by_hwnd = self._find_char_by_hwnd(w.hwnd)
-        if by_hwnd:
-            return by_hwnd
-        if w.title:
-            for c in self.chars:
-                if c.window_title and c.window_title == w.title:
-                    if c.hwnd != w.hwnd:
-                        c.hwnd = w.hwnd
-                    return c
-        return None
-
-    def _focus_ref(self, ref: "RuntimeCharacter") -> None:
-        """Focus the character's window, re-resolving a stale HWND by title."""
-        if focus_hwnd(ref.hwnd):
-            return
-        try:
-            for w in enum_wow_windows():
-                if (
-                    ref.window_title
-                    and w.title == ref.window_title
-                    and w.hwnd != ref.hwnd
-                ):
-                    ref.hwnd = w.hwnd
-                    if focus_hwnd(ref.hwnd):
-                        return
-        except Exception:
-            pass
-        raise RuntimeError(
-            f"não consegui focar janela {ref.window_title!r}. "
-            "Se o WoW estiver sendo executado como administrador, feche o "
-            "BakersWhisper e abra novamente com 'Executar como administrador'."
-        )
 
 
 # =============================================================================
@@ -2654,7 +2188,8 @@ class App:
         entry.pack(side="left", padx=(4, 4))
 
         # Log status
-        log_ok = win.chat_log and Path(win.chat_log).exists()
+        log_paths = log_path_candidates(win.exe_path, win.chat_log)
+        log_ok = any(p.exists() for p in log_paths)
         log_lbl = tk.Label(
             row,
             text="✅ log ok" if log_ok else "❌ /chatlog",
@@ -2701,6 +2236,7 @@ class App:
                     hwnd=hwnd,
                     window_title=w.title,
                     chat_log=log_path,
+                    log_candidates=log_path_candidates(w.exe_path, str(log_path)),
                 )
             )
             # Persist later by slot via _save_character_entries().

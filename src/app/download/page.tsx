@@ -254,66 +254,6 @@ export default function DownloadPage() {
         </div>
       </div>
 
-      <div className="mt-10 rounded-xl border border-sky-500/40 bg-sky-500/5 p-5">
-        <h3 className="text-lg font-bold text-sky-300">
-          📦 Arquivos mais recentes (bridge + addon)
-        </h3>
-        <p className="mt-1 text-xs text-sky-200/80">
-          Estes são os arquivos com TODAS as correções (foco robusto, dedupe,
-          relay combatlog, modo voz). O <b>BakersWhisper.exe</b> é gerado pelo
-          GitHub Actions a partir do seu repositório — então, depois de baixar
-          estes arquivos, <b>faça o push deles para o GitHub</b> e dispare a
-          Action (aba Actions → Run workflow) para compilar o exe atualizado.
-          Sem isso, o exe continuará sendo compilado com código antigo.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <a
-            href="/api/download/wim_bridge_gui.py"
-            className="rounded border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
-          >
-            ⬇ wim_bridge_gui.py (bridge completo)
-          </a>
-          <a
-            href="/api/download/WIMBridge.zip"
-            className="rounded border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
-          >
-            ⬇ WIMBridge.zip (addon v2.8.0)
-          </a>
-          <a
-            href="/api/download/requirements.txt"
-            className="rounded border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-300 hover:bg-sky-500/20"
-          >
-            ⬇ requirements.txt
-          </a>
-        </div>
-        <p className="mt-3 text-[11px] text-slate-400">
-          Tem Python instalado? Então não precisa esperar o exe:{" "}
-          <code>pip install -r requirements.txt</code> e{" "}
-          <code>python wim_bridge_gui.py</code>.
-        </p>
-        <div className="mt-3 rounded border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200">
-          <b>⚠ O addon não carrega? (<code>/wimbridge</code> mostra ajuda)</b>
-          <ol className="mt-1 list-decimal space-y-1 pl-5">
-            <li>
-              Confira a pasta: deve ser{" "}
-              <code>_retail_\Interface\AddOns\WIMBridge\WIMBridge.toc</code> —
-              se ficou <code>WIMBridge\WIMBridge\WIMBridge.toc</code> (pasta
-              duplicada ao extrair o zip), o WoW não carrega.
-            </li>
-            <li>
-              Na <b>tela de seleção de personagens</b>, clique em{" "}
-              <b>AddOns</b> (canto inferior esquerdo) e marque{" "}
-              <b>&quot;Carregar AddOns desatualizados&quot;</b> — necessário
-              quando a versão do seu WoW é diferente da do addon.
-            </li>
-            <li>
-              Entre no jogo e digite <code>/wimbridge who</code> — deve
-              responder <code>own = SeuChar-Reino</code>.
-            </li>
-          </ol>
-        </div>
-      </div>
-
       <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
         <Link
           href="/"

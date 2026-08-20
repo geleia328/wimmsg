@@ -26,14 +26,12 @@ type Controls = {
   whisperFocusDelayMs: number;
   whisperAfterSendDelayMs: number;
   whisperChatOpenDelayMs: number;
+  whisperWReadyDelayMs: number;
+  whisperSpaceDelayMs: number;
   whisperKeystrokeDelayMs: number;
   whisperChatSendDelayMs: number;
   whisperCloseChatEnabled: boolean;
   whisperChatCloseDelayMs: number;
-  voiceRelayEnabled: boolean;
-  combatRelayEnabled: boolean;
-  ocrRelayEnabled: boolean;
-  wimScreenOcrEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -48,23 +46,23 @@ export function GseView() {
     whisperFocusDelayMs: 2000,
     whisperAfterSendDelayMs: 1000,
     whisperChatOpenDelayMs: 1000,
+    whisperWReadyDelayMs: 1000,
+    whisperSpaceDelayMs: 1000,
     whisperKeystrokeDelayMs: 100,
     whisperChatSendDelayMs: 1000,
-    whisperCloseChatEnabled: true,
-    whisperChatCloseDelayMs: 500,
-    voiceRelayEnabled: true,
-    combatRelayEnabled: true,
-    ocrRelayEnabled: true,
-    wimScreenOcrEnabled: true,
+    whisperCloseChatEnabled: false,
+    whisperChatCloseDelayMs: 400,
     queuePollMs: 1500,
   });
   const [delayDraft, setDelayDraft] = useState({
     whisperFocusDelayMs: "2000",
     whisperAfterSendDelayMs: "1000",
     whisperChatOpenDelayMs: "1000",
+    whisperWReadyDelayMs: "1000",
+    whisperSpaceDelayMs: "1000",
     whisperKeystrokeDelayMs: "100",
     whisperChatSendDelayMs: "1000",
-    whisperChatCloseDelayMs: "500",
+    whisperChatCloseDelayMs: "400",
     queuePollMs: "1500",
   });
   const [delayDirty, setDelayDirty] = useState(false);
@@ -105,6 +103,8 @@ export function GseView() {
           whisperFocusDelayMs: String(nextControls.whisperFocusDelayMs),
           whisperAfterSendDelayMs: String(nextControls.whisperAfterSendDelayMs),
           whisperChatOpenDelayMs: String(nextControls.whisperChatOpenDelayMs),
+          whisperWReadyDelayMs: String(nextControls.whisperWReadyDelayMs),
+          whisperSpaceDelayMs: String(nextControls.whisperSpaceDelayMs),
           whisperKeystrokeDelayMs: String(nextControls.whisperKeystrokeDelayMs),
           whisperChatSendDelayMs: String(nextControls.whisperChatSendDelayMs),
           whisperChatCloseDelayMs: String(nextControls.whisperChatCloseDelayMs),
@@ -273,6 +273,8 @@ export function GseView() {
       whisperFocusDelayMs: Number(delayDraft.whisperFocusDelayMs),
       whisperAfterSendDelayMs: Number(delayDraft.whisperAfterSendDelayMs),
       whisperChatOpenDelayMs: Number(delayDraft.whisperChatOpenDelayMs),
+      whisperWReadyDelayMs: Number(delayDraft.whisperWReadyDelayMs),
+      whisperSpaceDelayMs: Number(delayDraft.whisperSpaceDelayMs),
       whisperKeystrokeDelayMs: Number(delayDraft.whisperKeystrokeDelayMs),
       whisperChatSendDelayMs: Number(delayDraft.whisperChatSendDelayMs),
       whisperChatCloseDelayMs: Number(delayDraft.whisperChatCloseDelayMs),
@@ -282,6 +284,8 @@ export function GseView() {
       !Number.isFinite(patch.whisperFocusDelayMs) ||
       !Number.isFinite(patch.whisperAfterSendDelayMs) ||
       !Number.isFinite(patch.whisperChatOpenDelayMs) ||
+      !Number.isFinite(patch.whisperWReadyDelayMs) ||
+      !Number.isFinite(patch.whisperSpaceDelayMs) ||
       !Number.isFinite(patch.whisperKeystrokeDelayMs) ||
       !Number.isFinite(patch.whisperChatSendDelayMs) ||
       !Number.isFinite(patch.whisperChatCloseDelayMs) ||
@@ -420,148 +424,18 @@ export function GseView() {
             </div>
           </div>
 
-          {/* WIM screen reader toggle */}
-          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  🖥 Leitor da janela WIM (sem addon, sem log)
-                </div>
-                <div className="text-xs text-slate-500">
-                  Tira um print da janela do WoW a cada 2s e lê a conversa do
-                  WIM direto da tela com OCR. Só mensagens RECEBIDAS entram
-                  (a janela define seu personagem, o nome falado define o
-                  comprador) — roteamento sempre seguro. Útil quando o
-                  WoWChatLog/WoWCombatLog não são criados.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    wimScreenOcrEnabled: !controls.wimScreenOcrEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.wimScreenOcrEnabled
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.wimScreenOcrEnabled ? "WIM OCR ON" : "WIM OCR OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Screen OCR relay toggle */}
-          <div className="mt-4 rounded-lg border border-fuchsia-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  📷 OCR da tela (sem log, sem microfone)
-                </div>
-                <div className="text-xs text-slate-500">
-                  O addon desenha cada whisper numa faixa preta/amarela no topo
-                  da janela do WoW; o bridge tira um print em segundo plano só
-                  dessa faixa e lê com o OCR nativo do Windows. Os nomes saem
-                  exatos porque vêm do quadro, não de reconhecimento de fala.
-                  A faixa some sozinha após 6s. Esconda com{" "}
-                  <code>/wimbridge screen</code>.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    ocrRelayEnabled: !controls.ocrRelayEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.ocrRelayEnabled
-                    ? "bg-fuchsia-500 text-white"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.ocrRelayEnabled ? "OCR ON" : "OCR OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Combat-log relay toggle */}
-          <div className="mt-4 rounded-lg border border-amber-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  🗡 Relay pelo combatlog (tempo real)
-                </div>
-                <div className="text-xs text-slate-500">
-                  O addon espelha cada whisper como um emote no{" "}
-                  <code>WoWCombatLog.txt</code>, que grava no disco quase
-                  instantaneamente — resolve clientes onde o chatlog só atualiza
-                  ao fechar o jogo. Requer <code>/combatlog</code> ativo (o
-                  addon liga sozinho). ⚠ O emote fica visível para jogadores
-                  próximos; desative aqui ou com <code>/wimbridge combat</code>{" "}
-                  se incomodar.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    combatRelayEnabled: !controls.combatRelayEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.combatRelayEnabled
-                    ? "bg-amber-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.combatRelayEnabled ? "COMBAT ON" : "COMBAT OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Voice relay toggle */}
-          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">🎙 Modo voz (tempo real)</div>
-                <div className="text-xs text-slate-500">
-                  O addon fala cada whisper no jogo com os nomes soletrados em
-                  alfabeto fonético; o bridge ouve pelo microfone e manda direto
-                  para o site — funciona mesmo quando o WoW só grava o chatlog
-                  ao fechar a janela. Requer{" "}
-                  <code>pip install SpeechRecognition</code> (já incluso no
-                  requirements) e um microfone ligado.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    voiceRelayEnabled: !controls.voiceRelayEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.voiceRelayEnabled
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.voiceRelayEnabled ? "VOZ ON" : "VOZ OFF"}
-              </button>
-            </div>
-          </div>
-
           {/* Close-chat toggle */}
           <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="font-bold text-slate-100">
-                  Fechar chat do jogo após enviar (Escape)
+                  Pressionar ESC para fechar o chat após enviar
                 </div>
                 <div className="text-xs text-slate-500">
-                  Fecha o campo de chat depois de cada whisper enviado para não
-                  atrapalhar o GSE nem outras janelas. A próxima mensagem da
-                  fila reabre o chat sozinha — você pode responder qualquer
-                  pessoa depois, mesmo com o chat fechado.
+                  ⚠ Deixe <b>DESLIGADO</b> (padrão): o WoW já fecha o campo de
+                  chat sozinho depois de enviar — e pressionar ESC com o chat
+                  fechado ABRE O MENU do jogo (é isso que estava bugando). Só
+                  ligue se o seu WoW mantiver o chat aberto após enviar.
                 </div>
               </div>
               <button
@@ -581,48 +455,87 @@ export function GseView() {
             </div>
           </div>
 
-          {/* Timing controls grid — no low hard-caps; user can type any delay. */}
+          {/* Timing controls grid */}
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <label className="text-xs text-slate-400">
-              ⏱ Abrir chat no jogo
-              <span className="ml-1 text-slate-600">(abrir /w · ms)</span>
+              ⏱ Depois do Enter (campo abrindo)
               <input
                 type="number"
-                min={0}
-                max={60000}
-                step={50}
-                inputMode="numeric"
+                min={300}
+                max={10000}
+                step={100}
                 value={delayDraft.whisperChatOpenDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatOpenDelayMs", e.target.value)
                 }
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera após o Enter antes de colar o /w (1s na ordem padrão)
+              </span>
             </label>
             <label className="text-xs text-slate-400">
-              ⏱ Delay de foco antes de digitar
-              <span className="ml-1 text-slate-600">(ms)</span>
+              ⏱ Antes do espaço (após /w Nome)
               <input
                 type="number"
-                min={0}
-                max={60000}
-                step={50}
-                inputMode="numeric"
+                min={300}
+                max={10000}
+                step={100}
+                value={delayDraft.whisperWReadyDelayMs}
+                onChange={(e) =>
+                  setDraftField("whisperWReadyDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera após colar /w Nome-Server antes de pressionar espaço
+                (1s na ordem padrão)
+              </span>
+            </label>
+            <label className="text-xs text-slate-400">
+              ⏱ Espaço (abre o whisper)
+              <input
+                type="number"
+                min={300}
+                max={10000}
+                step={100}
+                value={delayDraft.whisperSpaceDelayMs}
+                onChange={(e) =>
+                  setDraftField("whisperSpaceDelayMs", e.target.value)
+                }
+                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera após pressionar espaço antes de colar a mensagem (1s na
+                ordem padrão)
+              </span>
+            </label>
+            <label className="text-xs text-slate-400">
+              ⏱ Foco da janela
+              <span className="ml-1 text-slate-600">(antes do Enter)</span>
+              <input
+                type="number"
+                min={200}
+                max={10000}
+                step={100}
                 value={delayDraft.whisperFocusDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperFocusDelayMs", e.target.value)
                 }
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera a janela assumir o foco (2s na ordem padrão)
+              </span>
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Entre cada tecla digitada
-              <span className="ml-1 text-slate-600">(typing · ms)</span>
+              <span className="ml-1 text-slate-600">(fallback, sem colar)</span>
               <input
                 type="number"
-                min={0}
-                max={5000}
-                step={1}
+                min={50}
+                max={1000}
+                step={10}
                 inputMode="numeric"
                 value={delayDraft.whisperKeystrokeDelayMs}
                 onChange={(e) =>
@@ -633,72 +546,54 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Enviar mensagem (Enter)
-              <span className="ml-1 text-slate-600">(ms)</span>
+              <span className="ml-1 text-slate-600">(após colar a msg)</span>
               <input
                 type="number"
-                min={0}
-                max={60000}
-                step={50}
-                inputMode="numeric"
+                min={300}
+                max={10000}
+                step={100}
                 value={delayDraft.whisperChatSendDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatSendDelayMs", e.target.value)
                 }
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Fechar chat (Escape)
-              <span className="ml-1 text-slate-600">(após enviar · ms)</span>
-              <input
-                type="number"
-                min={0}
-                max={60000}
-                step={50}
-                inputMode="numeric"
-                value={delayDraft.whisperChatCloseDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperChatCloseDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera após colar a mensagem antes do Enter (1s na ordem
+                padrão)
+              </span>
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Depois de enviar whisper
-              <span className="ml-1 text-slate-600">(ms)</span>
+              <span className="ml-1 text-slate-600">(liberar GSE)</span>
               <input
                 type="number"
-                min={0}
-                max={60000}
-                step={50}
-                inputMode="numeric"
+                min={200}
+                max={10000}
+                step={100}
                 value={delayDraft.whisperAfterSendDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperAfterSendDelayMs", e.target.value)
                 }
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
+              <span className="mt-1 block text-[10px] text-slate-600">
+                espera após o Enter de envio (1s na ordem padrão)
+              </span>
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Poll da fila de whisper
-              <span className="ml-1 text-slate-600">(ms)</span>
               <input
                 type="number"
-                min={250}
-                max={60000}
-                step={50}
-                inputMode="numeric"
+                min={500}
+                max={10000}
+                step={100}
                 value={delayDraft.queuePollMs}
                 onChange={(e) => setDraftField("queuePollMs", e.target.value)}
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
             </label>
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">
-            Cada valor é em milissegundos e o bridge usa exatamente o que você
-            salvar aqui (até 60s por etapa). Clique em{" "}
-            <b className="text-slate-400">Salvar delays</b> para aplicar.
-          </p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <button
               onClick={() => void saveDelays()}
@@ -713,10 +608,11 @@ export function GseView() {
               </span>
             ) : (
               <span className="text-xs text-slate-500">
-                delays salvos: foco {controls.whisperFocusDelayMs}ms · digitar{" "}
-                {controls.whisperKeystrokeDelayMs}ms · enviar{" "}
-                {controls.whisperChatSendDelayMs}ms · fechar{" "}
-                {controls.whisperChatCloseDelayMs}ms · pós-envio{" "}
+                ordem salva: foco {controls.whisperFocusDelayMs}ms · pós-Enter{" "}
+                {controls.whisperChatOpenDelayMs}ms · antes do espaço{" "}
+                {controls.whisperWReadyDelayMs}ms · pós-espaço{" "}
+                {controls.whisperSpaceDelayMs}ms · pós-colar{" "}
+                {controls.whisperChatSendDelayMs}ms · pós-envio{" "}
                 {controls.whisperAfterSendDelayMs}ms
               </span>
             )}
@@ -836,15 +732,13 @@ export function GseView() {
                         <input
                           type="number"
                           min={50}
-                          max={600000}
+                          max={2000}
                           step={10}
-                          inputMode="numeric"
                           value={state.intervalMs}
                           onChange={(e) =>
                             setCharField(c, "intervalMs", e.target.value)
                           }
-                          title="Intervalo entre teclas do GSE (ms). Aceita qualquer valor ≥ 50."
-                          className="w-24 rounded bg-slate-800 px-2 py-1 text-right font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
+                          className="w-20 rounded bg-slate-800 px-2 py-1 text-right font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
                         />
                         <span className="text-xs text-slate-500">ms</span>
                       </div>

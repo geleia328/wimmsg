@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { getKnownOwnCharacters } from "@/lib/ownCharacters";
+import { and, asc, eq, gt } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,10 @@ export const dynamic = "force-dynamic";
 /**
  * GET  → messages between `character` (your window) and `player` (the other end).
  * POST → queues a new outgoing whisper to be typed in that specific window.
+ *        If `player` is ANOTHER OF YOUR OWN characters (multi-boxing), the
+ *        incoming side is mirrored immediately so the destination chat shows
+ *        the message in real time — no need to wait for the bridge to read
+ *        the in-game echo.
  */
 export async function GET(
   request: NextRequest,
@@ -23,8 +28,8 @@ export async function GET(
   );
 
   const conditions = [
-    sql`lower(${messages.player}) = ${player.toLowerCase()}`,
-    sql`lower(${messages.character}) = ${character.toLowerCase()}`,
+    eq(messages.player, player),
+    eq(messages.character, character),
   ];
   if (Number.isFinite(since) && since > 0) {
     conditions.push(gt(messages.id, since));
@@ -48,9 +53,12 @@ export async function POST(
   const character = decodeURIComponent(rawChar).trim();
   const player = decodeURIComponent(rawPlayer).trim();
 
-  let payload: { body?: string } = {};
+  let payload: { body?: string; mirrorToCharacter?: boolean } = {};
   try {
-    payload = (await request.json()) as { body?: string };
+    payload = (await request.json()) as {
+      body?: string;
+      mirrorToCharacter?: boolean;
+    };
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
@@ -83,6 +91,7 @@ export async function POST(
       ? `Personagem está em ${character.split("-").slice(-1)[0]} mas o destinatário está em ${player.split("-").slice(-1)[0]}. O envio pode falhar se os servidores não estiverem conectados.`
       : undefined;
 
+  const outgoingId = `out-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const [inserted] = await db
     .insert(messages)
     .values({
@@ -91,11 +100,59 @@ export async function POST(
       body,
       direction: "outgoing",
       status: "pending",
-      externalId: `out-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      externalId: outgoingId,
     })
     .returning();
 
-  return NextResponse.json({ message: inserted, warning: realmWarning });
+  // ---- MIRROR: destination is another of the user's own characters ----
+  // Detect own characters from every bridge source. Do NOT require
+  // `matched = yes`: while a window is being rescanned/renamed the bridge can
+  // temporarily report matched=no even though its `character` is already
+  // known. Requiring matched=yes was why "salve" stayed only on the sender
+  // side in the user's screenshot.
+  let mirrored = false;
+  let mirrorReason = "";
+  const target = player.trim().toLowerCase();
+  const explicitlyOwn = payload.mirrorToCharacter === true;
+  if (target !== character.toLowerCase()) {
+    let known = new Set<string>();
+    try {
+      known = await getKnownOwnCharacters();
+    } catch {
+      /* mirror is best-effort — the outgoing row remains safe */
+    }
+
+    if (explicitlyOwn || known.has(target)) {
+      await db
+        .insert(messages)
+        .values({
+          character: player.trim(),
+          player: character,
+          body,
+          direction: "incoming",
+          status: "received",
+          externalId: `mirror-${outgoingId}`,
+        })
+        .onConflictDoNothing({ target: messages.externalId });
+      mirrored = true;
+      mirrorReason = explicitlyOwn
+        ? "ui_confirmed_own_character"
+        : "detected_own_character";
+    }
+  }
+
+  // Return this diagnostic so the UI/bridge logs can immediately show why a
+  // self-character message was or was not mirrored.
+  if (!mirrored && target !== character.toLowerCase()) {
+    mirrorReason = "destination_not_registered_as_own_character";
+  }
+
+  return NextResponse.json({
+    message: inserted,
+    warning: realmWarning,
+    mirrored,
+    mirrorReason,
+  });
 }
 
 export async function DELETE(
@@ -115,12 +172,7 @@ export async function DELETE(
 
   const deleted = await db
     .delete(messages)
-    .where(
-      and(
-        sql`lower(${messages.character}) = ${character.toLowerCase()}`,
-        sql`lower(${messages.player}) = ${player.toLowerCase()}`,
-      ),
-    )
+    .where(and(eq(messages.character, character), eq(messages.player, player)))
     .returning({ id: messages.id });
 
   return NextResponse.json({

@@ -17,14 +17,12 @@ type Controls = {
   whisperFocusDelayMs: number;
   whisperAfterSendDelayMs: number;
   whisperChatOpenDelayMs: number;
+  whisperWReadyDelayMs: number;
+  whisperSpaceDelayMs: number;
   whisperKeystrokeDelayMs: number;
   whisperChatSendDelayMs: number;
   whisperCloseChatEnabled: boolean;
   whisperChatCloseDelayMs: number;
-  voiceRelayEnabled: boolean;
-  combatRelayEnabled: boolean;
-  ocrRelayEnabled: boolean;
-  wimScreenOcrEnabled: boolean;
   queuePollMs: number;
 };
 
@@ -35,23 +33,19 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
   const num = (v: string, min: number, max: number) =>
     Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
 
-  // Wide ranges so the GSE page can save any timing the user types.
-  // Bridge reads these values and applies them on every send.
   return {
     bridgeReaderEnabled: get("bridge_reader_enabled") === "yes",
     gseMasterEnabled: get("gse_master_enabled") === "yes",
-    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 0, 60000),
-    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 0, 60000),
-    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 60000),
-    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 0, 5000),
-    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 60000),
+    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 200, 10000),
+    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 200, 10000),
+    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 300, 10000),
+    whisperWReadyDelayMs: num(get("whisper_w_ready_delay_ms"), 300, 10000),
+    whisperSpaceDelayMs: num(get("whisper_space_delay_ms"), 300, 10000),
+    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 50, 1000),
+    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 300, 10000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
-    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 60000),
-    voiceRelayEnabled: get("voice_relay_enabled") === "yes",
-    combatRelayEnabled: get("combat_relay_enabled") === "yes",
-    ocrRelayEnabled: get("ocr_relay_enabled") === "yes",
-    wimScreenOcrEnabled: get("wim_screen_ocr_enabled") === "yes",
-    queuePollMs: num(get("queue_poll_ms"), 250, 60000),
+    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 200, 5000),
+    queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
 
@@ -102,37 +96,46 @@ export async function POST(request: NextRequest) {
       value: payload.gseMasterEnabled ? "yes" : "no",
     });
   }
-  const clampMs = (value: number, min: number, max: number) =>
-    String(Math.max(min, Math.min(max, Math.floor(value))));
-
   if (typeof payload.whisperFocusDelayMs === "number") {
     pairs.push({
       key: "whisper_focus_delay_ms",
-      value: clampMs(payload.whisperFocusDelayMs, 0, 60000),
+      value: String(Math.max(200, Math.min(10000, Math.floor(payload.whisperFocusDelayMs)))),
     });
   }
   if (typeof payload.whisperAfterSendDelayMs === "number") {
     pairs.push({
       key: "whisper_after_send_delay_ms",
-      value: clampMs(payload.whisperAfterSendDelayMs, 0, 60000),
+      value: String(Math.max(200, Math.min(10000, Math.floor(payload.whisperAfterSendDelayMs)))),
     });
   }
   if (typeof payload.whisperChatOpenDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_open_delay_ms",
-      value: clampMs(payload.whisperChatOpenDelayMs, 0, 60000),
+      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperChatOpenDelayMs)))),
+    });
+  }
+  if (typeof payload.whisperWReadyDelayMs === "number") {
+    pairs.push({
+      key: "whisper_w_ready_delay_ms",
+      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperWReadyDelayMs)))),
+    });
+  }
+  if (typeof payload.whisperSpaceDelayMs === "number") {
+    pairs.push({
+      key: "whisper_space_delay_ms",
+      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperSpaceDelayMs)))),
     });
   }
   if (typeof payload.whisperKeystrokeDelayMs === "number") {
     pairs.push({
       key: "whisper_keystroke_delay_ms",
-      value: clampMs(payload.whisperKeystrokeDelayMs, 0, 5000),
+      value: String(Math.max(50, Math.min(1000, Math.floor(payload.whisperKeystrokeDelayMs)))),
     });
   }
   if (typeof payload.whisperChatSendDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_send_delay_ms",
-      value: clampMs(payload.whisperChatSendDelayMs, 0, 60000),
+      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperChatSendDelayMs)))),
     });
   }
   if (typeof payload.whisperCloseChatEnabled === "boolean") {
@@ -144,37 +147,13 @@ export async function POST(request: NextRequest) {
   if (typeof payload.whisperChatCloseDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_close_delay_ms",
-      value: clampMs(payload.whisperChatCloseDelayMs, 0, 60000),
-    });
-  }
-  if (typeof payload.voiceRelayEnabled === "boolean") {
-    pairs.push({
-      key: "voice_relay_enabled",
-      value: payload.voiceRelayEnabled ? "yes" : "no",
-    });
-  }
-  if (typeof payload.combatRelayEnabled === "boolean") {
-    pairs.push({
-      key: "combat_relay_enabled",
-      value: payload.combatRelayEnabled ? "yes" : "no",
-    });
-  }
-  if (typeof payload.ocrRelayEnabled === "boolean") {
-    pairs.push({
-      key: "ocr_relay_enabled",
-      value: payload.ocrRelayEnabled ? "yes" : "no",
-    });
-  }
-  if (typeof payload.wimScreenOcrEnabled === "boolean") {
-    pairs.push({
-      key: "wim_screen_ocr_enabled",
-      value: payload.wimScreenOcrEnabled ? "yes" : "no",
+      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatCloseDelayMs)))),
     });
   }
   if (typeof payload.queuePollMs === "number") {
     pairs.push({
       key: "queue_poll_ms",
-      value: clampMs(payload.queuePollMs, 250, 60000),
+      value: String(Math.max(500, Math.min(10000, Math.floor(payload.queuePollMs)))),
     });
   }
 
