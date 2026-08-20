@@ -308,7 +308,7 @@ export function ChatApp() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [notif, fetchBidirectionalMessages]);
+  }, [notif, fetchBidirectionalMessages, scrollIfStuck]);
 
   // When a conversation becomes selected, clear its unread badge
   useEffect(() => {

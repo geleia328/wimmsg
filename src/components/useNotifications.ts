@@ -66,8 +66,11 @@ export function useNotifications() {
   const baseTitleRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setPrefs(loadPrefs());
-    setReady(true);
+    const loaded = loadPrefs();
+    setTimeout(() => {
+      setPrefs(loaded);
+      setReady(true);
+    }, 0);
     if (typeof document !== "undefined") {
       baseTitleRef.current = document.title;
     }

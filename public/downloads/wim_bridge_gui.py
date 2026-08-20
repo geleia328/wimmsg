@@ -225,7 +225,7 @@ class SavedMapping:
     So the stable identity is now the assigned slot number.
     """
     exe_path: str
-    slot: int
+    slot: str
     character: str
 
 
@@ -388,7 +388,7 @@ class DetectedWindow:
     exe_path: str = ""
     chat_log: str = ""
     foreground: bool = False
-    slot: int = 0  # wowN number assigned by the bridge
+    slot: str = ""  # wowN number assigned by the bridge
 
 
 def _pid_for_hwnd(hwnd: int) -> int:
@@ -558,7 +558,7 @@ def rename_hwnd(hwnd: int, new_title: str) -> bool:
 
 def assign_slots(
     wins: list[DetectedWindow], saved: dict[str, SavedMapping]
-) -> dict[int, int]:
+) -> dict[int, str]:
     """
     Decide the wowN slot number for each detected window.
 
@@ -569,25 +569,25 @@ def assign_slots(
     We deliberately DO NOT key by exe_path because many windows may share the
     same Wow.exe path.
     """
-    used: set[int] = set()
-    result: dict[int, int] = {}
+    used: set[str] = set()
+    result: dict[int, str] = {}
 
     # Pass 1 — preserve current wowN title if present.
     for w in wins:
         m = re.fullmatch(r"wow(\d+)", w.title.strip().lower())
         if m:
-            slot = int(m.group(1))
-            if slot > 0 and slot not in used:
+            slot = m.group(1)
+            if slot not in used:
                 result[w.hwnd] = slot
                 used.add(slot)
 
     # Pass 2 — assign fresh slots.
-    def next_free() -> int:
+    def next_free() -> str:
         n = 1
-        while n in used:
+        while str(n) in used:
             n += 1
-        used.add(n)
-        return n
+        used.add(str(n))
+        return str(n)
 
     for w in wins:
         if w.hwnd not in result:
@@ -595,7 +595,7 @@ def assign_slots(
     return result
 
 
-def apply_renames(wins: list[DetectedWindow], slots: dict[int, int]) -> int:
+def apply_renames(wins: list[DetectedWindow], slots: dict[int, str]) -> int:
     ok = 0
     for w in wins:
         slot = slots.get(w.hwnd)
@@ -2693,11 +2693,8 @@ class App:
             new_slot_str = row["slot_entry"].get().strip()
             new_title = row["title_entry"].get().strip()
 
-            try:
-                if new_slot_str:
-                    w.slot = int(new_slot_str)
-            except ValueError:
-                pass
+            if new_slot_str:
+                w.slot = new_slot_str
                 
             if new_title:
                 w.title = new_title
