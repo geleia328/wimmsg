@@ -133,14 +133,12 @@ export function ChatApp() {
     const el = scrollRef.current;
     if (!el) return;
     stickToBottomRef.current =
-      el.scrollHeight - el.scrollTop <= el.clientHeight + 90;
+      el.scrollHeight - el.scrollTop - el.clientHeight < 90;
   }, []);
   const scrollIfStuck = useCallback(() => {
     const el = scrollRef.current;
     if (el && stickToBottomRef.current) {
-      setTimeout(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      }, 50);
+      el.scrollTop = el.scrollHeight;
     }
   }, []);
   const notif = useNotifications();
@@ -308,7 +306,7 @@ export function ChatApp() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [notif, fetchBidirectionalMessages, scrollIfStuck]);
+  }, [notif, fetchBidirectionalMessages]);
 
   // When a conversation becomes selected, clear its unread badge
   useEffect(() => {
@@ -358,7 +356,6 @@ export function ChatApp() {
           alert(`⚠ Aviso de servidor:\n\n${data.warning}`);
         }
         setDraft("");
-        stickToBottomRef.current = true;
         void fetchBidirectionalMessages(selected.character, selected.player);
         void refreshTop();
       } else {
