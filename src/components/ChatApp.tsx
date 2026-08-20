@@ -86,7 +86,7 @@ function statusBadge(status: string): { label: string; classes: string } {
   }
 }
 
-function charColor(name: string): string {
+function realmColor(name: string): string {
   const palette = [
     "bg-sky-500/20 text-sky-300 border-sky-500/40",
     "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40",
@@ -99,8 +99,10 @@ function charColor(name: string): string {
     "bg-teal-500/20 text-teal-300 border-teal-500/40",
     "bg-rose-500/20 text-rose-300 border-rose-500/40",
   ];
+  // Keep all characters from the same realm visually grouped.
+  const realm = name.includes("-") ? name.split("-").at(-1)! : name;
   let h = 0;
-  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < realm.length; i += 1) h = (h * 31 + realm.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
 
@@ -654,7 +656,7 @@ export function ChatApp() {
               className={`flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 transition ${
                 characterFilter === c.character
                   ? "border-amber-500 bg-amber-500/10 text-amber-300"
-                  : `${charColor(c.character)} hover:opacity-80`
+                  : `${realmColor(c.character)} hover:opacity-80`
               }`}
               title={
                 st
@@ -774,7 +776,7 @@ export function ChatApp() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span
-                      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${charColor(c.character)}`}
+                      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${realmColor(c.character)}`}
                     >
                       {c.character}
                     </span>
@@ -826,7 +828,7 @@ export function ChatApp() {
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5 text-[11px] sm:text-xs">
                         <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono ${charColor(selected.character)}`}
+                          className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono ${realmColor(selected.character)}`}
                         >
                           <span
                             className={`h-1.5 w-1.5 rounded-full ${

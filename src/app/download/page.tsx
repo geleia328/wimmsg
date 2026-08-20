@@ -10,6 +10,23 @@ export default function DownloadPage() {
         <h1 className="text-lg font-bold">📥 Downloads</h1>
       </header>
       <div className="mx-auto max-w-2xl space-y-6 p-6">
+        <div className="rounded-lg border border-emerald-500/50 bg-emerald-500/5 p-6">
+          <h2 className="mb-2 text-xl font-bold text-emerald-300">📥 BakersWhisper para Windows</h2>
+          <p className="mb-4 text-sm text-slate-300">
+            Aplicativo que conecta as janelas do WoW ao chat. Baixe, abra e
+            configure a URL do site e o token dentro do programa.
+          </p>
+          <a
+            href="/api/download/BakersWhisper.exe"
+            className="inline-block rounded bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400"
+          >
+            ⬇ Baixar BakersWhisper.exe
+          </a>
+          <p className="mt-3 text-xs text-slate-500">
+            Windows 10 ou 11. O Windows Defender pode pedir confirmação porque
+            o aplicativo ainda não possui assinatura digital.
+          </p>
+        </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-6">
           <h2 className="mb-2 text-lg font-bold text-amber-400">WIMBridge Addon (WoW)</h2>
           <p className="mb-3 text-sm text-slate-300">
