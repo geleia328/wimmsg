@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 # =============================================================================
 
 import hashlib
@@ -665,7 +665,8 @@ class GseSpammer:
         self.character = character
         self.hwnd = hwnd
         self.keybind = keybind
-        self.interval_ms = max(50, min(2000, int(interval_ms)))
+        # Allow any interval the user configures on the site (50ms .. 10 min).
+        self.interval_ms = max(50, min(600_000, int(interval_ms)))
         self.log = log_cb
         self.pause_event = threading.Event()  # SET = paused
         self._stop = threading.Event()
@@ -679,7 +680,7 @@ class GseSpammer:
 
     def update(self, keybind: str, interval_ms: int) -> None:
         self.keybind = keybind
-        self.interval_ms = max(50, min(2000, int(interval_ms)))
+        self.interval_ms = max(50, min(600_000, int(interval_ms)))
 
     def _run(self) -> None:
         self.log(f"⚙ GSE [{self.character}] iniciado — tecla {self.keybind!r}")
@@ -1458,7 +1459,18 @@ class BridgeEngine:
                     )
                 time.sleep(0.3)
             poll_ms = int(self._get_controls().get("queuePollMs", 1500))
-            time.sleep(max(0.5, min(10.0, poll_ms / 1000.0)))
+            # Honor the value from /gse (0.25s .. 60s).
+            time.sleep(max(0.25, min(60.0, poll_ms / 1000.0)))
+
+    def _ctrl_ms(self, key: str, default_ms: int) -> float:
+        """Read a delay (ms) from live controls and return seconds."""
+        try:
+            raw = self._get_controls().get(key, default_ms)
+            ms = int(raw)
+        except (TypeError, ValueError):
+            ms = default_ms
+        ms = max(0, min(60_000, ms))
+        return ms / 1000.0
 
     def _send(self, ref: RuntimeCharacter, player: str, body: str) -> None:
         if not (HAS_PYDIRECTINPUT or HAS_PYAUTOGUI):
@@ -1473,25 +1485,38 @@ class BridgeEngine:
 
         try:
             with _send_lock:
-                # SEQUÊNCIA EXATA conforme especificado pelo usuário:
-                # 1. Focar janela + aguardar 2s
-                # 2. Enter + aguardar 1s
-                # 3. Colar /w nome-server + aguardar 1.5s
-                # 4. Colar mensagem + aguardar 1s
+                # Delays come from the site /gse page (app_settings via /api/control).
+                # Mapping of the UI fields → send steps:
+                #   whisperFocusDelayMs     → after focusing the window
+                #   whisperChatOpenDelayMs  → after Enter (open chat) AND after /w + space
+                #   whisperKeystrokeDelayMs → between chars only on typewrite fallback
+                #   whisperChatSendDelayMs  → after pasting the message, before final Enter
+                #   whisperAfterSendDelayMs → after final Enter
+                #   whisperChatCloseDelayMs → after Escape (if close is enabled)
+                focus_s = self._ctrl_ms("whisperFocusDelayMs", 2000)
+                open_s = self._ctrl_ms("whisperChatOpenDelayMs", 1000)
+                key_s = self._ctrl_ms("whisperKeystrokeDelayMs", 100)
+                send_s = self._ctrl_ms("whisperChatSendDelayMs", 1000)
+                after_s = self._ctrl_ms("whisperAfterSendDelayMs", 1000)
+                close_s = self._ctrl_ms("whisperChatCloseDelayMs", 500)
+                close_enabled = bool(
+                    self._get_controls().get("whisperCloseChatEnabled", True)
+                )
+
                 # Foca a janela (com retry e re-resolução de HWND stale).
                 self._focus_ref(ref)
 
-                # Passo 1: Focar janela e aguardar 2 segundos
-                self.log(f"   ⏳ [1/6] Focando janela (2.0s)...")
-                time.sleep(2.0)
-                
-                # Passo 2: Pressionar Enter e aguardar 1 segundo
-                self.log(f"   ⌨️ [2/6] Pressionando Enter...")
+                # Passo 1: Focar janela e aguardar (configurável)
+                self.log(f"   ⏳ [1/6] Focando janela ({focus_s:.2f}s)...")
+                time.sleep(focus_s)
+
+                # Passo 2: Pressionar Enter e aguardar (abrir chat)
+                self.log("   ⌨️ [2/6] Pressionando Enter...")
                 press_key("enter")
-                self.log(f"   ⏳ [2/6] Aguardando 1.0s...")
-                time.sleep(1.0)
-                
-                # Passo 3: Colar /w nome-server, aguardar, pressionar ESPAÇO e aguardar
+                self.log(f"   ⏳ [2/6] Aguardando {open_s:.2f}s...")
+                time.sleep(open_s)
+
+                # Passo 3: Colar /w nome-server
                 cmd_prefix = f"/w {player}"
                 self.log(f"   📝 [3/6] Colando: {cmd_prefix}")
                 if HAS_WIN32:
@@ -1503,20 +1528,21 @@ class BridgeEngine:
                     # Fallback: digitar devagar
                     for ch in cmd_prefix:
                         press_key(ch)
-                        time.sleep(0.05)
-                
-                self.log(f"   ⏳ [3/6] Aguardando 1.0s...")
-                time.sleep(1.0)
-                
+                        time.sleep(key_s)
+
+                self.log(f"   ⏳ [3/6] Aguardando {open_s:.2f}s...")
+                time.sleep(open_s)
+
                 # ESPAÇO para o WIM abrir o chat de whisper
-                self.log(f"   ⌨️ [4/6] Pressionando ESPAÇO...")
+                self.log("   ⌨️ [4/6] Pressionando ESPAÇO...")
                 press_key("space")
-                
-                self.log(f"   ⏳ [4/6] Aguardando 1.0s (WIM abre)...")
-                time.sleep(1.0)
-                
-                # Passo 5: Colar a mensagem e aguardar 1 segundo
-                self.log(f"   📝 [5/6] Colando mensagem: {body[:40]}{'...' if len(body) > 40 else ''}")
+
+                self.log(f"   ⏳ [4/6] Aguardando {open_s:.2f}s (WIM abre)...")
+                time.sleep(open_s)
+
+                # Passo 5: Colar a mensagem
+                preview = body[:40] + ("..." if len(body) > 40 else "")
+                self.log(f"   📝 [5/6] Colando mensagem: {preview}")
                 if HAS_WIN32:
                     set_clipboard_text(body)
                     time.sleep(0.2)
@@ -1525,27 +1551,28 @@ class BridgeEngine:
                 else:
                     for ch in body:
                         press_key(ch)
-                        time.sleep(0.05)
-                self.log(f"   ⏳ [5/6] Aguardando 1.0s...")
-                time.sleep(1.0)
-                
-                # Passo 6: Pressionar Enter e aguardar 1 segundo
-                self.log(f"   📤 [6/6] Enviando (Enter)...")
+                        time.sleep(key_s)
+                self.log(f"   ⏳ [5/6] Aguardando {send_s:.2f}s...")
+                time.sleep(send_s)
+
+                # Passo 6: Pressionar Enter (enviar)
+                self.log("   📤 [6/6] Enviando (Enter)...")
                 press_key("enter")
-                self.log(f"   ⏳ [6/6] Aguardando 1.0s...")
-                time.sleep(1.0)
-                
+                self.log(f"   ⏳ [6/6] Aguardando {after_s:.2f}s...")
+                time.sleep(after_s)
+
                 # Registrar o que foi enviado (para dedup)
                 self._remember_whisper(ref.character, player, body)
-                
+
                 # Fechar chat com Escape (opcional, mas recomendado)
-                close_enabled = bool(self._get_controls().get("whisperCloseChatEnabled", True))
                 if close_enabled:
+                    if close_s > 0:
+                        time.sleep(close_s)
                     press_key("esc")
-                    self.log(f"   🔒 Chat fechado")
-                
-                self.log(f"   ✅ Mensagem enviada com sucesso")
-                
+                    self.log("   🔒 Chat fechado")
+
+                self.log("   ✅ Mensagem enviada com sucesso")
+
         finally:
             for s in paused_spammers:
                 s.pause_event.clear()

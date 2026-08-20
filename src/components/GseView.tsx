@@ -581,16 +581,17 @@ export function GseView() {
             </div>
           </div>
 
-          {/* Timing controls grid */}
+          {/* Timing controls grid — no low hard-caps; user can type any delay. */}
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <label className="text-xs text-slate-400">
               ⏱ Abrir chat no jogo
-              <span className="ml-1 text-slate-600">(abrir /w)</span>
+              <span className="ml-1 text-slate-600">(abrir /w · ms)</span>
               <input
                 type="number"
                 min={0}
-                max={3000}
+                max={60000}
                 step={50}
+                inputMode="numeric"
                 value={delayDraft.whisperChatOpenDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatOpenDelayMs", e.target.value)
@@ -600,11 +601,13 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Delay de foco antes de digitar
+              <span className="ml-1 text-slate-600">(ms)</span>
               <input
                 type="number"
-                min={100}
-                max={5000}
-                step={100}
+                min={0}
+                max={60000}
+                step={50}
+                inputMode="numeric"
                 value={delayDraft.whisperFocusDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperFocusDelayMs", e.target.value)
@@ -614,11 +617,11 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Entre cada tecla digitada
-              <span className="ml-1 text-slate-600">(typing)</span>
+              <span className="ml-1 text-slate-600">(typing · ms)</span>
               <input
                 type="number"
-                min={10}
-                max={500}
+                min={0}
+                max={5000}
                 step={1}
                 inputMode="numeric"
                 value={delayDraft.whisperKeystrokeDelayMs}
@@ -630,11 +633,13 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Enviar mensagem (Enter)
+              <span className="ml-1 text-slate-600">(ms)</span>
               <input
                 type="number"
                 min={0}
-                max={3000}
+                max={60000}
                 step={50}
+                inputMode="numeric"
                 value={delayDraft.whisperChatSendDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatSendDelayMs", e.target.value)
@@ -644,12 +649,13 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Fechar chat (Escape)
-              <span className="ml-1 text-slate-600">(após enviar)</span>
+              <span className="ml-1 text-slate-600">(após enviar · ms)</span>
               <input
                 type="number"
                 min={0}
-                max={3000}
+                max={60000}
                 step={50}
+                inputMode="numeric"
                 value={delayDraft.whisperChatCloseDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperChatCloseDelayMs", e.target.value)
@@ -659,11 +665,13 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Depois de enviar whisper
+              <span className="ml-1 text-slate-600">(ms)</span>
               <input
                 type="number"
-                min={100}
-                max={5000}
-                step={100}
+                min={0}
+                max={60000}
+                step={50}
+                inputMode="numeric"
                 value={delayDraft.whisperAfterSendDelayMs}
                 onChange={(e) =>
                   setDraftField("whisperAfterSendDelayMs", e.target.value)
@@ -673,17 +681,24 @@ export function GseView() {
             </label>
             <label className="text-xs text-slate-400">
               ⏱ Poll da fila de whisper
+              <span className="ml-1 text-slate-600">(ms)</span>
               <input
                 type="number"
-                min={500}
-                max={10000}
-                step={100}
+                min={250}
+                max={60000}
+                step={50}
+                inputMode="numeric"
                 value={delayDraft.queuePollMs}
                 onChange={(e) => setDraftField("queuePollMs", e.target.value)}
                 className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               />
             </label>
           </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Cada valor é em milissegundos e o bridge usa exatamente o que você
+            salvar aqui (até 60s por etapa). Clique em{" "}
+            <b className="text-slate-400">Salvar delays</b> para aplicar.
+          </p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <button
               onClick={() => void saveDelays()}
@@ -821,13 +836,15 @@ export function GseView() {
                         <input
                           type="number"
                           min={50}
-                          max={2000}
+                          max={600000}
                           step={10}
+                          inputMode="numeric"
                           value={state.intervalMs}
                           onChange={(e) =>
                             setCharField(c, "intervalMs", e.target.value)
                           }
-                          className="w-20 rounded bg-slate-800 px-2 py-1 text-right font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
+                          title="Intervalo entre teclas do GSE (ms). Aceita qualquer valor ≥ 50."
+                          className="w-24 rounded bg-slate-800 px-2 py-1 text-right font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
                         />
                         <span className="text-xs text-slate-500">ms</span>
                       </div>

@@ -39,9 +39,11 @@ export async function POST(
     typeof body.keybind === "string" && body.keybind.length > 0
       ? body.keybind.slice(0, 32)
       : undefined;
+  // Allow any practical interval the user wants (50ms .. 10 min).
+  // The old 2000ms hard-cap blocked slower GSE rotations.
   const intervalMs =
-    typeof body.intervalMs === "number" && body.intervalMs > 20
-      ? String(Math.min(2000, Math.floor(body.intervalMs)))
+    typeof body.intervalMs === "number" && Number.isFinite(body.intervalMs)
+      ? String(Math.max(50, Math.min(600_000, Math.floor(body.intervalMs))))
       : undefined;
 
   const patch: {

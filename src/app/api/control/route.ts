@@ -35,21 +35,23 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
   const num = (v: string, min: number, max: number) =>
     Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
 
+  // Wide ranges so the GSE page can save any timing the user types.
+  // Bridge reads these values and applies them on every send.
   return {
     bridgeReaderEnabled: get("bridge_reader_enabled") === "yes",
     gseMasterEnabled: get("gse_master_enabled") === "yes",
-    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 100, 5000),
-    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 100, 5000),
-    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 3000),
-    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 10, 500),
-    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
+    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 0, 60000),
+    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 0, 60000),
+    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 60000),
+    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 0, 5000),
+    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 60000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
-    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
+    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 60000),
     voiceRelayEnabled: get("voice_relay_enabled") === "yes",
     combatRelayEnabled: get("combat_relay_enabled") === "yes",
     ocrRelayEnabled: get("ocr_relay_enabled") === "yes",
     wimScreenOcrEnabled: get("wim_screen_ocr_enabled") === "yes",
-    queuePollMs: num(get("queue_poll_ms"), 500, 10000),
+    queuePollMs: num(get("queue_poll_ms"), 250, 60000),
   };
 }
 
@@ -100,34 +102,37 @@ export async function POST(request: NextRequest) {
       value: payload.gseMasterEnabled ? "yes" : "no",
     });
   }
+  const clampMs = (value: number, min: number, max: number) =>
+    String(Math.max(min, Math.min(max, Math.floor(value))));
+
   if (typeof payload.whisperFocusDelayMs === "number") {
     pairs.push({
       key: "whisper_focus_delay_ms",
-      value: String(Math.max(100, Math.min(5000, Math.floor(payload.whisperFocusDelayMs)))),
+      value: clampMs(payload.whisperFocusDelayMs, 0, 60000),
     });
   }
   if (typeof payload.whisperAfterSendDelayMs === "number") {
     pairs.push({
       key: "whisper_after_send_delay_ms",
-      value: String(Math.max(100, Math.min(5000, Math.floor(payload.whisperAfterSendDelayMs)))),
+      value: clampMs(payload.whisperAfterSendDelayMs, 0, 60000),
     });
   }
   if (typeof payload.whisperChatOpenDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_open_delay_ms",
-      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatOpenDelayMs)))),
+      value: clampMs(payload.whisperChatOpenDelayMs, 0, 60000),
     });
   }
   if (typeof payload.whisperKeystrokeDelayMs === "number") {
     pairs.push({
       key: "whisper_keystroke_delay_ms",
-      value: String(Math.max(10, Math.min(500, Math.floor(payload.whisperKeystrokeDelayMs)))),
+      value: clampMs(payload.whisperKeystrokeDelayMs, 0, 5000),
     });
   }
   if (typeof payload.whisperChatSendDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_send_delay_ms",
-      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatSendDelayMs)))),
+      value: clampMs(payload.whisperChatSendDelayMs, 0, 60000),
     });
   }
   if (typeof payload.whisperCloseChatEnabled === "boolean") {
@@ -139,7 +144,7 @@ export async function POST(request: NextRequest) {
   if (typeof payload.whisperChatCloseDelayMs === "number") {
     pairs.push({
       key: "whisper_chat_close_delay_ms",
-      value: String(Math.max(0, Math.min(3000, Math.floor(payload.whisperChatCloseDelayMs)))),
+      value: clampMs(payload.whisperChatCloseDelayMs, 0, 60000),
     });
   }
   if (typeof payload.voiceRelayEnabled === "boolean") {
@@ -169,7 +174,7 @@ export async function POST(request: NextRequest) {
   if (typeof payload.queuePollMs === "number") {
     pairs.push({
       key: "queue_poll_ms",
-      value: String(Math.max(500, Math.min(10000, Math.floor(payload.queuePollMs)))),
+      value: clampMs(payload.queuePollMs, 250, 60000),
     });
   }
 
