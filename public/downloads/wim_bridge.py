@@ -189,19 +189,9 @@ class ApiClient:
 TIMESTAMP_RE = re.compile(r"^\d+/\d+\s+\d+:\d+:\d+\.\d+\s+")
 
 # Preferred format (from WIMBridge addon):
-#   [WIMBRIDGE]<OWN:MyChar-Realm><FROM:Sender-Realm><TS:...>message
+#   [WIMBRIDGE]<OWN:MyChar-Realm><FROM:Sender-Realm>message
 ADDON_RE = re.compile(
-    r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><(?P<kind>FROM|TO):(?P<other>[^>]+)>"
-    r"(?:<TS:(?P<ts>[^>]+)>)?(?P<body>.*)$"
-)
-RELAY_RE = re.compile(
-    r"^\[WIMRELAY\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>"
-    r"<TS:(?P<ts>[^>]+)>(?P<body>.*)$"
-)
-NATIVE_TAG_RE = re.compile(r"^\[W (?P<kind>From|To)\]\s+(?P<rest>.*)$")
-NATIVE_NAME_RE = re.compile(
-    r"^(?:\[(?P<name>[^\]]+)\]|(?P<name2>[A-Za-zÀ-ÿ0-9_'\-]+))"
-    r"(?:\s+whispers?)?:\s*(?P<body>.*)$", re.I
+    r"^\[WIMBRIDGE\]<OWN:(?P<own>[^>]+)><FROM:(?P<from>[^>]+)>(?P<body>.*)$"
 )
 
 # Fallbacks (no addon):
@@ -222,39 +212,17 @@ def clean_line(line: str) -> str:
 
 
 def parse_whisper(line: str, fallback_own: str) -> Optional[tuple[str, str, str]]:
-    """Return (own_character, sender, body) for incoming whispers.
-
-    The legacy CLI keeps the same public tuple as before; outgoing lines and
-    addon relay lines are converted into the incoming side when applicable.
-    """
+    """Return (own_character, sender, body) or None."""
     original = line
     line = clean_line(line)
-    addon_line = TIMESTAMP_RE.sub("", original.strip()).strip()
-    structured = TIMESTAMP_RE.sub("", original.strip()).strip()
-    structured = re.sub(r"\|c[0-9a-fA-F]{8}", "", structured)
-    structured = re.sub(r"\|H[^|]*\|h", "", structured)
-    structured = structured.replace("|h", "").replace("|r", "")
-    m = ADDON_RE.match(structured)
-    if m:
-        kind = m.group("kind")
-        other = m.group("other").strip()
-        body = m.group("body").strip()
-        if kind == "FROM":
-            return m.group("own").strip(), other, body
-        return None
 
-    clean = structured
-    native = NATIVE_TAG_RE.match(clean)
-    if native:
-        nm = NATIVE_NAME_RE.match(native.group("rest"))
-        if nm:
-            other = (nm.group("name") or nm.group("name2") or "").strip()
-            body = nm.group("body").strip()
-            relay = RELAY_RE.match(body)
-            if relay:
-                return relay.group("own").strip() or fallback_own, relay.group("from").strip(), relay.group("body").strip()
-            if native.group("kind") == "From":
-                return fallback_own, other, body
+    # Restore brackets for the addon marker — we stripped '[' above.
+    # Try addon format first (put brackets back for matching)
+    addon_line = original.strip()
+    addon_line = TIMESTAMP_RE.sub("", addon_line).strip()
+    m = ADDON_RE.match(addon_line)
+    if m:
+        return m.group("own").strip(), m.group("from").strip(), m.group("body").strip()
 
     for pat in FALLBACK_RES:
         m = pat.match(line)

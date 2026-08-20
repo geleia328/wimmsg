@@ -1,4 +1,14 @@
-"""Windows window capture and OCR parsing for Bakers Whisper."""
+"""Windows window capture and OCR parsing for Bakers Whisper.
+
+Hotfix v1.4.4:
+- The old bridge called winocr.recognize_pil_image(), but winocr 0.0.15 does
+  not expose that function.
+- winocr 0.0.15 exposes recognize_pil_sync() and recognize_pil().
+- recognize_pil() returns a WinRT IAsyncOperation, which is awaitable but is not
+  a native coroutine accepted directly by asyncio.run(). We therefore wrap the
+  operation inside a small coroutine before awaiting it.
+"""
+
 from __future__ import annotations
 
 import ctypes
@@ -6,14 +16,16 @@ import re
 from typing import Any
 
 try:
-    import win32con
+    import win32con  # noqa: F401
     import win32gui
     import win32ui
-    from PIL import Image, ImageEnhance, ImageOps
+    from PIL import Image, ImageEnhance
     import winocr
+
     OCR_AVAILABLE = True
 except ImportError:
     OCR_AVAILABLE = False
+    winocr = None  # type: ignore[assignment]
 
 # Supports both the old [WIMBRIDGE] marker and the v1.4 WIMRELAY marker.
 RELAY_START_RE = re.compile(r"(?:\[?WIMBRIDGE\]?|WIMRELAY)", re.IGNORECASE)
@@ -27,8 +39,8 @@ RELAY_PAYLOAD_RE = re.compile(
 )
 WIM_LINE_RE = re.compile(
     r"(?:^|\n)\s*(?:\d{1,2}\s*[:.]\s*\d{2}\s*)?"
-    r"\[\s*(?P<sender>[\wÀ-ÿ'’-]+(?:\s*-\s*[\wÀ-ÿ'’-]+)?)\s*\]\s*[:;]\s*"
-    r"(?P<body>.+?)(?=(?:\n\s*(?:\d{1,2}\s*[:.]\s*\d{2}\s*)?\[)|$)",
+    r"\[(?P<sender>[\wÀ-ÿ'’\- ]+)\]\s*[:;]\s*(?P<body>.+?)"
+    r"(?=(?:\n\s*(?:\d{1,2}\s*[:.]\s*\d{2}\s*)?\[)|$)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -36,14 +48,20 @@ WIM_LINE_RE = re.compile(
 def _clean_name(value: str) -> str:
     value = value.replace("—", "-").replace("–", "-")
     value = re.sub(r"\s+", "", value)
-    return value.strip("[]<>:;,. ")
+    return value.strip("[] :;,. ")
 
 
 def _clean_body(value: str) -> str:
     value = value.replace("\r", " ").replace("\n", " ")
     value = re.sub(r"\s+", " ", value)
-    # Remove common OCR debris at the end without destroying user punctuation.
-    return value.strip(" \t\r\n<>|")
+    return value.strip(" \t\r\n |")
+
+
+def _text(result: Any) -> str:
+    """Normalize winocr result objects/dicts to plain text."""
+    if isinstance(result, dict):
+        return str(result.get("text", "") or "")
+    return str(getattr(result, "text", result or "") or "")
 
 
 def extract_relay_messages(text: str) -> list[dict[str, str]]:
@@ -51,14 +69,14 @@ def extract_relay_messages(text: str) -> list[dict[str, str]]:
     if not text or not RELAY_START_RE.search(text):
         return []
     normalized = text.replace("\r", "\n")
-    # WoW may prefix the marker with the local character name: `Simplat WIMRELAY...`.
-    normalized = re.sub(r"(?m)^\s*[\wÀ-ÿ'’-]+\s+(?=(?:\[?WIMBRIDGE\]?|WIMRELAY))", "", normalized)
-    # OCR frequently puts a line break after the realm separator.
+    normalized = re.sub(
+        r"(?m)^\s*[\wÀ-ÿ'’-]+\s+(?=(?:\[?WIMBRIDGE\]?|WIMRELAY))",
+        "",
+        normalized,
+    )
     normalized = re.sub(r"-\s*\n\s*", "-", normalized)
-    normalized = re.sub(r"<\s*\n\s*", "<", normalized)
-    normalized = re.sub(r"\s*\n\s*>", ">", normalized)
-    # Normalize frequent OCR substitutions around structural delimiters.
-    normalized = normalized.replace("〈", "<").replace("〉", ">")
+    normalized = normalized.replace("〉", ">").replace("〈", "<")
+
     found: list[dict[str, str]] = []
     for match in RELAY_PAYLOAD_RE.finditer(normalized):
         own = _clean_name(match.group("own"))
@@ -66,7 +84,14 @@ def extract_relay_messages(text: str) -> list[dict[str, str]]:
         body = _clean_body(match.group("body"))
         timestamp = (match.group("ts") or "").strip()
         if own and sender and body and own.lower() != sender.lower():
-            found.append({"character": own, "player": sender, "body": body, "timestamp": timestamp})
+            found.append(
+                {
+                    "character": own,
+                    "player": sender,
+                    "body": body,
+                    "timestamp": timestamp,
+                }
+            )
     return found
 
 
@@ -77,8 +102,8 @@ def extract_wim_messages(text: str, character: str) -> list[dict[str, str]]:
     own_base = _clean_name(character).split("-", 1)[0].lower()
     realm = character.split("-", 1)[1] if "-" in character else ""
     normalized = text.replace("\r", "\n")
-    # Join only continuation lines; preserve lines which begin a new timestamp/message.
     normalized = re.sub(r"\n(?!\s*(?:\d{1,2}\s*[:.]\s*\d{2}\s*)?\[)", " ", normalized)
+
     found: list[dict[str, str]] = []
     for match in WIM_LINE_RE.finditer(normalized):
         sender = _clean_name(match.group("sender"))
@@ -95,6 +120,7 @@ def capture_window(hwnd: int):
     """Capture a window with PrintWindow; works when another window has focus."""
     if not OCR_AVAILABLE:
         raise RuntimeError("OCR indisponível: instale winocr, Pillow e pywin32")
+
     left, top, right, bottom = win32gui.GetWindowRect(hwnd)
     width, height = max(1, right - left), max(1, bottom - top)
     window_dc = win32gui.GetWindowDC(hwnd)
@@ -113,7 +139,13 @@ def capture_window(hwnd: int):
         info = bitmap.GetInfo()
         bits = bitmap.GetBitmapBits(True)
         return Image.frombuffer(
-            "RGB", (info["bmWidth"], info["bmHeight"]), bits, "raw", "BGRX", 0, 1
+            "RGB",
+            (info["bmWidth"], info["bmHeight"]),
+            bits,
+            "raw",
+            "BGRX",
+            0,
+            1,
         ).copy()
     finally:
         win32gui.DeleteObject(bitmap.GetHandle())
@@ -149,37 +181,50 @@ def preprocess(image, scale: float = 1.35):
 
 
 def recognize_image(image, language: str = "pt") -> str:
-    """Recognize a PIL image using the supported winocr APIs."""
-    if not OCR_AVAILABLE:
+    """Recognize a PIL image using supported winocr APIs.
+
+    Compatible with winocr 0.0.15 and PyInstaller builds:
+    - Prefer recognize_pil_sync(prepared, language)
+    - Fallback to async recognize_pil(prepared, language)
+    - Never call removed/nonexistent recognize_pil_image()
+    """
+    if not OCR_AVAILABLE or winocr is None:
         raise RuntimeError("OCR indisponível: winocr/Pillow/pywin32 não foram empacotados")
+
     prepared = preprocess(image)
+    languages: list[str | None] = []
+    for candidate in (language, language.split("-", 1)[0] if "-" in language else language, "pt", "en", None):
+        if candidate not in languages:
+            languages.append(candidate)
+
+    last_error: Exception | None = None
+
     sync = getattr(winocr, "recognize_pil_sync", None)
     if callable(sync):
-        last_error = None
-        for lang in (language, "en", None):
+        for lang in languages:
             try:
                 result: Any = sync(prepared, lang) if lang else sync(prepared)
-                if isinstance(result, dict):
-                    return str(result.get("text", ""))
-                return str(getattr(result, "text", result or ""))
-            except (TypeError, ValueError, RuntimeError) as error:
+                return _text(result)
+            except Exception as error:  # winocr may throw TypeError/RuntimeError per language
                 last_error = error
-        if last_error:
-            raise last_error
+
     async_recognize = getattr(winocr, "recognize_pil", None)
     if callable(async_recognize):
         import asyncio
-        last_error = None
-        for lang in (language, "en", None):
+
+        for lang in languages:
             try:
-                call = async_recognize(prepared, lang) if lang else async_recognize(prepared)
-                result = asyncio.run(call)
-                return str(getattr(result, "text", result or ""))
-            except (TypeError, ValueError, RuntimeError) as error:
+                async def _await_operation():
+                    operation = async_recognize(prepared, lang) if lang else async_recognize(prepared)
+                    return await operation
+
+                result = asyncio.run(_await_operation())
+                return _text(result)
+            except Exception as error:
                 last_error = error
-        if last_error:
-            raise last_error
+
+    exposed = ", ".join(x for x in dir(winocr) if x.startswith("recognize"))
     raise RuntimeError(
         "winocr incompatível: esperado recognize_pil_sync ou recognize_pil; "
-        f"versão instalada expõe: {', '.join(x for x in dir(winocr) if x.startswith('recognize'))}"
+        f"versão instalada expõe: {exposed}; último erro: {last_error}"
     )
