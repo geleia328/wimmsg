@@ -596,18 +596,20 @@ def assign_slots(
 
 
 def apply_renames(wins: list[DetectedWindow], slots: dict[int, int]) -> int:
-    """Rename each window to 'wowN'. Returns count of successful renames."""
     ok = 0
     for w in wins:
         slot = slots.get(w.hwnd)
         if slot is None:
             continue
-        target = f"wow{slot}"
+        
+        # If user explicitly set a title, use it. Otherwise, default to wowN
+        target = w.title if w.title and w.title not in WOW_TITLE_HINTS else f"wow{slot}"
         current = w.title
+        
         if current == target:
             continue
         if rename_hwnd(w.hwnd, target):
-            w.title = target  # keep the in-memory record in sync
+            w.title = target
             ok += 1
     return ok
 
@@ -2563,7 +2565,7 @@ class App:
 
         tk.Button(
             controls,
-            text="🔤 Renomear janelas",
+            text="🔤 Aplicar Renomear",
             bg=CARD,
             fg=ACCENT,
             font=("Segoe UI", 9),
@@ -2575,7 +2577,7 @@ class App:
 
         tk.Button(
             controls,
-            text="💾 Salvar personagens",
+            text="💾 Salvar Configurações",
             bg=CARD,
             fg=OK,
             font=("Segoe UI", 9),
@@ -2667,9 +2669,13 @@ class App:
         if not self.detected:
             self._log("⚠ Nada para renomear (nenhuma janela detectada).")
             return
+            
+        # Salva o que o usuario digitou (incluindo titulo customizado) antes de renomear
+        self._save_character_entries()
+        
         slots = {w.hwnd: w.slot for w in self.detected if w.slot}
         ok = apply_renames(self.detected, slots)
-        self._log(f"🔤 {ok} janela(s) renomeada(s) para wow1, wow2, ...")
+        self._log(f"🔤 {ok} janela(s) renomeada(s) / configurada(s)!")
         self._render_table()
 
     def _save_character_entries(self) -> int:
@@ -2681,14 +2687,13 @@ class App:
             new_title = row["title_entry"].get().strip()
 
             try:
-                new_slot = int(new_slot_str)
-                w.slot = new_slot
+                if new_slot_str:
+                    w.slot = int(new_slot_str)
             except ValueError:
                 pass
                 
-            if new_title and new_title != w.title:
-                if rename_hwnd(w.hwnd, new_title):
-                    w.title = new_title
+            if new_title:
+                w.title = new_title
 
             if not w.slot:
                 continue
@@ -2702,6 +2707,7 @@ class App:
                 count += 1
             elif key in self.mappings:
                 self.mappings.pop(key, None)
+                
         self.config.mappings = self.mappings
         save_config(self.config)
         return count
@@ -2853,7 +2859,13 @@ class App:
         self.rows[win.hwnd] = {"entry": entry, "slot_entry": slot_entry, "title_entry": title_entry, "log_lbl": log_lbl, "win": win}
 
     def on_start(self):
-        # Optionally rename every detected window to wow1, wow2, ...
+        # Sempre salvar as edições na tela primeiro
+        try:
+            self._save_character_entries()
+        except Exception as e:
+            self._log(f"⚠ aviso ao salvar config: {e}")
+
+        # Optionally rename every detected window
         if self.auto_rename_var.get() and self.detected:
             slots = {w.hwnd: w.slot for w in self.detected if w.slot}
             renamed = apply_renames(self.detected, slots)

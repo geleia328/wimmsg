@@ -46,7 +46,10 @@ export default function HomePage() {
   const scrollToBottom = useCallback(() => {
     const el = chatContainerRef.current;
     if (el) {
-      el.scrollTop = el.scrollHeight;
+      // Use setTimeout to allow DOM to fully render the new messages before measuring scrollHeight
+      setTimeout(() => {
+        el.scrollTop = el.scrollHeight;
+      }, 50);
     }
   }, []);
 
@@ -55,8 +58,9 @@ export default function HomePage() {
     if (!el) return;
     // Consider "near bottom" if within 80px of the bottom
     const threshold = 80;
+    // We add 1 to clientHeight to account for sub-pixel rounding
     isNearBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+      el.scrollHeight - el.scrollTop <= el.clientHeight + threshold;
   }, []);
 
   useEffect(() => {
@@ -98,8 +102,11 @@ export default function HomePage() {
       isFirstLoadRef.current = true;
       prevMsgCountRef.current = 0;
       isNearBottomRef.current = true;
+      // Also scroll down immediately when the user clicks a conversation,
+      // even if there are no new messages loaded yet.
+      scrollToBottom();
     }
-  }, [active]);
+  }, [active, scrollToBottom]);
 
   useEffect(() => {
     if (!active) return;
@@ -130,17 +137,12 @@ export default function HomePage() {
     const hasNewMessages = messages.length > prevMsgCountRef.current;
 
     if (isFirstLoad) {
-      // First load of conversation — always scroll to bottom
       isFirstLoadRef.current = false;
-      // Use requestAnimationFrame to ensure DOM is rendered
-      requestAnimationFrame(() => {
+      scrollToBottom();
+    } else if (hasNewMessages) {
+      if (isNearBottomRef.current) {
         scrollToBottom();
-      });
-    } else if (hasNewMessages && isNearBottomRef.current) {
-      // New messages arrived AND user was near bottom — scroll to see them
-      requestAnimationFrame(() => {
-        scrollToBottom();
-      });
+      }
     }
     // If user scrolled up (not near bottom), do NOT auto-scroll
 
