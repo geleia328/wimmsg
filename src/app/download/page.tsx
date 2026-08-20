@@ -1,90 +1,39 @@
+"use client";
+
 import Link from "next/link";
 
 export default function DownloadPage() {
   return (
-    <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
-      <div className="text-center">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-yellow-500 to-amber-700 text-4xl shadow-2xl sm:h-20 sm:w-20 sm:text-5xl">
-          🥐
+    <div className="min-h-dvh bg-slate-950 text-slate-100">
+      <header className="flex items-center gap-3 border-b border-slate-800 bg-slate-900/80 px-4 py-3 backdrop-blur">
+        <Link href="/" className="text-amber-400 hover:text-amber-300">← Chat</Link>
+        <h1 className="text-lg font-bold">📥 Downloads</h1>
+      </header>
+      <div className="mx-auto max-w-2xl space-y-6 p-6">
+        <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-6">
+          <h2 className="mb-2 text-lg font-bold text-amber-400">WIMBridge Addon (WoW)</h2>
+          <p className="mb-3 text-sm text-slate-300">
+            Addon Lua para World of Warcraft que relays whispers para o bridge Python.
+          </p>
+          <a
+            href="/downloads/WIMBridge.zip"
+            className="inline-block rounded bg-amber-600 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-500"
+          >
+            ⬇ Baixar WIMBridge.zip
+          </a>
         </div>
-        <h1 className="mt-4 text-3xl font-black sm:text-4xl">Bakers Whisper</h1>
-        <p className="mt-2 text-slate-400">
-          Receba e responda whispers do WoW pelo navegador
-        </p>
-      </div>
-
-      <div className="mt-10 rounded-2xl border border-emerald-500/40 bg-emerald-500/5 p-6 text-center sm:p-8">
-        <div className="text-6xl">⬇️</div>
-        <h2 className="mt-4 text-2xl font-bold">Baixar para Windows</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Aplicativo pronto pra usar — só baixar e abrir.
-          <br />
-          Sem instalar Python. Se precisar, dá para trocar API URL e Token dentro
-          do app.
-        </p>
-        <a
-          href="https://github.com/geleia328/wimmsg/releases/latest/download/BakersWhisper.exe"
-          className="mt-6 inline-block w-full rounded-xl bg-emerald-500 px-6 py-4 text-lg font-bold text-slate-950 shadow-lg hover:bg-emerald-400 sm:w-auto sm:px-8"
-        >
-          📥 Baixar BakersWhisper.exe
-        </a>
-        <p className="mt-3 text-xs text-slate-500">Windows 10 ou 11 · ~30 MB</p>
-      </div>
-
-      <div className="mt-6 rounded-2xl border border-cyan-500/40 bg-cyan-500/5 p-6 text-center sm:p-8">
-        <div className="text-5xl">🧩</div>
-        <h2 className="mt-3 text-2xl font-bold">Addon WIMBridge v3.1.0</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Addon novo com faixa preta/amarela grande para OCR. Instale em
-          <code className="mx-1 rounded bg-slate-800 px-1.5 text-cyan-300">Interface/AddOns/WIMBridge/WIMBridge.lua</code>
-          e use <code className="rounded bg-slate-800 px-1.5 text-cyan-300">/reload</code> no jogo.
-        </p>
-        <a
-          href="/api/download/WIMBridge.lua"
-          className="mt-5 inline-block w-full rounded-xl bg-cyan-500 px-6 py-3 text-base font-bold text-slate-950 shadow-lg hover:bg-cyan-400 sm:w-auto sm:px-8"
-        >
-          🧩 Baixar WIMBridge.lua
-        </a>
-        <p className="mt-3 text-xs text-slate-500">
-          Comandos: /wimbridge who · /wimbridge test · /wimbridge size 140 · /wimbridge font 32
-        </p>
-      </div>
-
-      <div className="mt-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">
-        <b className="text-amber-300">⚠ Aviso do Windows Defender</b>
-        <p className="mt-1 text-xs">
-          Como o app não é assinado (assinatura custa $$$), o Windows pode
-          mostrar um aviso azul dizendo &quot;<i>Windows protegeu o seu PC</i>&quot;.
-          É normal. Clique em <b>&quot;Mais informações&quot;</b> e depois em{" "}
-          <b>&quot;Executar assim mesmo&quot;</b>.
-        </p>
-      </div>
-
-      <div className="mt-10">
-        <h3 className="text-lg font-bold text-amber-300">Como usar</h3>
-        <ol className="mt-4 space-y-4 text-sm text-slate-300">
-          {[
-            "Abra o WoW em cada janela que você quer monitorar (pode ter várias contas ao mesmo tempo).",
-            "Em cada janela, digite /chatlog no chat do jogo e aperte Enter.",
-            "Abra o BakersWhisper.exe. Ele vai listar todas as janelas do WoW detectadas.",
-            "Confira a seção Servidor no app. Normalmente ela já vem preenchida.",
-            "Digite o nome completo do personagem ao lado de cada janela, sempre no formato Nome-Reino.",
-            "Clique em ▶ Iniciar e deixe o bridge rodando.",
-          ].map((text, i) => (
-            <li key={i} className="flex gap-4">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500 font-bold text-slate-950">
-                {i + 1}
-              </span>
-              <div>{text}</div>
-            </li>
-          ))}
-        </ol>
-      </div>
-
-      <div className="mt-10 text-center">
-        <Link href="/" className="text-sm text-amber-400 hover:underline">
-          ← voltar ao chat
-        </Link>
+        <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-6">
+          <h2 className="mb-2 text-lg font-bold text-amber-400">WIMBridge.lua (avulso)</h2>
+          <p className="mb-3 text-sm text-slate-300">
+            Arquivo Lua individual caso queira instalar manualmente.
+          </p>
+          <a
+            href="/downloads/WIMBridge.lua"
+            className="inline-block rounded bg-slate-700 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-slate-600"
+          >
+            ⬇ Baixar WIMBridge.lua
+          </a>
+        </div>
       </div>
     </div>
   );

@@ -3,22 +3,18 @@ import { db } from "@/db";
 import { appSettings, messages } from "@/db/schema";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { filterDuplicateContent } from "@/lib/dedupe";
+import { normalizeNameForStorage } from "@/lib/unicode";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET  → history for one (character, player) conversation, oldest → newest.
- * POST → user typed a reply on the website; queue it as `pending` so the
- *        Python bridge can type it into the matching WoW window.
- */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ char: string; player: string }> },
 ) {
   const { char, player } = await params;
-  const character = decodeURIComponent(char).toLowerCase();
-  const targetPlayer = decodeURIComponent(player).toLowerCase();
+  const character = normalizeNameForStorage(decodeURIComponent(char));
+  const targetPlayer = normalizeNameForStorage(decodeURIComponent(player));
 
   const history = await db
     .select({
@@ -49,8 +45,8 @@ export async function POST(
   { params }: { params: Promise<{ char: string; player: string }> },
 ) {
   const { char, player } = await params;
-  const character = decodeURIComponent(char).toLowerCase();
-  const targetPlayer = decodeURIComponent(player).toLowerCase();
+  const character = normalizeNameForStorage(decodeURIComponent(char));
+  const targetPlayer = normalizeNameForStorage(decodeURIComponent(player));
 
   let payload: { body?: string } = {};
   try {
@@ -99,8 +95,8 @@ export async function DELETE(
   { params }: { params: Promise<{ char: string; player: string }> },
 ) {
   const { char, player } = await params;
-  const character = decodeURIComponent(char).toLowerCase();
-  const targetPlayer = decodeURIComponent(player).toLowerCase();
+  const character = normalizeNameForStorage(decodeURIComponent(char));
+  const targetPlayer = normalizeNameForStorage(decodeURIComponent(player));
 
   const deleted = await db
     .delete(messages)
@@ -112,9 +108,6 @@ export async function DELETE(
     )
     .returning({ id: messages.id });
 
-  // Tombstone: prevents OCR/bridge from immediately re-inserting the same
-  // conversation while the same relay strip is still visible or history sync is
-  // replaying old messages. New messages are allowed again after a short grace.
   const key = `deleted_conversation:${character}:${targetPlayer}`;
   await db
     .insert(appSettings)

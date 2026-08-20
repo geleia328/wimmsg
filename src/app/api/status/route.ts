@@ -7,10 +7,6 @@ import { desc } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET → current inventory of WoW client windows. The Python bridge also reads
- * this to know which window maps to which character.
- */
 export async function GET(request: NextRequest) {
   const auth = request.headers.get("authorization");
   if (auth) {

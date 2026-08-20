@@ -7,12 +7,6 @@ import { sql } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET → returns state of ALL characters (used by both the site and the
- * Python bridge which polls to sync).
- * POST → bulk operations: { action: "startAll" | "stopAll", characters?: string[] }
- * If `characters` is omitted, applies to every row in the table.
- */
 export async function GET() {
   const rows = await db.select().from(gseState);
   return NextResponse.json({
@@ -62,6 +56,8 @@ export async function POST(request: NextRequest) {
     UPDATE ${gseState}
     SET running = ${target}, updated_at = now()
   `);
-  const [row] = await db.select({ count: sql`count(*)::int` }).from(gseState);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(gseState);
   return NextResponse.json({ ok: true, affected: row?.count ?? 0 });
 }

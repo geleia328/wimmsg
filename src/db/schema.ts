@@ -8,30 +8,6 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-/**
- * A single whisper / chat message exchanged with a WoW character.
- *
- * `character` = which of YOUR WoW windows (logged-in character) this
- *               message belongs to. In a multi-window setup you may have
- *               20+ clients; every message is scoped to exactly one.
- *
- * `player`    = the OTHER end of the conversation (the person you whisper
- *               with).
- *
- * `direction`
- *   'incoming' → whisper received in the game (posted by Python bridge).
- *   'outgoing' → reply you typed on the website, queued for the Python
- *                bridge to type into the correct WoW window.
- *
- * `status` (outgoing only):
- *   pending → waiting for the Python bridge to pick it up
- *   sent    → Python confirmed it typed it into WoW
- *   failed  → Python reported an error (window not found, focus issue, ...)
- *   received→ reserved for incoming echoes
- *
- * `externalId` is a client-side id used for idempotent ingestion so the
- * Python bridge can safely re-post the same whisper without duplicating rows.
- */
 export const messages = pgTable(
   "messages",
   {
@@ -60,13 +36,6 @@ export const messages = pgTable(
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 
-/**
- * Live inventory of the WoW client windows currently open on the user's PC.
- *
- * The Python bridge scans open windows (EnumWindows) every few seconds and
- * upserts a row per detected window. The web UI treats a row as "online" if
- * `last_seen` is fresh (e.g. within 15 seconds).
- */
 export const clientWindows = pgTable(
   "client_windows",
   {
@@ -92,9 +61,6 @@ export const clientWindows = pgTable(
 export type ClientWindow = typeof clientWindows.$inferSelect;
 export type NewClientWindow = typeof clientWindows.$inferInsert;
 
-/**
- * GSE (Gnome Sequencer Enhanced) macro spam state per character.
- */
 export const gseState = pgTable("gse_state", {
   character: varchar("character", { length: 128 }).primaryKey(),
   running: varchar("running", { length: 8 }).notNull().default("no"),
@@ -108,13 +74,6 @@ export const gseState = pgTable("gse_state", {
 export type GseState = typeof gseState.$inferSelect;
 export type NewGseState = typeof gseState.$inferInsert;
 
-/**
- * Generic app settings edited from the admin settings page.
- *
- * IMPORTANT: DATABASE_URL is intentionally NOT stored here. The app needs the
- * database connection before it can read any table, so database credentials
- * must remain as an environment variable in Vercel/hosting provider.
- */
 export const appSettings = pgTable("app_settings", {
   key: varchar("key", { length: 128 }).primaryKey(),
   value: text("value").notNull(),
@@ -147,5 +106,5 @@ export const DEFAULT_APP_CONTROLS = {
 
 export const DEFAULT_ADMIN_SETTINGS = {
   bridge_token: "",
-  pending_timeout_minutes: "0", // 0 = never expire pending replies
+  pending_timeout_minutes: "0",
 } as const;

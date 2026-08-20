@@ -6,10 +6,6 @@ import { checkAdminAuth } from "@/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET  → admin settings status (bridge token presence, pending timeout, db).
- * POST → update bridge_token and/or pending_timeout_minutes.
- */
 export async function GET(request: NextRequest) {
   const guard = checkAdminAuth(request);
   if (!guard.ok) return guard.response;
@@ -81,7 +77,6 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-/** Convenience: rotate the bridge token to a fresh random value. */
 export async function PUT(request: NextRequest) {
   const guard = checkAdminAuth(request);
   if (!guard.ok) return guard.response;

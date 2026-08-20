@@ -6,10 +6,6 @@ import { checkAdminAuth } from "@/lib/auth";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * One-click "create tables" used by the /settings page. Idempotent — safe to
- * run repeatedly. Mirrors the Drizzle schema in src/db/schema.ts.
- */
 export async function POST(request: NextRequest) {
   const guard = checkAdminAuth(request);
   if (!guard.ok) return guard.response;

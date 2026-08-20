@@ -21,14 +21,6 @@ function yesNo(value: string | boolean | undefined): "yes" | "no" {
   return value === true || value === "yes" || value === "true" ? "yes" : "no";
 }
 
-/**
- * POST → the Python bridge upserts the windows it currently sees. We key by
- * `hwnd` (unique). Any window that isn't posted this round is left stale and
- * the UI treats `last_seen` older than ~15s as offline.
- *
- * If no `windows` array is supplied, we just touch last_seen for existing rows
- * so the bridge can keep them "fresh" while scanning.
- */
 export async function POST(request: NextRequest) {
   const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;

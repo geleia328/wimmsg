@@ -6,10 +6,6 @@ import { sql } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Distinct list of your characters (WoW windows) that have any activity.
- * Grouped case-insensitively to avoid split rows like Juper-Azralon/juper-azralon.
- */
 export async function GET() {
   const rows = await db.execute(sql/* sql */ `
     SELECT

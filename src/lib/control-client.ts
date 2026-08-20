@@ -15,8 +15,18 @@ export type Controls = {
   queuePollMs: number;
 };
 export const DEFAULT_CONTROLS: Controls = {
-  bridgeReaderEnabled:true,gseMasterEnabled:false,whisperFocusDelayMs:2000,whisperAfterSendDelayMs:1000,
-  whisperChatOpenDelayMs:1000,whisperKeystrokeDelayMs:100,whisperChatSendDelayMs:1000,
-  whisperCloseChatEnabled:true,whisperChatCloseDelayMs:500,voiceRelayEnabled:false,
-  combatRelayEnabled:false,ocrRelayEnabled:false,wimScreenOcrEnabled:false,queuePollMs:1500,
+  bridgeReaderEnabled: true,
+  gseMasterEnabled: false,
+  whisperFocusDelayMs: 2000,
+  whisperAfterSendDelayMs: 1000,
+  whisperChatOpenDelayMs: 1000,
+  whisperKeystrokeDelayMs: 100,
+  whisperChatSendDelayMs: 1000,
+  whisperCloseChatEnabled: true,
+  whisperChatCloseDelayMs: 500,
+  voiceRelayEnabled: false,
+  combatRelayEnabled: false,
+  ocrRelayEnabled: false,
+  wimScreenOcrEnabled: false,
+  queuePollMs: 1500,
 };

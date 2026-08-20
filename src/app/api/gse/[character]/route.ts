@@ -7,17 +7,12 @@ import { eq } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET → state of one character's GSE spammer.
- * POST → upsert one character's GSE state ({ running?, keybind?, intervalMs? }).
- */
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ character: string }> },
 ) {
   const { character } = await params;
   const target = decodeURIComponent(character).toLowerCase();
-
   const [found] = await db
     .select()
     .from(gseState)
@@ -82,11 +77,18 @@ export async function POST(
     .insert(gseState)
     .values({
       character: target,
-      running: typeof payload.running === "boolean" ? (payload.running ? "yes" : "no") : "no",
+      running:
+        typeof payload.running === "boolean"
+          ? payload.running
+            ? "yes"
+            : "no"
+          : "no",
       keybind: payload.keybind?.trim() || "1",
       intervalMs:
         typeof payload.intervalMs === "number"
-          ? String(Math.max(10, Math.min(60000, Math.floor(payload.intervalMs))))
+          ? String(
+              Math.max(10, Math.min(60000, Math.floor(payload.intervalMs))),
+            )
           : "100",
     })
     .onConflictDoUpdate({

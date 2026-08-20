@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { appSettings, DEFAULT_APP_CONTROLS } from "@/db/schema";
-import { checkAdminAuth, checkBridgeAuth } from "@/lib/auth";
+import { checkBridgeAuth } from "@/lib/auth";
 import { inArray } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -30,15 +30,16 @@ type Controls = {
   queuePollMs: number;
 };
 
-function normalize(rows: Array<{ key: string; value: string }>): Controls {
+function normalize(
+  rows: Array<{ key: string; value: string }>,
+): Controls {
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const get = (key: keyof typeof DEFAULT_APP_CONTROLS) =>
     map.get(key) ?? DEFAULT_APP_CONTROLS[key];
   const num = (v: string, min: number, max: number) =>
     Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
+
   return {
-    // Reader is essential for two-way operation; do not allow stale DB values
-    // to leave WoW -> site disabled.
     bridgeReaderEnabled: true,
     gseMasterEnabled: get("gse_master_enabled") === "yes",
     whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 100, 5000),
@@ -52,9 +53,6 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
     whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
-    // OCR da faixa do addon is the primary real-time capture path. Chatlog/sync
-    // remains a fallback for history because this user's WoW only flushes logs
-    // when the game closes.
     voiceRelayEnabled: false,
     combatRelayEnabled: false,
     ocrRelayEnabled: true,
@@ -87,9 +85,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  // The controls page is the operational dashboard used during gameplay.
-  // Do not require admin token here; otherwise "Modo recomendado" fails for
-  // the browser while the bridge itself is already authenticated separately.
   let payload: Partial<Controls> = {};
   try {
     payload = (await request.json()) as Partial<Controls>;
@@ -97,11 +92,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  const pairs: Array<{
-    key: keyof typeof DEFAULT_APP_CONTROLS;
-    value: string;
-  }> = [];
-  const boolPairs: Array<[boolean | undefined, keyof typeof DEFAULT_APP_CONTROLS]> = [
+  const pairs: Array<{ key: string; value: string }> = [];
+
+  const boolPairs: Array<[boolean | undefined, string]> = [
     [payload.bridgeReaderEnabled, "bridge_reader_enabled"],
     [payload.gseMasterEnabled, "gse_master_enabled"],
     [payload.whisperCloseChatEnabled, "whisper_close_chat_enabled"],
@@ -111,9 +104,11 @@ export async function POST(request: NextRequest) {
     [payload.wimScreenOcrEnabled, "wim_screen_ocr_enabled"],
   ];
   for (const [val, key] of boolPairs) {
-    if (typeof val === "boolean") pairs.push({ key, value: val ? "yes" : "no" });
+    if (typeof val === "boolean")
+      pairs.push({ key, value: val ? "yes" : "no" });
   }
-  const numPairs: Array<[number | undefined, keyof typeof DEFAULT_APP_CONTROLS, number, number]> = [
+
+  const numPairs: Array<[number | undefined, string, number, number]> = [
     [payload.whisperFocusDelayMs, "whisper_focus_delay_ms", 100, 5000],
     [payload.whisperAfterSendDelayMs, "whisper_after_send_delay_ms", 100, 5000],
     [payload.whisperChatOpenDelayMs, "whisper_chat_open_delay_ms", 0, 3000],

@@ -13,22 +13,11 @@ export type DedupableRow = {
 const BUCKET_MS = 8000;
 const MARGIN_MS = 20_000;
 
-/**
- * Content-level dedupe across capture paths (relay channel line, native
- * [W From]/[W To] line, voice relay, history sync on every "Iniciar").
- *
- * externalId is deterministic per log line, but different paths produce
- * different ids for the SAME real whisper. This drops a candidate row when an
- * identical (character, player, body, direction) message already exists within
- * ~8s — so history reloads and multi-path captures never duplicate in the UI.
- */
 export async function filterDuplicateContent<T extends DedupableRow>(
   rows: T[],
 ): Promise<T[]> {
   if (rows.length === 0) return rows;
 
-  // Look up DB rows in a window AROUND the candidates' own timestamps
-  // (history syncs carry past dates, so a "now - 10min" window would miss them).
   const times = rows
     .map((r) => new Date(r.createdAt).getTime())
     .filter((t) => Number.isFinite(t));
@@ -73,7 +62,6 @@ export async function filterDuplicateContent<T extends DedupableRow>(
     );
   }
 
-  // Also dedupe identical rows inside the same batch.
   return rows.filter((r) => {
     const t = new Date(r.createdAt).getTime();
     const b = Math.floor(t / BUCKET_MS);

@@ -6,11 +6,6 @@ import { and, desc, eq, gt } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * Returns the latest incoming whispers globally (any character, any player).
- * Supports `?since=` so the UI can poll for "new since last check" and
- * fire notifications only for messages it hasn't seen before.
- */
 export async function GET(request: NextRequest) {
   const since = Number.parseInt(
     request.nextUrl.searchParams.get("since") ?? "0",
@@ -34,7 +29,7 @@ export async function GET(request: NextRequest) {
     .limit(50);
 
   return NextResponse.json({
-    messages: rows.reverse(), // oldest → newest for easy fire-order
+    messages: rows.reverse(),
     latestId: rows.length > 0 ? Math.max(...rows.map((r) => r.id)) : since,
   });
 }

@@ -6,15 +6,6 @@ import { eq } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * DELETE → removes a single chat message by id.
- *
- * This is intentionally available to the web UI just like sending a reply is:
- * Bakers Whisper is a personal/private panel, and the user can clean the chat
- * history whenever needed. If the removed message was still `pending`, it also
- * disappears from /api/queue automatically because the queue is backed by this
- * table.
- */
 export async function DELETE(
   _request: NextRequest,
   context: { params: Promise<{ id: string }> },

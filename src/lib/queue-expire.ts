@@ -2,22 +2,8 @@ import { db } from "@/db";
 import { messages, appSettings, DEFAULT_ADMIN_SETTINGS } from "@/db/schema";
 import { and, eq, lt } from "drizzle-orm";
 
-/**
- * Expires outgoing replies that have been stuck in `pending` longer than the
- * configured timeout, marking them as `failed` with a clear reason.
- *
- * This addresses the handoff TODO: "Mensagens pending ficam para sempre — se
- * personagem nunca abre, deveria ter timeout".
- *
- * The timeout is configured in app_settings under
- * `pending_timeout_minutes`. A value of 0 (the default) disables expiration.
- *
- * Returns the number of rows expired.
- */
 export async function expireStalePending(): Promise<number> {
-  let minutes = Number(
-    DEFAULT_ADMIN_SETTINGS.pending_timeout_minutes,
-  );
+  let minutes = Number(DEFAULT_ADMIN_SETTINGS.pending_timeout_minutes);
   try {
     const [row] = await db
       .select({ value: appSettings.value })
@@ -26,7 +12,6 @@ export async function expireStalePending(): Promise<number> {
       .limit(1);
     if (row?.value) minutes = Number(row.value);
   } catch {
-    // DB unavailable — nothing to expire.
     return 0;
   }
 
@@ -49,6 +34,5 @@ export async function expireStalePending(): Promise<number> {
       ),
     )
     .returning({ id: messages.id });
-
   return expired.length;
 }

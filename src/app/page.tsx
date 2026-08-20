@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 
 type Conversation = {
   character: string;
@@ -34,6 +34,30 @@ export default function HomePage() {
   const [online, setOnline] = useState(0);
   const [chars, setChars] = useState(0);
   const [connected, setConnected] = useState(false);
+
+  // --- Scroll fix: track whether user is near the bottom ---
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  // Track previous message count to detect new messages
+  const prevMsgCountRef = useRef(0);
+  // Track if this is first load of a conversation
+  const isFirstLoadRef = useRef(true);
+
+  const scrollToBottom = useCallback(() => {
+    const el = chatContainerRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
+  const handleChatScroll = useCallback(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    // Consider "near bottom" if within 80px of the bottom
+    const threshold = 80;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
 
   useEffect(() => {
     const tick = async () => {
@@ -68,6 +92,15 @@ export default function HomePage() {
     return () => window.clearInterval(t);
   }, []);
 
+  // When active conversation changes, reset scroll tracking
+  useEffect(() => {
+    if (active) {
+      isFirstLoadRef.current = true;
+      prevMsgCountRef.current = 0;
+      isNearBottomRef.current = true;
+    }
+  }, [active]);
+
   useEffect(() => {
     if (!active) return;
     const load = async () => {
@@ -88,6 +121,31 @@ export default function HomePage() {
     const t = window.setInterval(load, 2500);
     return () => window.clearInterval(t);
   }, [active]);
+
+  // Smart scroll: only auto-scroll when user is near bottom or on first load / new messages
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    const isFirstLoad = isFirstLoadRef.current;
+    const hasNewMessages = messages.length > prevMsgCountRef.current;
+
+    if (isFirstLoad) {
+      // First load of conversation — always scroll to bottom
+      isFirstLoadRef.current = false;
+      // Use requestAnimationFrame to ensure DOM is rendered
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
+    } else if (hasNewMessages && isNearBottomRef.current) {
+      // New messages arrived AND user was near bottom — scroll to see them
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
+    }
+    // If user scrolled up (not near bottom), do NOT auto-scroll
+
+    prevMsgCountRef.current = messages.length;
+  }, [messages, scrollToBottom]);
 
   const startNewConversation = () => {
     const character = newCharacter.trim();
@@ -110,6 +168,8 @@ export default function HomePage() {
     const body = draft.trim();
     setDraft("");
     setSending(true);
+    // After sending, user wants to see the sent message
+    isNearBottomRef.current = true;
     try {
       await fetch(
         `/api/conversations/${encodeURIComponent(active.character)}/${encodeURIComponent(active.player)}`,
@@ -273,7 +333,12 @@ export default function HomePage() {
                   🗑 Limpar
                 </button>
               </div>
-              <div className="flex-1 space-y-2 overflow-y-auto p-4">
+              {/* Chat messages area — scroll fix applied here */}
+              <div
+                ref={chatContainerRef}
+                onScroll={handleChatScroll}
+                className="flex-1 space-y-2 overflow-y-auto p-4"
+              >
                 {messages.length === 0 ? (
                   <div className="pt-10 text-center text-sm text-slate-500">Sem mensagens nesta conversa ainda.</div>
                 ) : (

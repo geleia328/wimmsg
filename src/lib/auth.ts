@@ -14,15 +14,6 @@ function bearer(request: Request): string {
   return header.replace(/^Bearer\s+/i, "").trim();
 }
 
-/**
- * Admin guard used by /settings APIs.
- *
- * The admin key is, in order:
- *   1. ADMIN_TOKEN env var, if set
- *   2. BRIDGE_TOKEN env var, fallback
- *
- * This keeps the settings page protected without introducing user accounts.
- */
 export function checkAdminAuth(
   request: Request,
 ): { ok: true } | { ok: false; response: Response } {
@@ -41,15 +32,6 @@ export function checkAdminAuth(
   return { ok: true };
 }
 
-/**
- * Bridge guard used by Python/EXE endpoints.
- *
- * Accepted tokens:
- *   - BRIDGE_TOKEN env var (works before DB settings are configured)
- *   - app_settings.bridge_token (editable from /settings once DB is online)
- *
- * If neither token exists, dev mode allows requests.
- */
 export async function checkBridgeAuth(
   request: Request,
 ): Promise<{ ok: true } | { ok: false; response: Response }> {
@@ -72,8 +54,6 @@ export async function checkBridgeAuth(
 
   if (dbToken && provided === dbToken) return { ok: true };
 
-  // Dev mode: if no token exists anywhere, allow access so the sandbox/local
-  // app works without configuration.
   if (!envToken && !dbToken) return { ok: true };
 
   return {

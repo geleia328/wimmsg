@@ -6,13 +6,6 @@ import { sql } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * One row per (character, player) pair with a preview + counters.
- *
- * IMPORTANT: grouping is case-insensitive. WoW/WIM often emits `Juper-Azralon`
- * while the user typed/opened `juper-azralon` in the site. Without this, the
- * same conversation appears split and incoming whispers seem to "not arrive".
- */
 export async function GET() {
   const rows = await db.execute(sql/* sql */ `
     WITH normalized AS (
@@ -29,8 +22,8 @@ export async function GET() {
         player IS NOT NULL
         AND length(trim(player)) >= 3
         AND lower(player) NOT IN ('unknown','guild','party','raid','system','wim','general','comercio','trade')
-        AND player !~ '^\\d+$'
-        AND body !~* '(no do canal|intervalo|flood\\s*&\\s*queue|status:\\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\\s*-\\s*cidade|guilda ativa|recruta dps|lf craft)'
+        AND player !~ '^\d+$'
+        AND body !~* '(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)'
     )
     SELECT
       n_character AS character,

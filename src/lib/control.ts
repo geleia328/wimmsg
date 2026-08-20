@@ -55,27 +55,69 @@ export const DEFAULT_CONTROLS: Controls = {
 
 const clamp = (value: unknown, fallback: number, min: number, max: number) => {
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : fallback;
+  return Number.isFinite(parsed)
+    ? Math.min(max, Math.max(min, Math.round(parsed)))
+    : fallback;
 };
 
 export async function readControls(): Promise<Controls> {
   const keys = Object.values(CONTROL_KEYS);
-  const rows = await db.select().from(appSettings).where(inArray(appSettings.key, keys));
+  const rows = await db
+    .select()
+    .from(appSettings)
+    .where(inArray(appSettings.key, keys));
   const map = new Map(rows.map((row) => [row.key, row.value]));
   return {
-    bridgeReaderEnabled: (map.get(CONTROL_KEYS.bridgeReaderEnabled) ?? "yes") === "yes",
-    gseMasterEnabled: (map.get(CONTROL_KEYS.gseMasterEnabled) ?? "no") === "yes",
-    whisperFocusDelayMs: clamp(map.get(CONTROL_KEYS.whisperFocusDelayMs), 2000, 0, 10000),
-    whisperAfterSendDelayMs: clamp(map.get(CONTROL_KEYS.whisperAfterSendDelayMs), 1000, 0, 10000),
-    whisperChatOpenDelayMs: clamp(map.get(CONTROL_KEYS.whisperChatOpenDelayMs), 1000, 0, 3000),
-    whisperKeystrokeDelayMs: clamp(map.get(CONTROL_KEYS.whisperKeystrokeDelayMs), 100, 0, 3000),
-    whisperChatSendDelayMs: clamp(map.get(CONTROL_KEYS.whisperChatSendDelayMs), 1000, 0, 3000),
-    whisperCloseChatEnabled: (map.get(CONTROL_KEYS.whisperCloseChatEnabled) ?? "yes") === "yes",
-    whisperChatCloseDelayMs: clamp(map.get(CONTROL_KEYS.whisperChatCloseDelayMs), 500, 0, 3000),
-    voiceRelayEnabled: (map.get(CONTROL_KEYS.voiceRelayEnabled) ?? "no") === "yes",
-    combatRelayEnabled: (map.get(CONTROL_KEYS.combatRelayEnabled) ?? "no") === "yes",
-    ocrRelayEnabled: (map.get(CONTROL_KEYS.ocrRelayEnabled) ?? "no") === "yes",
-    wimScreenOcrEnabled: (map.get(CONTROL_KEYS.wimScreenOcrEnabled) ?? "no") === "yes",
+    bridgeReaderEnabled:
+      (map.get(CONTROL_KEYS.bridgeReaderEnabled) ?? "yes") === "yes",
+    gseMasterEnabled:
+      (map.get(CONTROL_KEYS.gseMasterEnabled) ?? "no") === "yes",
+    whisperFocusDelayMs: clamp(
+      map.get(CONTROL_KEYS.whisperFocusDelayMs),
+      2000,
+      0,
+      10000,
+    ),
+    whisperAfterSendDelayMs: clamp(
+      map.get(CONTROL_KEYS.whisperAfterSendDelayMs),
+      1000,
+      0,
+      10000,
+    ),
+    whisperChatOpenDelayMs: clamp(
+      map.get(CONTROL_KEYS.whisperChatOpenDelayMs),
+      1000,
+      0,
+      3000,
+    ),
+    whisperKeystrokeDelayMs: clamp(
+      map.get(CONTROL_KEYS.whisperKeystrokeDelayMs),
+      100,
+      0,
+      3000,
+    ),
+    whisperChatSendDelayMs: clamp(
+      map.get(CONTROL_KEYS.whisperChatSendDelayMs),
+      1000,
+      0,
+      3000,
+    ),
+    whisperCloseChatEnabled:
+      (map.get(CONTROL_KEYS.whisperCloseChatEnabled) ?? "yes") === "yes",
+    whisperChatCloseDelayMs: clamp(
+      map.get(CONTROL_KEYS.whisperChatCloseDelayMs),
+      500,
+      0,
+      3000,
+    ),
+    voiceRelayEnabled:
+      (map.get(CONTROL_KEYS.voiceRelayEnabled) ?? "no") === "yes",
+    combatRelayEnabled:
+      (map.get(CONTROL_KEYS.combatRelayEnabled) ?? "no") === "yes",
+    ocrRelayEnabled:
+      (map.get(CONTROL_KEYS.ocrRelayEnabled) ?? "no") === "yes",
+    wimScreenOcrEnabled:
+      (map.get(CONTROL_KEYS.wimScreenOcrEnabled) ?? "no") === "yes",
     queuePollMs: clamp(map.get(CONTROL_KEYS.queuePollMs), 1500, 250, 30000),
   };
 }

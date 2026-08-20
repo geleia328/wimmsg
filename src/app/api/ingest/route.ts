@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { appSettings, messages } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
 import { filterDuplicateContent } from "@/lib/dedupe";
+import { normalizeNameForStorage } from "@/lib/unicode";
 import { sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -32,25 +33,33 @@ type IncomingPayload = {
   message?: IncomingMessage;
 };
 
-type ParsedRelay = {
-  direction: "incoming" | "outgoing";
-  character: string;
-  player: string;
-  body: string;
-};
-
 function isLikelyPlayerName(player: string): boolean {
   const p = player.trim().toLowerCase();
-  if (p.length < 3 || p.length > 64) return false;
+  if (p.length < 2 || p.length > 64) return false;
   if (!/[a-zà-ÿ]/i.test(p)) return false;
   if (/^\d+$/.test(p)) return false;
-  if (["unknown", "guild", "party", "raid", "system", "wim", "general", "comercio", "trade"].includes(p)) return false;
+  if (
+    [
+      "unknown",
+      "guild",
+      "party",
+      "raid",
+      "system",
+      "wim",
+      "general",
+      "comercio",
+      "trade",
+    ].includes(p)
+  )
+    return false;
   return true;
 }
 
 function isLikelyPollutedBody(body: string): boolean {
   const b = body.toLowerCase();
-  return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(b);
+  return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(
+    b,
+  );
 }
 
 async function filterDeletedConversationGrace<
@@ -63,10 +72,15 @@ async function filterDeletedConversationGrace<
       .from(appSettings)
       .where(sql`${appSettings.key} like 'deleted_conversation:%'`);
     if (tombstones.length === 0) return rows;
+
     const deleted = new Map<string, number>();
     for (const t of tombstones) {
-      deleted.set(t.key.replace(/^deleted_conversation:/, ""), Number(t.value) || 0);
+      deleted.set(
+        t.key.replace(/^deleted_conversation:/, ""),
+        Number(t.value) || 0,
+      );
     }
+
     const GRACE_MS = 120_000;
     return rows.filter((r) => {
       const key = `${r.character.toLowerCase()}:${r.player.toLowerCase()}`;
@@ -79,14 +93,21 @@ async function filterDeletedConversationGrace<
   }
 }
 
-function parseEmbeddedRelay(body: string): ParsedRelay | null {
+function parseEmbeddedRelay(
+  body: string,
+): {
+  direction: "incoming" | "outgoing";
+  character: string;
+  player: string;
+  body: string;
+} | null {
   const normalized = body
     .replace(/[‹＜«]/g, "<")
-    .replace(/[›＞»]/g, ">")
     .replace(/WIM\s*RELAY/gi, "WIMRELAY")
     .replace(/BW\s*RELAY/gi, "BWRELAY");
+
   const from = normalized.match(
-    /(?:\[WIMBRIDGE\]|WIMRELAY|BWRELAY)?\s*<\s*OWN\s*:\s*([^>]+?)\s*>\s*<\s*FROM\s*:\s*([^>]+?)\s*>\s*(?:<\s*TS\s*:[^>]+?\s*>\s*)?([\s\S]*)$/i,
+    /(?:\[WIMBRIDGE\]|WIMRELAY|BWRELAY)?\s*<([^>]+?)>\s*<([^>]+?)>\s*(?:<[^>]+?>\s*)?(.*)$/i,
   );
   if (from) {
     return {
@@ -96,25 +117,9 @@ function parseEmbeddedRelay(body: string): ParsedRelay | null {
       body: from[3].trim(),
     };
   }
-  const to = normalized.match(
-    /(?:\[WIMBRIDGE\]|WIMRELAY|BWRELAY)?\s*<\s*OWN\s*:\s*([^>]+?)\s*>\s*<\s*TO\s*:\s*([^>]+?)\s*>\s*(?:<\s*TS\s*:[^>]+?\s*>\s*)?([\s\S]*)$/i,
-  );
-  if (to) {
-    return {
-      direction: "outgoing",
-      character: to[1].trim(),
-      player: to[2].trim(),
-      body: to[3].trim(),
-    };
-  }
   return null;
 }
 
-/**
- * The Python bridge posts newly-seen chat lines here. `character` identifies
- * WHICH of your WoW windows the message belongs to. We upsert by external_id
- * so re-posting is idempotent.
- */
 export async function POST(request: NextRequest) {
   const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
@@ -141,43 +146,54 @@ export async function POST(request: NextRequest) {
   const rows = rawMessages
     .map((m) => {
       const rawBody = (m.body ?? m.text ?? m.message ?? "").trim();
-      const rawCharacter = (m.character ?? m.char ?? m.own ?? "unknown").trim();
+      const rawCharacter = (
+        m.character ??
+        m.char ??
+        m.own ??
+        "unknown"
+      ).trim();
       const rawPlayer = (m.player ?? m.from ?? m.to ?? "").trim();
+
       if (!rawBody || !rawPlayer) return null;
 
       const relay = parseEmbeddedRelay(rawBody);
-      const looksLikeBrokenRelay = /WIM\s*RELAY|BW\s*RELAY|<\s*OWN\s*:|<\s*FROM\s*:|<\s*TO\s*:/i.test(rawBody);
-      if (!relay && looksLikeBrokenRelay) return null;
+      const looksLikeBrokenRelay =
+        /WIM\s*RELAY|BW\s*RELAY|<[^>]+>\s*<[^>]+>/i.test(rawBody);
 
-      const character = (relay?.character ?? rawCharacter).trim().toLowerCase() || "unknown";
-      const player = (relay?.player ?? rawPlayer).trim().toLowerCase();
-      const body = (relay?.body ?? rawBody).trim();
-      const direction = relay?.direction ?? m.direction ?? "incoming";
-      const isOutgoing = direction === "outgoing";
+      const character = relay?.character ?? rawCharacter;
+      const player = relay?.player ?? rawPlayer;
+      const body = relay?.body ?? rawBody;
+      const direction: "incoming" | "outgoing" =
+        relay?.direction ?? m.direction ?? "incoming";
+
       if (!isLikelyPlayerName(player)) return null;
-      if (!isOutgoing && isLikelyPollutedBody(body)) return null;
-      // Whole-window WIM OCR from older bridge builds used externalId wim-* and
-      // is the main source of random ads/UI pollution. Strip OCR uses ocr-*.
-      if (!isOutgoing && (m.externalId ?? m.external_id ?? "").startsWith("wim-")) return null;
-      const receivedAt = m.receivedAt ?? m.received_at ?? m.createdAt;
+      if (isLikelyPollutedBody(body)) return null;
+      if (looksLikeBrokenRelay && !relay) return null;
+
+      const externalId =
+        m.externalId ??
+        m.external_id ??
+        `bridge-${character}-${player}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      const ts = m.receivedAt ?? m.received_at ?? m.createdAt;
+
       return {
-        character,
-        player,
+        character: normalizeNameForStorage(character),
+        player: normalizeNameForStorage(player),
         body,
-        direction: isOutgoing ? ("outgoing" as const) : ("incoming" as const),
-        status: isOutgoing
-          ? ((m.status ?? "sent") as "sent" | "failed")
-          : ("received" as const),
-        externalId:
-          m.externalId ??
-          m.external_id ??
-          `${character}-${player}-${receivedAt ?? new Date().toISOString()}-${Math.random()
-            .toString(36)
-            .slice(2, 8)}`,
-        createdAt: receivedAt ? new Date(receivedAt) : new Date(),
+        direction,
+        status: direction === "outgoing" ? (m.status ?? "sent") : "sent",
+        externalId: externalId.slice(0, 128),
+        createdAt: ts ? new Date(ts) : new Date(),
       };
     })
-    .filter((r): r is NonNullable<typeof r> => Boolean(r && r.player.length > 0 && r.body.length > 0));
+    .filter(
+      (
+        r,
+      ): r is NonNullable<typeof r> & {
+        direction: "incoming" | "outgoing";
+      } => Boolean(r && r.player.length > 0 && r.body.length > 0),
+    );
 
   if (rows.length === 0) {
     return NextResponse.json({ inserted: 0 });
@@ -185,7 +201,11 @@ export async function POST(request: NextRequest) {
 
   const visibleRows = await filterDeletedConversationGrace(rows);
   if (visibleRows.length === 0) {
-    return NextResponse.json({ inserted: 0, received: rows.length, skipped: "recently_deleted" });
+    return NextResponse.json({
+      inserted: 0,
+      received: rows.length,
+      skipped: "recently_deleted",
+    });
   }
 
   const uniqueRows = await filterDuplicateContent(visibleRows);
@@ -199,10 +219,15 @@ export async function POST(request: NextRequest) {
     .onConflictDoNothing({ target: messages.externalId })
     .returning({ id: messages.id });
 
-  return NextResponse.json({ inserted: inserted.length, received: rows.length });
+  return NextResponse.json({
+    inserted: inserted.length,
+    received: rows.length,
+  });
 }
 
 export async function GET() {
-  const [row] = await db.select({ count: sql`count(*)::int` }).from(messages);
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(messages);
   return NextResponse.json({ ok: true, totalMessages: row?.count ?? 0 });
 }

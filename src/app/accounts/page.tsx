@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Layout } from "@/components/Layout";
 
-type Window = {
+type WindowStatus = {
+  id: number;
   character: string;
   windowTitle: string;
   pid: string;
@@ -15,132 +16,183 @@ type Window = {
   lastSeen: string;
 };
 
+type EditingWindow = {
+  id: number;
+  character: string;
+  slot: string;
+};
+
 export default function AccountsPage() {
-  const [windows, setWindows] = useState<Window[]>([]);
-  const [stats, setStats] = useState({ total: 0, online: 0, offline: 0, unmapped: 0 });
+  const [windows, setWindows] = useState<WindowStatus[]>([]);
+  const [editing, setEditing] = useState<EditingWindow | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
 
   useEffect(() => {
-    const tick = async () => {
+    const load = async () => {
       try {
         const res = await fetch("/api/status", { cache: "no-store" });
         if (res.ok) {
-          const data = (await res.json()) as { windows: Window[] };
+          const data = (await res.json()) as { windows: WindowStatus[] };
           setWindows(data.windows);
-          const now = new Date();
-          const online = data.windows.filter(
-            (w) => now.getTime() - new Date(w.lastSeen).getTime() < 15000,
-          );
-          const offline = data.windows.filter(
-            (w) => now.getTime() - new Date(w.lastSeen).getTime() >= 15000,
-          );
-          const unmapped = online.filter((w) => !w.matched || w.matched === "no");
-          setStats({
-            total: data.windows.length,
-            online: online.length,
-            offline: offline.length,
-            unmapped: unmapped.length,
-          });
         }
       } catch {
         // ignore
       }
     };
-    tick();
-    const t = setInterval(tick, 3000);
-    return () => clearInterval(t);
+    void load();
+    const t = window.setInterval(load, 5000);
+    return () => window.clearInterval(t);
   }, []);
 
+  const startEdit = (w: WindowStatus) => {
+    setEditing({ id: w.id, character: w.character, slot: w.slot });
+    setSaveMsg("");
+  };
+
+  const cancelEdit = () => {
+    setEditing(null);
+    setSaveMsg("");
+  };
+
+  const saveEdit = async () => {
+    if (!editing || saving) return;
+    setSaving(true);
+    setSaveMsg("");
+    try {
+      const target = windows.find((w) => w.id === editing.id);
+      if (!target) return;
+
+      const res = await fetch("/api/status/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hwnd: target.hwnd,
+          id: target.id,
+          character: editing.character,
+          slot: editing.slot,
+        }),
+      });
+      if (res.ok) {
+        setSaveMsg("✅ Salvo!");
+        setWindows((prev) =>
+          prev.map((w) =>
+            w.id === editing.id
+              ? { ...w, character: editing.character, slot: editing.slot }
+              : w,
+          ),
+        );
+        setEditing(null);
+      } else {
+        setSaveMsg("❌ Erro ao salvar");
+      }
+    } catch {
+      setSaveMsg("❌ Falha na conexão");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const now = Date.now();
+
   return (
-    <Layout>
-      <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-6">
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-4">
-          <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3 sm:rounded-xl sm:p-4 text-slate-100">
-            <div className="text-xl font-bold sm:text-3xl">{stats.total}</div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-wider opacity-80 sm:mt-1 sm:text-xs">
-              Total detectadas
-            </div>
-          </div>
-          <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 sm:rounded-xl sm:p-4 text-emerald-300">
-            <div className="text-xl font-bold sm:text-3xl">{stats.online}</div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-wider opacity-80 sm:mt-1 sm:text-xs">
-              Online agora
-            </div>
-          </div>
-          <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 sm:rounded-xl sm:p-4 text-rose-300">
-            <div className="text-xl font-bold sm:text-3xl">{stats.offline}</div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-wider opacity-80 sm:mt-1 sm:text-xs">
-              Offline
-            </div>
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3 sm:rounded-xl sm:p-4 text-slate-100">
-            <div className="text-xl font-bold sm:text-3xl">{stats.unmapped}</div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-wider opacity-80 sm:mt-1 sm:text-xs">
-              Não mapeadas
-            </div>
-          </div>
+    <div className="min-h-dvh bg-slate-950 text-slate-100">
+      <header className="flex items-center gap-3 border-b border-slate-800 bg-slate-900/80 px-4 py-3 backdrop-blur">
+        <Link href="/" className="text-amber-400 hover:text-amber-300">← Chat</Link>
+        <h1 className="text-lg font-bold">📡 Contas / Janelas WoW</h1>
+      </header>
+      <div className="mx-auto max-w-4xl p-4">
+        {/* Multi-PC info */}
+        <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/5 p-4">
+          <h2 className="mb-1 text-sm font-bold text-sky-300">💡 Multi-PC</h2>
+          <p className="text-xs text-slate-400">
+            Se você roda o bridge em mais de um PC, edite o <strong>Nome</strong> e/ou <strong>Slot</strong> de cada janela
+            para evitar que wow1 do PC-A e wow1 do PC-B tenham o mesmo identificador.
+            Exemplo: &quot;Mage-PC1&quot;, &quot;Mage-PC2&quot; ou slots &quot;A1&quot;, &quot;B1&quot;.
+          </p>
         </div>
 
-        <div className="relative mt-4 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
-          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/80 to-transparent sm:hidden" />
-          <table className="w-full min-w-[700px] text-sm">
-            <thead>
-              <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Slot</th>
-                <th className="px-4 py-3">Personagem</th>
-                <th className="px-4 py-3">Servidor</th>
-                <th className="px-4 py-3">Título</th>
-                <th className="px-4 py-3">PID</th>
-                <th className="px-4 py-3">Foreground</th>
-                <th className="px-4 py-3">Visto</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {windows.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
-                    Buscando janelas...
-                  </td>
-                </tr>
-              ) : (
-                windows.map((w) => {
-                  const isOnline =
-                    new Date().getTime() - new Date(w.lastSeen).getTime() < 15000;
-                  return (
-                    <tr key={w.hwnd} className="hover:bg-slate-800/20 transition">
-                      <td className="px-4 py-3 text-xs font-bold">
-                        <span
-                          className={`inline-block h-2 w-2 rounded-full ${
-                            isOnline ? "bg-emerald-500" : "bg-slate-600"
-                          }`}
-                        />
-                      </td>
-                      <td className="px-4 py-3 text-sm font-mono">{w.slot || "—"}</td>
-                      <td className="px-4 py-3 text-sm">{w.character || "—"}</td>
-                      <td className="px-4 py-3 text-sm">{w.realm || "—"}</td>
-                      <td className="px-4 py-3 truncate text-xs text-slate-400">
-                        {w.windowTitle}
-                      </td>
-                      <td className="px-4 py-3 text-xs font-mono text-slate-500">
-                        {w.pid}
-                      </td>
-                      <td className="px-4 py-3 text-xs">
-                        {w.foreground === "yes" ? "✓" : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-500">
-                        {Math.round(
-                          (new Date().getTime() - new Date(w.lastSeen).getTime()) / 1000,
+        {windows.length === 0 ? (
+          <p className="text-slate-500">Nenhuma janela WoW detectada. Inicie o Python bridge.</p>
+        ) : (
+          <div className="space-y-3">
+            {windows.map((w) => {
+              const ago = Math.floor((now - new Date(w.lastSeen).getTime()) / 1000);
+              const online = ago < 15;
+              const isEditing = editing?.id === w.id;
+
+              return (
+                <div
+                  key={w.id}
+                  className={`rounded-lg border p-4 ${online ? "border-emerald-500/40 bg-emerald-500/5" : "border-slate-700 bg-slate-800/50"}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${online ? "bg-emerald-400" : "bg-slate-600"}`} />
+                        {isEditing ? (
+                          <input
+                            value={editing.character}
+                            onChange={(e) => setEditing({ ...editing, character: e.target.value })}
+                            className="rounded bg-slate-700 px-2 py-1 text-sm font-bold outline-none focus:ring-1 focus:ring-amber-500/60"
+                            placeholder="Nome do personagem"
+                          />
+                        ) : (
+                          <span className="font-bold">{w.character || "Desconhecido"}</span>
                         )}
-                        s
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                        {w.realm && !isEditing && <span className="text-xs text-slate-400">({w.realm})</span>}
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
+                        <span>Janela: {w.windowTitle}</span>
+                        <span>· PID: {w.pid}</span>
+                        <span>· Slot: {isEditing ? (
+                          <input
+                            value={editing.slot}
+                            onChange={(e) => setEditing({ ...editing, slot: e.target.value })}
+                            className="inline-block w-16 rounded bg-slate-700 px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-amber-500/60"
+                            placeholder="ex: A1"
+                          />
+                        ) : (
+                          w.slot || "—"
+                        )}</span>
+                        <span>· {online ? `Online (${ago}s)` : `Offline (${ago}s)`}</span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {isEditing ? (
+                        <>
+                          <button
+                            onClick={saveEdit}
+                            disabled={saving}
+                            className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                          >
+                            {saving ? "..." : "Salvar"}
+                          </button>
+                          <button
+                            onClick={cancelEdit}
+                            className="rounded border border-slate-600 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => startEdit(w)}
+                          className="rounded border border-amber-500/50 bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-amber-300 hover:bg-amber-500/20"
+                          title="Editar nome/slot desta janela"
+                        >
+                          ✏️ Editar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {saveMsg && <p className="mt-3 text-sm">{saveMsg}</p>}
       </div>
-    </Layout>
+    </div>
   );
 }
