@@ -24,9 +24,18 @@ export default function DownloadPage() {
             >
               ⬇ Baixar Script Python (.py)
             </a>
+            <a
+              href="https://github.com/geleia328/wimmsg/releases/latest/download/BakersWhisper-Bridge.exe"
+              className="inline-block rounded border border-sky-500/50 bg-sky-500/10 px-4 py-2 text-sm font-bold text-sky-300 hover:bg-sky-500/20"
+              target="_blank"
+              rel="noreferrer"
+            >
+              ⬇ Baixar Executável (.exe)
+            </a>
           </div>
           <p className="mt-4 text-xs text-slate-400">
-            * Nota: Você pode rodar diretamente com o Python instalado via <code>python wim_bridge_gui.py</code> ou compilar para .exe usando <code>pyinstaller --onefile --noconsole wim_bridge_gui.py</code>
+            * Nota sobre o .exe: Ele é compilado automaticamente e disponibilizado no GitHub. 
+            Alternativamente, pode usar o Script Python executando <code>python wim_bridge_gui.py</code>.
           </p>
         </div>
 

@@ -602,10 +602,17 @@ def apply_renames(wins: list[DetectedWindow], slots: dict[int, int]) -> int:
         if slot is None:
             continue
         
-        # If user explicitly set a title, use it. Otherwise, default to wowN
-        target = w.title if w.title and w.title not in WOW_TITLE_HINTS else f"wow{slot}"
-        current = w.title
-        
+        target = f"wow{slot}"
+        # If user has a custom title (not official 'World of Warcraft' and not 'wow' and not empty), respect it
+        if w.title and w.title.lower() not in WOW_TITLE_HINTS:
+            # Check if it's NOT a generic wowN name, or if it IS a generic wowN name but it matches the current slot
+            is_generic_wow = bool(re.fullmatch(r"wow\\d+", w.title.lower()))
+            if not is_generic_wow:
+                target = w.title
+            elif w.title.lower() == f"wow{slot}":
+                target = w.title
+
+        current = win32gui.GetWindowText(w.hwnd)
         if current == target:
             continue
         if rename_hwnd(w.hwnd, target):
