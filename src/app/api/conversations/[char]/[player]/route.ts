@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { messages } from "@/db/schema";
+import { appSettings, messages } from "@/db/schema";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { filterDuplicateContent } from "@/lib/dedupe";
 
@@ -104,8 +104,25 @@ export async function DELETE(
 
   const deleted = await db
     .delete(messages)
-    .where(and(eq(messages.character, character), eq(messages.player, targetPlayer)))
+    .where(
+      and(
+        sql`lower(${messages.character}) = ${character}`,
+        sql`lower(${messages.player}) = ${targetPlayer}`,
+      ),
+    )
     .returning({ id: messages.id });
+
+  // Tombstone: prevents OCR/bridge from immediately re-inserting the same
+  // conversation while the same relay strip is still visible or history sync is
+  // replaying old messages. New messages are allowed again after a short grace.
+  const key = `deleted_conversation:${character}:${targetPlayer}`;
+  await db
+    .insert(appSettings)
+    .values({ key, value: String(Date.now()) })
+    .onConflictDoUpdate({
+      target: appSettings.key,
+      set: { value: String(Date.now()), updatedAt: new Date() },
+    });
 
   return NextResponse.json({ ok: true, deleted: deleted.length });
 }
