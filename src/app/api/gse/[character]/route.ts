@@ -1,112 +1,98 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { gseState } from "@/db/schema";
+import { checkBridgeAuth } from "@/lib/auth";
 import { eq } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * POST body:
- *   { running?: boolean, keybind?: string, intervalMs?: number }
- *
- * Upserts the row so a character can be enabled even before the bridge has
- * scanned it.
+ * GET → state of one character's GSE spammer.
+ * POST → upsert one character's GSE state ({ running?, keybind?, intervalMs? }).
  */
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ character: string }> },
+) {
+  const { character } = await params;
+  const target = decodeURIComponent(character).toLowerCase();
+
+  const [found] = await db
+    .select()
+    .from(gseState)
+    .where(eq(gseState.character, target))
+    .limit(1);
+
+  if (!found) {
+    return NextResponse.json({
+      character: target,
+      running: false,
+      keybind: "1",
+      intervalMs: 100,
+    });
+  }
+  return NextResponse.json({
+    character: found.character,
+    running: found.running === "yes",
+    keybind: found.keybind,
+    intervalMs: Number(found.intervalMs) || 100,
+    updatedAt: found.updatedAt,
+  });
+}
+
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ character: string }> },
+  { params }: { params: Promise<{ character: string }> },
 ) {
-  const { character: raw } = await context.params;
-  const character = decodeURIComponent(raw).trim();
-  if (!character) {
-    return NextResponse.json({ error: "character required" }, { status: 400 });
+  const authHeader = request.headers.get("authorization");
+  if (authHeader) {
+    const guard = await checkBridgeAuth(request);
+    if (!guard.ok) return guard.response;
   }
 
-  let body: {
+  const { character } = await params;
+  const target = decodeURIComponent(character).toLowerCase();
+
+  let payload: {
     running?: boolean;
     keybind?: string;
     intervalMs?: number;
   } = {};
   try {
-    body = await request.json();
+    payload = await request.json();
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    // empty body is allowed
   }
 
-  // Sanitize
-  const keybind =
-    typeof body.keybind === "string" && body.keybind.length > 0
-      ? body.keybind.slice(0, 32)
-      : undefined;
-  const intervalMs =
-    typeof body.intervalMs === "number" && body.intervalMs > 20
-      ? String(Math.min(2000, Math.floor(body.intervalMs)))
-      : undefined;
-
-  const patch: {
-    running?: "yes" | "no";
-    keybind?: string;
-    intervalMs?: string;
-    updatedAt: Date;
-  } = { updatedAt: new Date() };
-  if (typeof body.running === "boolean") {
-    patch.running = body.running ? "yes" : "no";
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof payload.running === "boolean") {
+    set.running = payload.running ? "yes" : "no";
   }
-  if (keybind) patch.keybind = keybind;
-  if (intervalMs) patch.intervalMs = intervalMs;
-
-  // Upsert
-  const [existing] = await db
-    .select()
-    .from(gseState)
-    .where(eq(gseState.character, character));
-
-  if (existing) {
-    const [updated] = await db
-      .update(gseState)
-      .set(patch)
-      .where(eq(gseState.character, character))
-      .returning();
-    return NextResponse.json({ ok: true, state: updated });
+  if (typeof payload.keybind === "string" && payload.keybind.trim()) {
+    set.keybind = payload.keybind.trim();
   }
-  const [inserted] = await db
-    .insert(gseState)
-    .values({
-      character,
-      running: patch.running ?? "no",
-      keybind: patch.keybind ?? "1",
-      intervalMs: patch.intervalMs ?? "100",
-    })
-    .returning();
-  return NextResponse.json({ ok: true, state: inserted });
-}
-
-/**
- * DELETE → removes the GSE row for a character.
- * Useful when the user changes characters / accounts.
- */
-export async function DELETE(
-  _request: NextRequest,
-  context: { params: Promise<{ character: string }> },
-) {
-  const { character: raw } = await context.params;
-  const character = decodeURIComponent(raw).trim();
-  if (!character) {
-    return NextResponse.json({ error: "character required" }, { status: 400 });
-  }
-
-  const [deleted] = await db
-    .delete(gseState)
-    .where(eq(gseState.character, character))
-    .returning({ character: gseState.character });
-
-  if (!deleted) {
-    return NextResponse.json(
-      { error: "character_not_found" },
-      { status: 404 },
+  if (typeof payload.intervalMs === "number") {
+    set.intervalMs = String(
+      Math.max(10, Math.min(2000, Math.floor(payload.intervalMs))),
     );
   }
 
-  return NextResponse.json({ ok: true, removed: deleted.character });
+  await db
+    .insert(gseState)
+    .values({
+      character: target,
+      running: typeof payload.running === "boolean" ? (payload.running ? "yes" : "no") : "no",
+      keybind: payload.keybind?.trim() || "1",
+      intervalMs:
+        typeof payload.intervalMs === "number"
+          ? String(Math.max(10, Math.min(60000, Math.floor(payload.intervalMs))))
+          : "100",
+    })
+    .onConflictDoUpdate({
+      target: gseState.character,
+      set,
+    });
+
+  return NextResponse.json({ ok: true, character: target, ...payload });
 }

@@ -33,6 +33,7 @@ export async function filterDuplicateContent<T extends DedupableRow>(
     .map((r) => new Date(r.createdAt).getTime())
     .filter((t) => Number.isFinite(t));
   if (times.length === 0) return rows;
+
   const minT = Math.min(...times) - MARGIN_MS;
   const maxT = Math.max(...times, Date.now()) + MARGIN_MS;
 

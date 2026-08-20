@@ -17,12 +17,16 @@ type Controls = {
   whisperFocusDelayMs: number;
   whisperAfterSendDelayMs: number;
   whisperChatOpenDelayMs: number;
-  whisperWReadyDelayMs: number;
-  whisperSpaceDelayMs: number;
   whisperKeystrokeDelayMs: number;
   whisperChatSendDelayMs: number;
   whisperCloseChatEnabled: boolean;
   whisperChatCloseDelayMs: number;
+  voiceRelayEnabled: boolean;
+  combatRelayEnabled: boolean;
+  ocrRelayEnabled: boolean;
+  wimScreenOcrEnabled: boolean;
+  ocrStripTopPx: number;
+  ocrStripHeightPx: number;
   queuePollMs: number;
 };
 
@@ -32,19 +36,31 @@ function normalize(rows: Array<{ key: string; value: string }>): Controls {
     map.get(key) ?? DEFAULT_APP_CONTROLS[key];
   const num = (v: string, min: number, max: number) =>
     Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
-
   return {
-    bridgeReaderEnabled: get("bridge_reader_enabled") === "yes",
+    // Reader is essential for two-way operation; do not allow stale DB values
+    // to leave WoW -> site disabled.
+    bridgeReaderEnabled: true,
     gseMasterEnabled: get("gse_master_enabled") === "yes",
-    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 200, 10000),
-    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 200, 10000),
-    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 300, 10000),
-    whisperWReadyDelayMs: num(get("whisper_w_ready_delay_ms"), 300, 10000),
-    whisperSpaceDelayMs: num(get("whisper_space_delay_ms"), 300, 10000),
-    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 50, 1000),
-    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 300, 10000),
+    whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 100, 5000),
+    whisperAfterSendDelayMs: num(
+      get("whisper_after_send_delay_ms"),
+      100,
+      5000,
+    ),
+    whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 3000),
+    whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 10, 500),
+    whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
-    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 200, 5000),
+    whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
+    // OCR da faixa do addon is the primary real-time capture path. Chatlog/sync
+    // remains a fallback for history because this user's WoW only flushes logs
+    // when the game closes.
+    voiceRelayEnabled: false,
+    combatRelayEnabled: false,
+    ocrRelayEnabled: true,
+    wimScreenOcrEnabled: false,
+    ocrStripTopPx: num(get("ocr_strip_top_px"), 0, 200),
+    ocrStripHeightPx: num(get("ocr_strip_height_px"), 60, 260),
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
   };
 }
@@ -57,13 +73,11 @@ async function readControls() {
       .where(inArray(appSettings.key, CONTROL_KEYS));
     return normalize(rows);
   } catch {
-    // Tables may not exist yet; return defaults.
     return normalize([]);
   }
 }
 
 export async function GET(request: NextRequest) {
-  // Bridge may call this with bearer token; site can call without auth for UI.
   const auth = request.headers.get("authorization");
   if (auth) {
     const guard = await checkBridgeAuth(request);
@@ -78,83 +92,45 @@ export async function POST(request: NextRequest) {
 
   let payload: Partial<Controls> = {};
   try {
-    payload = await request.json();
+    payload = (await request.json()) as Partial<Controls>;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  const pairs: Array<{ key: keyof typeof DEFAULT_APP_CONTROLS; value: string }> = [];
-  if (typeof payload.bridgeReaderEnabled === "boolean") {
-    pairs.push({
-      key: "bridge_reader_enabled",
-      value: payload.bridgeReaderEnabled ? "yes" : "no",
-    });
+  const pairs: Array<{
+    key: keyof typeof DEFAULT_APP_CONTROLS;
+    value: string;
+  }> = [];
+  const boolPairs: Array<[boolean | undefined, keyof typeof DEFAULT_APP_CONTROLS]> = [
+    [payload.bridgeReaderEnabled, "bridge_reader_enabled"],
+    [payload.gseMasterEnabled, "gse_master_enabled"],
+    [payload.whisperCloseChatEnabled, "whisper_close_chat_enabled"],
+    [payload.voiceRelayEnabled, "voice_relay_enabled"],
+    [payload.combatRelayEnabled, "combat_relay_enabled"],
+    [payload.ocrRelayEnabled, "ocr_relay_enabled"],
+    [payload.wimScreenOcrEnabled, "wim_screen_ocr_enabled"],
+  ];
+  for (const [val, key] of boolPairs) {
+    if (typeof val === "boolean") pairs.push({ key, value: val ? "yes" : "no" });
   }
-  if (typeof payload.gseMasterEnabled === "boolean") {
-    pairs.push({
-      key: "gse_master_enabled",
-      value: payload.gseMasterEnabled ? "yes" : "no",
-    });
-  }
-  if (typeof payload.whisperFocusDelayMs === "number") {
-    pairs.push({
-      key: "whisper_focus_delay_ms",
-      value: String(Math.max(200, Math.min(10000, Math.floor(payload.whisperFocusDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperAfterSendDelayMs === "number") {
-    pairs.push({
-      key: "whisper_after_send_delay_ms",
-      value: String(Math.max(200, Math.min(10000, Math.floor(payload.whisperAfterSendDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperChatOpenDelayMs === "number") {
-    pairs.push({
-      key: "whisper_chat_open_delay_ms",
-      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperChatOpenDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperWReadyDelayMs === "number") {
-    pairs.push({
-      key: "whisper_w_ready_delay_ms",
-      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperWReadyDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperSpaceDelayMs === "number") {
-    pairs.push({
-      key: "whisper_space_delay_ms",
-      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperSpaceDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperKeystrokeDelayMs === "number") {
-    pairs.push({
-      key: "whisper_keystroke_delay_ms",
-      value: String(Math.max(50, Math.min(1000, Math.floor(payload.whisperKeystrokeDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperChatSendDelayMs === "number") {
-    pairs.push({
-      key: "whisper_chat_send_delay_ms",
-      value: String(Math.max(300, Math.min(10000, Math.floor(payload.whisperChatSendDelayMs)))),
-    });
-  }
-  if (typeof payload.whisperCloseChatEnabled === "boolean") {
-    pairs.push({
-      key: "whisper_close_chat_enabled",
-      value: payload.whisperCloseChatEnabled ? "yes" : "no",
-    });
-  }
-  if (typeof payload.whisperChatCloseDelayMs === "number") {
-    pairs.push({
-      key: "whisper_chat_close_delay_ms",
-      value: String(Math.max(200, Math.min(5000, Math.floor(payload.whisperChatCloseDelayMs)))),
-    });
-  }
-  if (typeof payload.queuePollMs === "number") {
-    pairs.push({
-      key: "queue_poll_ms",
-      value: String(Math.max(500, Math.min(10000, Math.floor(payload.queuePollMs)))),
-    });
+  const numPairs: Array<[number | undefined, keyof typeof DEFAULT_APP_CONTROLS, number, number]> = [
+    [payload.whisperFocusDelayMs, "whisper_focus_delay_ms", 100, 5000],
+    [payload.whisperAfterSendDelayMs, "whisper_after_send_delay_ms", 100, 5000],
+    [payload.whisperChatOpenDelayMs, "whisper_chat_open_delay_ms", 0, 3000],
+    [payload.whisperKeystrokeDelayMs, "whisper_keystroke_delay_ms", 10, 500],
+    [payload.whisperChatSendDelayMs, "whisper_chat_send_delay_ms", 0, 3000],
+    [payload.whisperChatCloseDelayMs, "whisper_chat_close_delay_ms", 0, 3000],
+    [payload.ocrStripTopPx, "ocr_strip_top_px", 0, 200],
+    [payload.ocrStripHeightPx, "ocr_strip_height_px", 60, 260],
+    [payload.queuePollMs, "queue_poll_ms", 500, 10000],
+  ];
+  for (const [val, key, min, max] of numPairs) {
+    if (typeof val === "number") {
+      pairs.push({
+        key,
+        value: String(Math.max(min, Math.min(max, Math.floor(val)))),
+      });
+    }
   }
 
   for (const p of pairs) {

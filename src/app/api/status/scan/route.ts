@@ -2,87 +2,79 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { clientWindows } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
-import { sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type ScanPayload = {
-  scannedAt?: string;
-  windows: Array<{
-    character?: string;
-    windowTitle: string;
-    pid?: string | number;
-    hwnd: string | number;
-    foreground?: boolean;
-    matched?: boolean;
-    slot?: number | string;
-    realm?: string;
-  }>;
+type WindowPayload = {
+  character?: string;
+  windowTitle?: string;
+  pid?: string;
+  hwnd?: string;
+  foreground?: string | boolean;
+  matched?: string | boolean;
+  slot?: string | number;
+  realm?: string;
 };
 
+function yesNo(value: string | boolean | undefined): "yes" | "no" {
+  return value === true || value === "yes" || value === "true" ? "yes" : "no";
+}
+
 /**
- * The Python bridge posts here every N seconds with the full list of WoW
- * windows currently open on the machine. We UPSERT each row by hwnd and
- * remove rows we haven't seen for > 30s (garbage collection of closed
- * windows).
+ * POST → the Python bridge upserts the windows it currently sees. We key by
+ * `hwnd` (unique). Any window that isn't posted this round is left stale and
+ * the UI treats `last_seen` older than ~15s as offline.
+ *
+ * If no `windows` array is supplied, we just touch last_seen for existing rows
+ * so the bridge can keep them "fresh" while scanning.
  */
 export async function POST(request: NextRequest) {
   const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
 
-  let payload: ScanPayload;
+  let payload: { windows?: WindowPayload[] } = {};
   try {
-    payload = (await request.json()) as ScanPayload;
+    payload = await request.json();
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
-  if (!payload || !Array.isArray(payload.windows)) {
-    return NextResponse.json({ error: "missing_windows" }, { status: 400 });
+
+  const incoming = Array.isArray(payload.windows) ? payload.windows : [];
+  let upserted = 0;
+
+  for (const w of incoming) {
+    if (!w.hwnd && !w.windowTitle) continue;
+    const hwnd = w.hwnd ?? w.pid ?? w.windowTitle ?? "";
+    const slot = w.slot === undefined ? "" : String(w.slot);
+    await db
+      .insert(clientWindows)
+      .values({
+        character: w.character ?? "",
+        windowTitle: w.windowTitle ?? "",
+        pid: w.pid ?? "",
+        hwnd,
+        foreground: yesNo(w.foreground),
+        matched: yesNo(w.matched),
+        slot,
+        realm: w.realm ?? "",
+        lastSeen: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: clientWindows.hwnd,
+        set: {
+          character: w.character ?? "",
+          windowTitle: w.windowTitle ?? "",
+          pid: w.pid ?? "",
+          foreground: yesNo(w.foreground),
+          matched: yesNo(w.matched),
+          slot,
+          realm: w.realm ?? "",
+          lastSeen: new Date(),
+        },
+      });
+    upserted++;
   }
 
-  const now = new Date();
-  const rows = payload.windows
-    .filter((w) => w && w.hwnd !== undefined && w.hwnd !== null)
-    .map((w) => ({
-      character: (w.character ?? "").trim(),
-      windowTitle: (w.windowTitle ?? "").slice(0, 255),
-      pid: String(w.pid ?? ""),
-      hwnd: String(w.hwnd),
-      foreground: w.foreground ? "yes" : "no",
-      matched: w.matched ? "yes" : "no",
-      slot: w.slot !== undefined ? String(w.slot) : "",
-      realm: (w.realm ?? "").slice(0, 64),
-      lastSeen: now,
-    }));
-
-  if (rows.length > 0) {
-    // Upsert one at a time — small N, keeps SQL simple. For 20+ windows this
-    // is still trivially fast.
-    for (const r of rows) {
-      await db
-        .insert(clientWindows)
-        .values(r)
-        .onConflictDoUpdate({
-          target: clientWindows.hwnd,
-          set: {
-            character: r.character,
-            windowTitle: r.windowTitle,
-            pid: r.pid,
-            foreground: r.foreground,
-            matched: r.matched,
-            slot: r.slot,
-            realm: r.realm,
-            lastSeen: now,
-          },
-        });
-    }
-  }
-
-  // Garbage-collect windows we haven't seen for > 30s (closed clients).
-  await db.execute(
-    sql/* sql */ `DELETE FROM ${clientWindows} WHERE last_seen < now() - interval '30 seconds'`,
-  );
-
-  return NextResponse.json({ ok: true, upserted: rows.length });
+  return NextResponse.json({ ok: true, upserted });
 }

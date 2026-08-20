@@ -27,6 +27,7 @@ import {
  *   pending → waiting for the Python bridge to pick it up
  *   sent    → Python confirmed it typed it into WoW
  *   failed  → Python reported an error (window not found, focus issue, ...)
+ *   received→ reserved for incoming echoes
  *
  * `externalId` is a client-side id used for idempotent ingestion so the
  * Python bridge can safely re-post the same whisper without duplicating rows.
@@ -65,11 +66,6 @@ export type NewMessage = typeof messages.$inferInsert;
  * The Python bridge scans open windows (EnumWindows) every few seconds and
  * upserts a row per detected window. The web UI treats a row as "online" if
  * `last_seen` is fresh (e.g. within 15 seconds).
- *
- * `character` is the personagem identifier when we can match the window's
- * title against one of the configured [character:...] blocks. When we detect
- * a WoW-looking window that isn't configured yet, `character` is empty and
- * `matched = false` so the UI can highlight it as unmapped.
  */
 export const clientWindows = pgTable(
   "client_windows",
@@ -98,15 +94,6 @@ export type NewClientWindow = typeof clientWindows.$inferInsert;
 
 /**
  * GSE (Gnome Sequencer Enhanced) macro spam state per character.
- *
- * The site is the source of truth for what SHOULD be running. The Python
- * bridge polls this table and starts/stops per-character spammer threads
- * to match `running`.
- *
- * `keybind`     — key that GSE is bound to inside WoW (default "1"). The
- *                 Python bridge sends PostMessage WM_KEYDOWN/WM_KEYUP for
- *                 this key, so no window focus is needed.
- * `intervalMs`  — delay between key presses. 100ms = 10 taps/second.
  */
 export const gseState = pgTable("gse_state", {
   character: varchar("character", { length: 128 }).primaryKey(),
@@ -124,7 +111,7 @@ export type NewGseState = typeof gseState.$inferInsert;
 /**
  * Generic app settings edited from the admin settings page.
  *
- * Important: DATABASE_URL is intentionally NOT stored here. The app needs the
+ * IMPORTANT: DATABASE_URL is intentionally NOT stored here. The app needs the
  * database connection before it can read any table, so database credentials
  * must remain as an environment variable in Vercel/hosting provider.
  */
@@ -145,11 +132,20 @@ export const DEFAULT_APP_CONTROLS = {
   whisper_focus_delay_ms: "2000",
   whisper_after_send_delay_ms: "1000",
   whisper_chat_open_delay_ms: "1000",
-  whisper_w_ready_delay_ms: "1000",
-  whisper_space_delay_ms: "1000",
   whisper_keystroke_delay_ms: "100",
   whisper_chat_send_delay_ms: "1000",
-  whisper_close_chat_enabled: "no",
-  whisper_chat_close_delay_ms: "400",
+  whisper_close_chat_enabled: "yes",
+  whisper_chat_close_delay_ms: "500",
+  voice_relay_enabled: "no",
+  combat_relay_enabled: "no",
+  ocr_relay_enabled: "yes",
+  wim_screen_ocr_enabled: "no",
+  ocr_strip_top_px: "28",
+  ocr_strip_height_px: "140",
   queue_poll_ms: "1500",
+} as const;
+
+export const DEFAULT_ADMIN_SETTINGS = {
+  bridge_token: "",
+  pending_timeout_minutes: "0", // 0 = never expire pending replies
 } as const;

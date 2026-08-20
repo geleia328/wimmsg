@@ -8,10 +8,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET  → returns state of ALL characters (used by both the site and the
- *        Python bridge which polls to sync).
+ * GET → returns state of ALL characters (used by both the site and the
+ * Python bridge which polls to sync).
  * POST → bulk operations: { action: "startAll" | "stopAll", characters?: string[] }
- *        If `characters` is omitted, applies to every row in the table.
+ * If `characters` is omitted, applies to every row in the table.
  */
 export async function GET() {
   const rows = await db.select().from(gseState);
@@ -27,18 +27,13 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  // Bulk endpoint is called by the site too, not just the bridge, so we only
-  // enforce auth on bridge-specific header presence.
   const authHeader = request.headers.get("authorization");
   if (authHeader) {
     const guard = await checkBridgeAuth(request);
     if (!guard.ok) return guard.response;
   }
 
-  let payload: {
-    action?: "startAll" | "stopAll";
-    characters?: string[];
-  } = {};
+  let payload: { action?: "startAll" | "stopAll"; characters?: string[] } = {};
   try {
     payload = await request.json();
   } catch {
@@ -51,7 +46,6 @@ export async function POST(request: NextRequest) {
   }
 
   if (payload.characters && payload.characters.length > 0) {
-    // Bulk update only the listed characters.
     for (const c of payload.characters) {
       await db
         .insert(gseState)
@@ -64,12 +58,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, affected: payload.characters.length });
   }
 
-  // Otherwise flip every existing row.
   await db.execute(sql/* sql */ `
-    UPDATE ${gseState} SET running = ${target}, updated_at = now()
+    UPDATE ${gseState}
+    SET running = ${target}, updated_at = now()
   `);
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(gseState);
-  return NextResponse.json({ ok: true, affected: count });
+  const [row] = await db.select({ count: sql`count(*)::int` }).from(gseState);
+  return NextResponse.json({ ok: true, affected: row?.count ?? 0 });
 }

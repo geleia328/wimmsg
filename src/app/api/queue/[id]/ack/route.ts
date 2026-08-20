@@ -8,45 +8,43 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * The Python bridge calls POST /api/queue/{id}/ack after typing an outgoing
- * whisper into WoW (or when it fails).
- *
- * Body: { status: "sent" | "failed", error?: string }
+ * Python bridge calls this once it has typed a queued reply into the right
+ * WoW window. `status` is "sent" on success or "failed" with an error reason.
  */
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ id: string }> },
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
 
-  const { id: idStr } = await context.params;
-  const id = Number.parseInt(idStr, 10);
-  if (!Number.isFinite(id)) {
+  const { id } = await params;
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) {
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 
-  let body: { status?: string; error?: string } = {};
+  let payload: { status?: string; error?: string } = {};
   try {
-    body = (await request.json()) as { status?: string; error?: string };
+    payload = await request.json();
   } catch {
-    // empty body is fine – treat as success
+    // empty body is fine — defaults to "sent"
   }
 
-  const status = body.status === "failed" ? "failed" : "sent";
-
+  const next = payload.status === "failed" ? "failed" : "sent";
   const [updated] = await db
     .update(messages)
     .set({
-      status,
+      status: next,
+      error: next === "failed" ? payload.error ?? "unknown error" : null,
       sentAt: new Date(),
-      error: status === "failed" ? body.error ?? "unknown error" : null,
     })
-    .where(eq(messages.id, id))
-    .returning();
+    .where(eq(messages.id, numericId))
+    .returning({ id: messages.id });
 
   if (!updated) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  return NextResponse.json({ ok: true, message: updated });
+
+  return NextResponse.json({ ok: true, id: updated.id, status: next });
 }

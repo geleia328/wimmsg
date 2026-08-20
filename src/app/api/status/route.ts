@@ -1,39 +1,25 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { clientWindows } from "@/db/schema";
+import { checkBridgeAuth } from "@/lib/auth";
 import { desc } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Returns all currently detected WoW windows plus a computed `online` flag
- * (true when last_seen is within the last 15 seconds).
+ * GET → current inventory of WoW client windows. The Python bridge also reads
+ * this to know which window maps to which character.
  */
-export async function GET() {
-  const rows = await db
+export async function GET(request: NextRequest) {
+  const auth = request.headers.get("authorization");
+  if (auth) {
+    const guard = await checkBridgeAuth(request);
+    if (!guard.ok) return guard.response;
+  }
+  const windows = await db
     .select()
     .from(clientWindows)
     .orderBy(desc(clientWindows.lastSeen));
-
-  const now = Date.now();
-  const windows = rows.map((r) => {
-    const seen = new Date(r.lastSeen).getTime();
-    return {
-      id: r.id,
-      character: r.character,
-      windowTitle: r.windowTitle,
-      pid: r.pid,
-      hwnd: r.hwnd,
-      slot: r.slot,
-      realm: r.realm,
-      foreground: r.foreground === "yes",
-      matched: r.matched === "yes",
-      lastSeen: r.lastSeen,
-      online: now - seen < 15_000,
-      secondsAgo: Math.max(0, Math.floor((now - seen) / 1000)),
-    };
-  });
-
   return NextResponse.json({ windows });
 }

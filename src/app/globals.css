@@ -1,25 +1,29 @@
 @import "tailwindcss";
 
-/* Safe-area support for notched devices (iPhone X+, iPads with notch) */
-@layer base {
-  :root {
-    --sat: env(safe-area-inset-top);
-    --sab: env(safe-area-inset-bottom);
-    --sal: env(safe-area-inset-left);
-    --sar: env(safe-area-inset-right);
-  }
+html,
+body {
+  background-color: #020617;
+  color: #f1f5f9;
+}
 
-  /* Prevent iOS rubber-banding from breaking fixed layouts */
-  html {
-    -webkit-text-size-adjust: 100%;
-    -webkit-tap-highlight-color: transparent;
-  }
+/* Dark, slim scrollbars to match the WhatsApp-Web vibe */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
 
-  body {
-    padding-top: var(--sat);
-    padding-bottom: var(--sab);
-    padding-left: var(--sal);
-    padding-right: var(--sar);
-    min-height: 100dvh;
-  }
+/* Prevent the page from bouncing on mobile while panning chats */
+body {
+  overscroll-behavior: none;
 }
