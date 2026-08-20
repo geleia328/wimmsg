@@ -733,7 +733,7 @@ class GseSpammer:
         self.character = character
         self.hwnd = hwnd
         self.keybind = keybind
-        self.interval_ms = max(50, min(60000, int(interval_ms)))
+        self.interval_ms = max(50, min(2000, int(interval_ms)))
         self.log = log_cb
         self.pause_event = threading.Event()  # SET = paused
         self._stop = threading.Event()
@@ -747,7 +747,7 @@ class GseSpammer:
 
     def update(self, keybind: str, interval_ms: int) -> None:
         self.keybind = keybind
-        self.interval_ms = max(50, min(60000, int(interval_ms)))
+        self.interval_ms = max(50, min(2000, int(interval_ms)))
 
     def _run(self) -> None:
         self.log(f"⚙ GSE [{self.character}] iniciado — tecla {self.keybind!r}")
@@ -805,20 +805,19 @@ def _normalize_relay_ocr(text: str) -> str:
 
 
 SCREEN_BW_RE = re.compile(
-    r"\bB\s*W\s*#?\s*(?P<id>\d{1,10})?\s*(?P<kind>FROM|TO)\s+"
+    r"\bB\s*W\s+(?P<kind>FROM|TO)\s+"
     r"(?P<player>[A-Za-zÀ-ÿ0-9_'\-]{2,32}(?:-[A-Za-zÀ-ÿ0-9_'\-]+)?)"
     r"\s*[:\-]\s*(?P<body>.+)$",
     re.IGNORECASE | re.DOTALL,
 )
 
 
-def parse_screen_bw_line(text: str, own_default: str) -> Optional[tuple[str, str, str, str, str]]:
-    """Parse the large OCR strip: 'BW 123 FROM Player-Reino: message'."""
+def parse_screen_bw_line(text: str, own_default: str) -> Optional[tuple[str, str, str, str]]:
+    """Parse the new large OCR strip: 'BW FROM Player-Reino: message'."""
     clean = _normalize_relay_ocr(text)
     m = SCREEN_BW_RE.search(clean)
     if not m:
         return None
-    strip_id = (m.group("id") or "").strip()
     kind = m.group("kind").upper()
     player = m.group("player").strip()
     body = m.group("body").strip()
@@ -827,7 +826,7 @@ def parse_screen_bw_line(text: str, own_default: str) -> Optional[tuple[str, str
     if not player or not body:
         return None
     direction = "incoming" if kind == "FROM" else "outgoing"
-    return direction, own_default, player, body, strip_id
+    return direction, own_default, player, body
 # WoW's NATIVE chat log lines for whispers (work even WITHOUT the addon,
 # as long as /chatlog is on):
 #   [W From] [Sender-Realm]: message
@@ -1854,7 +1853,6 @@ class BridgeEngine:
         time.sleep(0.15 * (abs(hash(ref.character)) % 7))
         errs = 0
         first_ok = False
-        seen_strip_ids: set[str] = set()
         self.log(f"📷 OCR engine iniciado para {ref.character} (faixa relay).")
         with mss.mss() as sct:
             while not self.stop_event.is_set():
@@ -1917,11 +1915,7 @@ class BridgeEngine:
                     time.sleep(1.2)
                     continue
 
-                strip_id = ""
-                if len(parsed) == 5:
-                    direction, own_raw, other, body, strip_id = parsed
-                else:
-                    direction, own_raw, other, body = parsed
+                direction, own_raw, other, body = parsed
                 # The site already knows outgoing messages created there; send
                 # only real incoming buyer whispers to avoid visual pollution.
                 if direction != "incoming":
@@ -1932,23 +1926,15 @@ class BridgeEngine:
                 if not own or not other or not body:
                     time.sleep(1.2)
                     continue
-                unique_key = f"{own.lower()}:{strip_id}" if strip_id else ""
-                if unique_key and unique_key in seen_strip_ids:
+                if self._recent_dup(own, other, body):
                     time.sleep(1.2)
                     continue
-                if not unique_key and self._recent_dup(own, other, body):
-                    time.sleep(1.2)
-                    continue
-                if unique_key:
-                    seen_strip_ids.add(unique_key)
-                    if len(seen_strip_ids) > 1000:
-                        seen_strip_ids.clear()
                 self._remember_whisper(own, other, body)
                 ok = self._ingest_retry(
                     [
                         {
                             "externalId": make_ext_id(
-                                own, other, body, f"ocr-strip-{strip_id or int(time.time() // 8)}"
+                                own, other, body, f"ocr-{int(time.time() // 8)}"
                             ),
                             "character": own,
                             "player": other,

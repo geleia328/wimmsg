@@ -86,7 +86,7 @@ export async function POST(
       keybind: payload.keybind?.trim() || "1",
       intervalMs:
         typeof payload.intervalMs === "number"
-          ? String(Math.max(10, Math.min(60000, Math.floor(payload.intervalMs))))
+          ? String(Math.max(10, Math.min(2000, Math.floor(payload.intervalMs))))
           : "100",
     })
     .onConflictDoUpdate({
