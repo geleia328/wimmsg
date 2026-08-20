@@ -1,63 +1,112 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { gseState } from "@/db/schema";
-import { checkBridgeAuth } from "@/lib/auth";
-import { sql } from "drizzle-orm";
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { gseGlobalSettings, gseCharacters } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 export async function GET() {
-  const rows = await db.select().from(gseState);
-  return NextResponse.json({
-    states: rows.map((r) => ({
-      character: r.character,
-      running: r.running === "yes",
-      keybind: r.keybind,
-      intervalMs: Number(r.intervalMs) || 100,
-      updatedAt: r.updatedAt,
-    })),
-  });
+  try {
+    let [globalSettings] = await db.select().from(gseGlobalSettings);
+    if (!globalSettings) {
+      const [inserted] = await db
+        .insert(gseGlobalSettings)
+        .values({
+          leitorWindowsActive: false,
+          masterGseActive: true,
+          pressEscAfterSend: false,
+          delayEnter: 500,
+          delayBeforeSpace: 500,
+          delaySpaceWhisper: 500,
+          delayFocusWindow: 500,
+          delayBetweenKeys: 500,
+          delaySendMsg: 500,
+          delayAfterWhisper: 500,
+          delayPollQueue: 500,
+        })
+        .returning();
+      globalSettings = inserted;
+    }
+
+    const charactersList = await db.select().from(gseCharacters).orderBy(gseCharacters.id);
+
+    return NextResponse.json({
+      global: globalSettings,
+      characters: charactersList,
+    });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || "Failed to fetch GSE state" }, { status: 500 });
+  }
 }
 
-export async function POST(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader) {
-    const guard = await checkBridgeAuth(request);
-    if (!guard.ok) return guard.response;
-  }
-
-  let payload: { action?: "startAll" | "stopAll"; characters?: string[] } = {};
+export async function POST(request: Request) {
   try {
-    payload = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-  }
+    const body = await request.json();
+    const { type, data } = body;
 
-  const target = payload.action === "startAll" ? "yes" : "no";
-  if (!["startAll", "stopAll"].includes(payload.action ?? "")) {
-    return NextResponse.json({ error: "invalid_action" }, { status: 400 });
-  }
-
-  if (payload.characters && payload.characters.length > 0) {
-    for (const c of payload.characters) {
-      await db
-        .insert(gseState)
-        .values({ character: c, running: target })
-        .onConflictDoUpdate({
-          target: gseState.character,
-          set: { running: target, updatedAt: new Date() },
-        });
+    if (type === "global") {
+      let [existing] = await db.select().from(gseGlobalSettings);
+      if (existing) {
+        const [updated] = await db
+          .update(gseGlobalSettings)
+          .set({
+            ...data,
+            updatedAt: new Date(),
+          })
+          .where(eq(gseGlobalSettings.id, existing.id))
+          .returning();
+        return NextResponse.json(updated);
+      } else {
+        const [inserted] = await db.insert(gseGlobalSettings).values(data).returning();
+        return NextResponse.json(inserted);
+      }
+    } else if (type === "toggle_all") {
+      const { isRodando } = data;
+      await db.update(gseCharacters).set({ isRodando });
+      const charactersList = await db.select().from(gseCharacters);
+      return NextResponse.json({ success: true, characters: charactersList });
+    } else if (type === "toggle_character") {
+      const { id, isRodando } = data;
+      const [updated] = await db
+        .update(gseCharacters)
+        .set({ isRodando })
+        .where(eq(gseCharacters.id, id))
+        .returning();
+      return NextResponse.json(updated);
+    } else if (type === "update_character") {
+      const { id, keyGse, intervalMs, slot, status, name } = data;
+      const [updated] = await db
+        .update(gseCharacters)
+        .set({
+          ...(keyGse !== undefined ? { keyGse } : {}),
+          ...(intervalMs !== undefined ? { intervalMs } : {}),
+          ...(slot !== undefined ? { slot } : {}),
+          ...(status !== undefined ? { status } : {}),
+          ...(name !== undefined ? { name } : {}),
+        })
+        .where(eq(gseCharacters.id, id))
+        .returning();
+      return NextResponse.json(updated);
+    } else if (type === "add_character") {
+      const { name = "Hero-Realm", slot = "wow0", keyGse = "F5", intervalMs = 2000 } = data || {};
+      const [inserted] = await db
+        .insert(gseCharacters)
+        .values({
+          name,
+          slot,
+          keyGse,
+          intervalMs,
+          isRodando: true,
+          status: "online",
+        })
+        .returning();
+      return NextResponse.json(inserted);
+    } else if (type === "delete_character") {
+      const { id } = data;
+      await db.delete(gseCharacters).where(eq(gseCharacters.id, id));
+      return NextResponse.json({ success: true });
     }
-    return NextResponse.json({ ok: true, affected: payload.characters.length });
-  }
 
-  await db.execute(sql/* sql */ `
-    UPDATE ${gseState}
-    SET running = ${target}, updated_at = now()
-  `);
-  const [row] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(gseState);
-  return NextResponse.json({ ok: true, affected: row?.count ?? 0 });
+    return NextResponse.json({ error: "Invalid action type" }, { status: 400 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || "Failed to update GSE state" }, { status: 500 });
+  }
 }

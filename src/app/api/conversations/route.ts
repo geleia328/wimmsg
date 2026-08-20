@@ -1,61 +1,44 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { messages } from "@/db/schema";
-import { sql } from "drizzle-orm";
+import { conversations, NewConversation } from "@/db/schema";
+import { eq, and } from "drizzle-orm";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const characterId = searchParams.get("characterId");
+    const playerId = searchParams.get("playerId");
 
-export async function GET() {
-  const rows = await db.execute(sql/* sql */ `
-    WITH normalized AS (
-      SELECT
-        lower(character) AS n_character,
-        lower(player) AS n_player,
-        character,
-        player,
-        direction,
-        body,
-        created_at
-      FROM ${messages}
-      WHERE
-        player IS NOT NULL
-        AND length(trim(player)) >= 3
-        AND lower(player) NOT IN ('unknown','guild','party','raid','system','wim','general','comercio','trade')
-        AND player !~ '^\d+$'
-        AND body !~* '(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)'
-    )
-    SELECT
-      n_character AS character,
-      n_player AS player,
-      MAX(created_at) AS last_at,
-      (
-        SELECT body FROM normalized m2
-        WHERE m2.n_player = m.n_player AND m2.n_character = m.n_character
-        ORDER BY created_at DESC LIMIT 1
-      ) AS last_body,
-      (
-        SELECT direction FROM normalized m3
-        WHERE m3.n_player = m.n_player AND m3.n_character = m.n_character
-        ORDER BY created_at DESC LIMIT 1
-      ) AS last_direction,
-      COUNT(*) FILTER (WHERE direction = 'incoming')::int AS incoming_count,
-      COUNT(*)::int AS total_count
-    FROM normalized m
-    GROUP BY n_character, n_player
-    ORDER BY last_at DESC
-    LIMIT 500
-  `);
+    let query = db.select().from(conversations);
+    const allConvs = await query.orderBy(conversations.updatedAt);
+    return NextResponse.json(allConvs);
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || "Failed to fetch conversations" }, { status: 500 });
+  }
+}
 
-  return NextResponse.json({
-    conversations: rows.rows.map((r) => ({
-      character: (r.character as string) || "unknown",
-      player: r.player as string,
-      lastAt: r.last_at as string,
-      lastBody: r.last_body as string,
-      lastDirection: r.last_direction as "incoming" | "outgoing",
-      incomingCount: r.incoming_count as number,
-      totalCount: r.total_count as number,
-    })),
-  });
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { characterId, playerId, title, bridgeToken } = body;
+
+    if (!characterId || !playerId) {
+      return NextResponse.json({ error: "characterId and playerId are required" }, { status: 400 });
+    }
+
+    const cId = parseInt(characterId, 10);
+    const pId = parseInt(playerId, 10);
+
+    const newConv: NewConversation = {
+      characterId: cId,
+      playerId: pId,
+      title: title || "New Conversation",
+      bridgeToken: bridgeToken || "",
+    };
+
+    const [inserted] = await db.insert(conversations).values(newConv).returning();
+    return NextResponse.json(inserted, { status: 201 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || "Failed to create conversation" }, { status: 500 });
+  }
 }
