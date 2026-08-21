@@ -42,10 +42,14 @@ type Message = {
 };
 
 // Polling cadences tuned for fluidity + low server load:
-//  - incoming/notificações: 2s
-//  - lista/contas/status:   3s
-//  - conversa aberta:       1.5s
-const POLL_MS = 2000;
+//  - incoming/notificações: 2.5s
+//  - lista/contas/status:   4s
+//  - conversa aberta:       2.5s
+// This is responsive enough for chat while being substantially lighter on
+// mobile networks and serverless database reads.
+const POLL_MS = 2500;
+const TOP_POLL_MS = 4000;
+const INITIAL_CONVERSATION_LIMIT = 100;
 const ALL = "__ALL__";
 
 function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -125,6 +129,9 @@ export function ChatApp() {
   const [newPlayer, setNewPlayer] = useState("");
   const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
   const [showNotifSettings, setShowNotifSettings] = useState(false);
+  const [conversationLimit, setConversationLimit] = useState(
+    INITIAL_CONVERSATION_LIMIT,
+  );
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Only auto-scroll to the newest message when the user is already near the
@@ -237,7 +244,7 @@ export function ChatApp() {
 
   useEffect(() => {
     void refreshTop();
-    const id = setInterval(refreshTop, 3000);
+    const id = setInterval(refreshTop, TOP_POLL_MS);
     return () => clearInterval(id);
   }, [refreshTop]);
 
@@ -328,10 +335,11 @@ export function ChatApp() {
     stickToBottomRef.current = true;
     // Usar API bidirecional para mostrar conversa completa (A→B e B→A)
     void fetchBidirectionalMessages(selected.character, selected.player);
-    // Conversa aberta: 1.5s é fluido sem sobrecarregar o servidor.
+    // A lista de notificações já atualiza em paralelo; 2.5s mantém a conversa
+    // fluida sem requisitar o histórico inteiro em excesso no celular.
     const id = setInterval(
       () => void fetchBidirectionalMessages(selected.character, selected.player),
-      1500,
+      POLL_MS,
     );
     return () => clearInterval(id);
   }, [selected, fetchBidirectionalMessages]);
@@ -474,6 +482,15 @@ export function ChatApp() {
     if (characterFilter === ALL) return conversations;
     return conversations.filter((c) => sameName(c.character, characterFilter));
   }, [conversations, characterFilter]);
+
+  const visibleConversations = useMemo(
+    () => filteredConversations.slice(0, conversationLimit),
+    [filteredConversations, conversationLimit],
+  );
+
+  useEffect(() => {
+    setConversationLimit(INITIAL_CONVERSATION_LIMIT);
+  }, [characterFilter]);
 
   const totalPendingOut = useMemo(
     () => characters.reduce((s, c) => s + c.pendingOut, 0),
@@ -734,7 +751,7 @@ export function ChatApp() {
                 Aguarde um whisper ou inicie um novo acima.
               </div>
             )}
-            {filteredConversations.map((c) => {
+            {visibleConversations.map((c) => {
               const convKey = `${c.character}::${c.player}`;
               const active =
                 selected?.character === c.character && selected?.player === c.player;
@@ -745,6 +762,7 @@ export function ChatApp() {
                   onClick={() =>
                     setSelected({ character: c.character, player: c.player })
                   }
+                  style={{ contentVisibility: "auto", containIntrinsicSize: "72px" }}
                   className={`flex w-full flex-col gap-1 border-b border-slate-800/60 px-4 py-3 text-left transition ${
                     active
                       ? "bg-amber-500/10 border-l-2 border-l-amber-500"
@@ -791,7 +809,17 @@ export function ChatApp() {
                   </div>
                 </button>
               );
-            })}
+              })}
+            {filteredConversations.length > visibleConversations.length && (
+              <button
+                onClick={() =>
+                  setConversationLimit((current) => current + INITIAL_CONVERSATION_LIMIT)
+                }
+                className="m-3 w-[calc(100%-1.5rem)] rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+              >
+                Mostrar mais conversas ({filteredConversations.length - visibleConversations.length})
+              </button>
+            )}
           </div>
         </aside>
 

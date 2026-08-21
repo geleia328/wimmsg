@@ -1,24 +1,24 @@
--- WIMBridge v2.9.2 — defensive build with in-game visual feedback.
--- Registration (slash + events) happens FIRST and is wrapped so a single
--- error can never leave the addon "loaded but dead".
+-- WIMBridge v3.2.0 — OCR strip queue focused build
+-- A faixa preta/amarela é o ÚNICO alvo de OCR em tempo real.
+-- Cada janela do WoW tem sua própria fila local, então várias janelas funcionam
+-- em paralelo sem misturar compradores/personagens.
 
-WIMBRIDGE_VERSION = "2.9.2"
-
+WIMBRIDGE_VERSION = "3.2.0"
 WIMBridgeDB = WIMBridgeDB or {}
-if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = true end
-if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = true end
 if WIMBridgeDB.screenEnabled == nil then WIMBridgeDB.screenEnabled = true end
+if WIMBridgeDB.stripHeight == nil then WIMBridgeDB.stripHeight = 140 end
+if WIMBridgeDB.fontSize == nil then WIMBridgeDB.fontSize = 28 end
+-- Tempo que cada mensagem fica visível para o OCR. Aceita decimal.
+if WIMBridgeDB.stripDelay == nil then WIMBridgeDB.stripDelay = 1.6 end
+if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = false end
+if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = false end
 
 local ownName = "Unknown"
 local alive = { events = false, slash = false, whisperSeen = 0 }
-
-local function bigNotice(text)
-    -- Big yellow raid-warning text in the middle of the screen: impossible
-    -- to miss. This is the visual feedback that the addon is alive.
-    pcall(function()
-        RaidNotice_AddMessage(RaidWarningFrame, text, ChatTypeInfo["RAID_WARNING"])
-    end)
-end
+local relayFrame, relayText = nil, nil
+local relayQueue = {}
+local relayBusy = false
+local relaySeq = WIMBridgeDB.relaySeq or 0
 
 local function normalize(name)
     if not name or name == "" then return "Unknown" end
@@ -37,9 +37,141 @@ local function computeOwnName()
     if n then ownName = normalize(n) end
 end
 
--- ============================================================
--- 1) SLASH COMMANDS FIRST (so /wimbridge always works)
--- ============================================================
+local function bigNotice(text)
+    pcall(function()
+        RaidNotice_AddMessage(RaidWarningFrame, text, ChatTypeInfo["RAID_WARNING"])
+    end)
+end
+
+local function ensureChatLog()
+    pcall(function() LoggingChat(true) end)
+end
+
+local function clampMin(v, minValue, fallback)
+    v = tonumber(v) or fallback
+    if v < minValue then v = minValue end
+    return v
+end
+
+local function applyVisualSettings()
+    local h = clampMin(WIMBridgeDB.stripHeight, 30, 140)
+    local fs = clampMin(WIMBridgeDB.fontSize, 8, 28)
+    if relayFrame then relayFrame:SetHeight(h) end
+    if relayText then
+        local font = "Fonts\\FRIZQT__.TTF"
+        pcall(function()
+            local currentFont = relayText:GetFont()
+            if currentFont then font = currentFont end
+        end)
+        pcall(function() relayText:SetFont(font, fs, "OUTLINE") end)
+    end
+end
+
+local function ensureScreenFrame()
+    if relayFrame or WIMBridgeDB.screenEnabled == false then return end
+    pcall(function()
+        relayFrame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        relayFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
+        relayFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
+        relayFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
+        relayFrame:SetBackdropColor(0, 0, 0, 1.0)
+        relayFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+        relayFrame:SetFrameLevel(9999)
+
+        relayText = relayFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+        relayText:SetPoint("LEFT", relayFrame, "LEFT", 8, 0)
+        relayText:SetPoint("RIGHT", relayFrame, "RIGHT", -8, 0)
+        relayText:SetJustifyH("LEFT")
+        relayText:SetJustifyV("MIDDLE")
+        relayText:SetTextColor(1, 0.92, 0, 1)
+        relayText:SetShadowColor(0, 0, 0, 1)
+        relayText:SetShadowOffset(2, -2)
+        applyVisualSettings()
+        relayFrame:Hide()
+    end)
+end
+
+local function sanitizeForOcr(s)
+    s = tostring(s or "")
+    s = s:gsub("|c%x%x%x%x%x%x%x%x", "")
+    s = s:gsub("|r", "")
+    s = s:gsub("|H.-|h", "")
+    s = s:gsub("|h", "")
+    s = s:gsub("[\r\n]+", " ")
+    s = s:gsub("%s+", " ")
+    if #s > 180 then s = s:sub(1, 180) end
+    return s
+end
+
+local function renderStrip(item)
+    if WIMBridgeDB.screenEnabled == false then return end
+    ensureScreenFrame()
+    if not relayFrame or not relayText then return end
+
+    local label = (item.kind == "in") and "FROM" or "TO"
+    -- Formato propositalmente simples para OCR:
+    -- BW 123 FROM Gasquatro-Azralon: mensagem
+    local line = "BW " .. tostring(item.id) .. " " .. label .. " " .. sanitizeForOcr(item.other) .. ": " .. sanitizeForOcr(item.body)
+
+    pcall(function()
+        applyVisualSettings()
+        relayText:SetText(line)
+        relayFrame:Show()
+    end)
+end
+
+local function nextQueuedStrip()
+    if WIMBridgeDB.screenEnabled == false then
+        relayBusy = false
+        return
+    end
+    local item = table.remove(relayQueue, 1)
+    if not item then
+        relayBusy = false
+        if relayFrame then relayFrame:Hide() end
+        return
+    end
+    relayBusy = true
+    renderStrip(item)
+    local delay = tonumber(WIMBridgeDB.stripDelay) or 1.6
+    if delay > 20 then delay = delay / 1000 end -- permite /wimbridge delay 1500
+    if delay < 0.2 then delay = 0.2 end
+    C_Timer.NewTimer(delay, function()
+        if relayFrame then relayFrame:Hide() end
+        C_Timer.NewTimer(0.05, nextQueuedStrip)
+    end)
+end
+
+local function enqueueStrip(kind, other, body)
+    relaySeq = relaySeq + 1
+    WIMBridgeDB.relaySeq = relaySeq
+    relayQueue[#relayQueue + 1] = {
+        id = relaySeq,
+        kind = kind,
+        other = normalize(other),
+        body = body or "",
+    }
+    if not relayBusy then nextQueuedStrip() end
+end
+
+local function relay(kind, other, body)
+    computeOwnName()
+    alive.whisperSeen = alive.whisperSeen + 1
+    enqueueStrip(kind, other, body)
+
+    pcall(function()
+        if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00WIMBridge OCR: " .. (kind == "in" and "FROM " or "TO ") .. normalize(other) .. " (#" .. tostring(relaySeq) .. ")|r", 1, 1, 0)
+        end
+    end)
+
+    bigNotice("WIMBridge: " .. (kind == "in" and "recebido" or "enviado") .. " -> fila OCR")
+end
+
+local function showTest()
+    enqueueStrip("in", "Teste-Azralon", "mensagem de teste da faixa OCR")
+end
+
 pcall(function()
     SLASH_WIMBRIDGE1 = "/wimbridge"
     SLASH_WIMBRIDGE2 = "/wbw"
@@ -51,150 +183,44 @@ pcall(function()
             print("|cffffcc00WIMBridge|r own = " .. ownName)
             print("|cffffcc00WIMBridge|r eventos = " .. (alive.events and "OK" or "FALHA"))
             print("|cffffcc00WIMBridge|r whispers capturados = " .. tostring(alive.whisperSeen))
-            print("|cffffcc00WIMBridge|r voz/combat/tela = "
-                .. tostring(WIMBridgeDB.voiceEnabled ~= false) .. "/"
-                .. tostring(WIMBridgeDB.combatEnabled ~= false) .. "/"
-                .. tostring(WIMBridgeDB.screenEnabled ~= false))
+            print("|cffffcc00WIMBridge|r OCR faixa = " .. tostring(WIMBridgeDB.screenEnabled ~= false))
+            print("|cffffcc00WIMBridge|r tamanho faixa = " .. tostring(WIMBridgeDB.stripHeight or 140) .. "px")
+            print("|cffffcc00WIMBridge|r fonte faixa = " .. tostring(WIMBridgeDB.fontSize or 28) .. "px")
+            print("|cffffcc00WIMBridge|r delay OCR = " .. tostring(WIMBridgeDB.stripDelay or 1.6) .. "s")
+            print("|cffffcc00WIMBridge|r fila OCR = " .. tostring(#relayQueue) .. " pendente(s)")
         elseif cmd == "test" then
-            bigNotice("WIMBridge TESTE OK")
-            print("|cffffcc00WIMBridge|r teste: se voce leu isso, o addon esta vivo.")
-        elseif cmd == "voice" then
-            WIMBridgeDB.voiceEnabled = not (WIMBridgeDB.voiceEnabled ~= false)
-            print("|cffffcc00WIMBridge|r voz " .. ((WIMBridgeDB.voiceEnabled ~= false) and "LIGADA" or "DESLIGADA"))
-        elseif cmd == "combat" then
-            WIMBridgeDB.combatEnabled = not (WIMBridgeDB.combatEnabled ~= false)
-            print("|cffffcc00WIMBridge|r combatlog " .. ((WIMBridgeDB.combatEnabled ~= false) and "LIGADO" or "DESLIGADO"))
+            showTest()
+            print("|cffffcc00WIMBridge|r teste OCR enfileirado na faixa.")
         elseif cmd == "screen" then
             WIMBridgeDB.screenEnabled = not (WIMBridgeDB.screenEnabled ~= false)
-            print("|cffffcc00WIMBridge|r tela(OCR) " .. ((WIMBridgeDB.screenEnabled ~= false) and "LIGADA" or "DESLIGADA"))
+            print("|cffffcc00WIMBridge|r faixa OCR " .. ((WIMBridgeDB.screenEnabled ~= false) and "LIGADA" or "DESLIGADA"))
+        elseif cmd:match("^size%s+%d+") or cmd:match("^height%s+%d+") then
+            local n = tonumber(cmd:match("(%d+)")) or 140
+            n = math.max(30, n)
+            WIMBridgeDB.stripHeight = n
+            applyVisualSettings()
+            print("|cffffcc00WIMBridge|r tamanho da faixa OCR = " .. tostring(n) .. "px")
+            showTest()
+        elseif cmd:match("^font%s+%d+") or cmd:match("^fontsize%s+%d+") or cmd:match("^fonte%s+%d+") then
+            local n = tonumber(cmd:match("(%d+)")) or 28
+            n = math.max(8, n)
+            WIMBridgeDB.fontSize = n
+            applyVisualSettings()
+            print("|cffffcc00WIMBridge|r fonte da faixa OCR = " .. tostring(n) .. "px")
+            showTest()
+        elseif cmd:match("^delay%s+[%d%.]+") or cmd:match("^tempo%s+[%d%.]+") then
+            local n = tonumber(cmd:match("([%d%.]+)")) or 1.6
+            if n > 20 then n = n / 1000 end
+            if n < 0.2 then n = 0.2 end
+            WIMBridgeDB.stripDelay = n
+            print("|cffffcc00WIMBridge|r delay da faixa OCR = " .. tostring(n) .. "s")
+            showTest()
         else
-            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | voice | combat | screen")
+            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | screen | size 140 | font 32 | delay 1.6")
         end
     end
     alive.slash = true
 end)
-
--- ============================================================
--- 2) EVENT FRAME (whisper capture)
--- ============================================================
-local relayChannelName, relayChannelId = nil, nil
-local relayFrame, relayText, relayTimer = nil, nil, nil
-
-local function ensureChatLog()
-    pcall(function() LoggingChat(true) end)
-    pcall(function() LoggingCombat(true) end)
-end
-
-local function ensureRelayChannel()
-    if not WIMBridgeDB.channelSuffix then
-        pcall(function()
-            math.randomseed(time() + (UnitGUID("player") or "0"):len())
-            WIMBridgeDB.channelSuffix = tostring(math.random(100000, 999999))
-        end)
-    end
-    if not relayChannelName then
-        relayChannelName = "BW" .. (ownName:gsub("%W", "")) .. (WIMBridgeDB.channelSuffix or "1")
-    end
-    local id = GetChannelName and GetChannelName(relayChannelName)
-    if id and id > 0 then relayChannelId = id; return true end
-    pcall(function() JoinChannelByName(relayChannelName) end)
-    id = GetChannelName and GetChannelName(relayChannelName)
-    if id and id > 0 then relayChannelId = id; return true end
-    return false
-end
-
-local function ensureScreenFrame()
-    if relayFrame or WIMBridgeDB.screenEnabled == false then return end
-    pcall(function()
-        relayFrame = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-        relayFrame:SetSize(1000, 30)
-        relayFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 2, -2)
-        relayFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background" })
-        relayFrame:SetBackdropColor(0, 0, 0, 0.95)
-        relayFrame:SetFrameStrata("FULLSCREEN_DIALOG")
-        relayText = relayFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-        relayText:SetPoint("LEFT", relayFrame, "LEFT", 6, 0)
-        relayText:SetWidth(990)
-        relayText:SetJustifyH("LEFT")
-        relayText:SetTextColor(1, 1, 0)
-        relayFrame:Hide()
-    end)
-end
-
-local function showScreen(text)
-    if WIMBridgeDB.screenEnabled == false then return end
-    ensureScreenFrame()
-    if not relayFrame then return end
-    pcall(function()
-        relayText:SetText(text)
-        relayFrame:Show()
-        if relayTimer then relayTimer:Cancel() end
-        relayTimer = C_Timer.NewTimer(6, function() if relayFrame then relayFrame:Hide() end end)
-    end)
-end
-
-local NATO = {
-    A="Alpha",B="Bravo",C="Charlie",D="Delta",E="Echo",F="Foxtrot",G="Golf",
-    H="Hotel",I="India",J="Juliet",K="Kilo",L="Lima",M="Mike",N="November",
-    O="Oscar",P="Papa",Q="Quebec",R="Romeo",S="Sierra",T="Tango",U="Uniform",
-    V="Victor",W="Whiskey",X="Xray",Y="Yankee",Z="Zulu",
-    ["0"]="Zero",["1"]="One",["2"]="Two",["3"]="Three",["4"]="Four",
-    ["5"]="Five",["6"]="Six",["7"]="Seven",["8"]="Eight",["9"]="Niner",["-"]="Dash",
-}
-local function natoSpell(s)
-    local out = {}
-    for ch in (s or ""):gmatch(".") do
-        local w = NATO[ch:upper()]
-        if w then out[#out + 1] = w end
-    end
-    return table.concat(out, ". ")
-end
-
-local function speak(text)
-    if WIMBridgeDB.voiceEnabled == false then return end
-    pcall(function()
-        if C_VoiceChat and C_VoiceChat.SpeakText then
-            local voices = C_VoiceChat.GetTtsVoices and C_VoiceChat.GetTtsVoices()
-            local vid = voices and voices[1] and voices[1].voiceID or 0
-            C_VoiceChat.SpeakText(vid, text)
-        end
-    end)
-end
-
-local function relay(kind, other, body)
-    alive.whisperSeen = alive.whisperSeen + 1
-    local line = string.format("WIMRELAY<OWN:%s><%s:%s><TS:%d>%s",
-        ownName, kind == "in" and "FROM" or "TO", other, time(), body or "")
-    -- visible echo (helps debugging in default chat)
-    pcall(function()
-        if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00" .. line .. "|r", 1, 1, 0)
-        end
-    end)
-    -- channel relay (chatlog)
-    pcall(function()
-        if ensureRelayChannel() and relayChannelId then
-            local p = line
-            if #p > 250 then p = p:sub(1, 250) end
-            SendChatMessage(p, "CHANNEL", nil, relayChannelId)
-        end
-    end)
-    -- combatlog relay (emote) — flushes fast
-    if WIMBridgeDB.combatEnabled ~= false then
-        pcall(function()
-            local p = line
-            if #p > 250 then p = p:sub(1, 250) end
-            SendChatMessage(p, "EMOTE")
-        end)
-    end
-    -- screen relay (OCR)
-    showScreen(line)
-    -- voice relay (loopback/mic)
-    speak(string.format("Wimbridge. Own %s. %s %s. Message %s. Endbridge.",
-        natoSpell(ownName), kind == "in" and "From" or "To", natoSpell(other), body or ""))
-    -- feedback visual: small raid notice per captured whisper
-    bigNotice("WIMBridge: " .. (kind == "in" and "recebido" or "enviado") .. " -> site")
-end
 
 pcall(function()
     local f = CreateFrame("Frame")
@@ -208,6 +234,7 @@ pcall(function()
         if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
             computeOwnName()
             ensureChatLog()
+            ensureScreenFrame()
             alive.events = true
             bigNotice("WIMBridge " .. WIMBRIDGE_VERSION .. " ATIVO")
             return
@@ -215,12 +242,13 @@ pcall(function()
         if ownName == "Unknown" then computeOwnName() end
         ensureChatLog()
         if event == "CHAT_MSG_WHISPER" or event == "CHAT_MSG_BN_WHISPER" then
-            relay("in", normalize(target), msg or "")
+            relay("in", target, msg or "")
         elseif event == "CHAT_MSG_WHISPER_INFORM" or event == "CHAT_MSG_BN_WHISPER_INFORM" then
-            relay("out", normalize(target), msg or "")
+            relay("out", target, msg or "")
         end
     end)
     alive.events = true
 end)
 
 print("|cffffcc00WIMBridge|r v" .. WIMBRIDGE_VERSION .. " carregado. Digite /wimbridge who para confirmar.")
+

@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 .npm-cache/
+public/downloads/BakersWhisper.exe
+public/downloads/WIMBridge-v3.2.0.zip
+public/downloads/__pycache__/
 .build-venv/
 .pip-cache/
 work/

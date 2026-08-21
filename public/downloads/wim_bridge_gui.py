@@ -1864,6 +1864,12 @@ class BridgeEngine:
         errs = 0
         first_ok = False
         seen_strip_ids: set[str] = set()
+        # OCR is expensive when several WoW windows are open. Keep a tiny
+        # grayscale fingerprint of the relay strip and skip recognition while
+        # the pixels are unchanged. A periodic rescan still recovers from an
+        # occasional OCR failure without continuously burning CPU.
+        last_frame_fingerprint: Optional[bytes] = None
+        last_ocr_at = 0.0
         self.log(f"📷 OCR engine iniciado para {ref.character} (faixa relay).")
         with mss.mss() as sct:
             while not self.stop_event.is_set():
@@ -1892,6 +1898,16 @@ class BridgeEngine:
                     }
                     shot = sct.grab(region)
                     pil = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    now = time.time()
+                    fingerprint = pil.resize((48, 8)).convert("L").tobytes()
+                    if (
+                        fingerprint == last_frame_fingerprint
+                        and now - last_ocr_at < 4.0
+                    ):
+                        time.sleep(0.7)
+                        continue
+                    last_frame_fingerprint = fingerprint
+                    last_ocr_at = now
                     text = winocr_pil_text(pil, "en-US")
                     if not first_ok and text.strip():
                         first_ok = True
@@ -1910,8 +1926,11 @@ class BridgeEngine:
                 if not parsed:
                     upper_relay = relay_text.upper()
                     has_relay_marker = "WIMRELAY" in upper_relay or "BWRELAY" in upper_relay
-                    has_relay_tags = "OWN" in upper_relay and ("FROM" in upper_relay or "TO" in upper_relay)
-                    if not has_relay_marker and not has_relay_tags:
+                    # Do not fall back to loose chat parsing from screen OCR:
+                    # normal UI text can look like a whisper and create false
+                    # conversations. The fallback is accepted only for the
+                    # explicit addon relay marker.
+                    if not has_relay_marker:
                         time.sleep(1.2)
                         continue
                     parsed = parse_whisper(relay_text, ref.character)
@@ -1937,7 +1956,20 @@ class BridgeEngine:
                     time.sleep(1.2)
                     continue
 
-                own = ref.character or self._canonical_char(own_raw) or own_raw
+                parsed_own = self._canonical_char(own_raw) or own_raw
+                if (
+                    parsed_own
+                    and ref.character
+                    and parsed_own.strip().lower() != ref.character.strip().lower()
+                ):
+                    # A relay read from another window must never be assigned
+                    # to this one, even if the OCR happened to read its text.
+                    self.log(
+                        f"📷 OCR ignorado: OWN {parsed_own!r} não pertence a {ref.character!r}."
+                    )
+                    time.sleep(1.2)
+                    continue
+                own = ref.character or parsed_own
                 if not own or not other or not body:
                     time.sleep(1.2)
                     continue
@@ -3051,4 +3083,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -17,10 +17,10 @@ export default function DownloadPage() {
             configure a URL do site e o token dentro do programa.
           </p>
           <a
-            href="/api/download/BakersWhisper.exe"
+            href="/downloads/WhisperRelay.exe"
             className="inline-block rounded bg-emerald-500 px-5 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400"
           >
-            ⬇ Baixar BakersWhisper.exe
+            ⬇ Baixar WhisperRelay.exe
           </a>
           <p className="mt-3 text-xs text-slate-500">
             Windows 10 ou 11. O Windows Defender pode pedir confirmação porque
@@ -28,15 +28,16 @@ export default function DownloadPage() {
           </p>
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-6">
-          <h2 className="mb-2 text-lg font-bold text-amber-400">WIMBridge Addon (WoW)</h2>
+          <h2 className="mb-2 text-lg font-bold text-amber-400">WIMBridge Addon v3.2.0 (WoW)</h2>
           <p className="mb-3 text-sm text-slate-300">
-            Addon Lua para World of Warcraft que relays whispers para o bridge Python.
+            Fila de faixas OCR por janela: evita misturar mensagens quando vários
+            whispers chegam ao mesmo tempo.
           </p>
           <a
-            href="/downloads/WIMBridge.zip"
+            href="/downloads/WIMBridge-v3.2.0-r1.zip"
             className="inline-block rounded bg-amber-600 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-500"
           >
-            ⬇ Baixar WIMBridge.zip
+            ⬇ Baixar WIMBridge-v3.2.0.zip
           </a>
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-800/50 p-6">

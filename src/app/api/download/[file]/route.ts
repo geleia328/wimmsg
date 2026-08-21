@@ -6,8 +6,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const KNOWN: Record<string, string> = {
-  "BakersWhisper.exe":
-    "https://github.com/geleia328/wimmsg/releases/latest/download/BakersWhisper.exe",
   "wim_bridge_gui.py":
     "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/wim_bridge_gui.py",
   "whisper_announcer.py":
@@ -23,7 +21,6 @@ const KNOWN: Record<string, string> = {
 };
 
 const CONTENT_TYPES: Record<string, string> = {
-  ".exe": "application/vnd.microsoft.portable-executable",
   ".py": "text/x-python; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
   ".ini": "text/plain; charset=utf-8",

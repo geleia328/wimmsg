@@ -60,7 +60,7 @@ jobs:
         shell: pwsh
         run: |
           $pyargs = @(
-            "--onefile", "--noconsole", "--name", "BakersWhisper",
+            "--onefile", "--noconsole", "--name", "WhisperRelay",
             "--collect-submodules", "pyautogui",
             "--collect-submodules", "pydirectinput",
             "--collect-submodules", "psutil",
@@ -91,15 +91,15 @@ jobs:
       - name: Verify OCR imports in build env
         shell: pwsh
         run: |
-          if (!(Test-Path dist/BakersWhisper.exe)) { throw "Executable not found" }
-          Write-Host "✅ Build successful: dist/BakersWhisper.exe"
-          Get-Item dist/BakersWhisper.exe | Format-List FullName,Length
+          if (!(Test-Path dist/WhisperRelay.exe)) { throw "Executable not found" }
+          Write-Host "✅ Build successful: dist/WhisperRelay.exe"
+          Get-Item dist/WhisperRelay.exe | Format-List FullName,Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BakersWhisper-Windows
-          path: dist/BakersWhisper.exe
+          name: WhisperRelay-Windows
+          path: dist/WhisperRelay.exe
           retention-days: 30
           if-no-files-found: error
 
@@ -107,7 +107,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/BakersWhisper.exe
+          files: dist/WhisperRelay.exe
           name: Bakers Whisper ${{ github.ref_name }}
           body: |
             Build com OCR principal corrigido: winocr + PyWinRT empacotados no .exe.
