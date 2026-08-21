@@ -24,7 +24,7 @@ from __future__ import annotations
 API_URL = "https://wimmsg-lntm.vercel.app"
 BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"
 APP_NAME = "Bakers Whisper"
-APP_VERSION = "1.4.8"
+APP_VERSION = "1.4.9"
 # =============================================================================
 
 import hashlib
@@ -2247,7 +2247,15 @@ class BridgeEngine:
                 time.sleep(3)
                 continue
 
-            desired = {s["character"]: s for s in states}
+            # The site uses lowercase database keys while character names in
+            # the Windows scan preserve the casing from WoW. Always reconcile
+            # by a canonical key, otherwise one account can get duplicated
+            # and a configured GSE row may never find its window.
+            desired = {
+                (str(s.get("character") or "").strip().casefold()): s
+                for s in states
+                if str(s.get("character") or "").strip()
+            }
             controls = self._get_controls()
             if not controls.get("gseMasterEnabled", False):
                 self._stop_all_spammers("master GSE OFF")
@@ -2278,7 +2286,7 @@ class BridgeEngine:
                         # Character configured on site but not present locally
                         continue
                     spam = GseSpammer(
-                        character=name,
+                        character=ref.character,
                         hwnd=ref.hwnd,
                         keybind=d.get("keybind", "1"),
                         interval_ms=int(d.get("intervalMs", 100)),
@@ -2928,9 +2936,14 @@ class App:
         if not chars:
             messagebox.showwarning(
                 APP_NAME,
-                "Nenhum personagem configurado.\n\nDigite o nome do personagem "
-                "ao lado de cada janela detectada (ex. Aragorn-Nemesis) e "
-                "clique em ▶ Iniciar de novo.",
+                "Nenhum personagem foi mapeado.\n\nO bridge não inicia o "
+                "leitor de whispers sem esse mapeamento: digite o nome exato "
+                "(Personagem-Reino) ao lado de cada janela detectada e clique "
+                "em ▶ Iniciar de novo.",
+            )
+            self._log(
+                "⚠ Bridge não iniciado: mapeie cada janela com "
+                "Personagem-Reino antes de clicar em Iniciar."
             )
             return
 

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { gseState } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,7 +69,7 @@ export async function POST(
   }
   if (typeof payload.intervalMs === "number") {
     set.intervalMs = String(
-      Math.max(10, Math.min(2000, Math.floor(payload.intervalMs))),
+      Math.max(50, Math.min(60000, Math.floor(payload.intervalMs))),
     );
   }
 
@@ -97,4 +97,24 @@ export async function POST(
     });
 
   return NextResponse.json({ ok: true, character: target, ...payload });
+}
+
+// A character can be present only in the bridge's live-window list, without a
+// saved GSE row yet. Deleting that entry is still a successful no-op: it keeps
+// the UI resilient and avoids showing a false "failed to remove" message.
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ character: string }> },
+) {
+  const { character } = await params;
+  const target = decodeURIComponent(character).trim().toLowerCase();
+  if (!target) {
+    return NextResponse.json({ error: "invalid_character" }, { status: 400 });
+  }
+
+  await db
+    .delete(gseState)
+    .where(sql`lower(${gseState.character}) = ${target}`);
+
+  return NextResponse.json({ ok: true, character: target });
 }

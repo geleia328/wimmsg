@@ -41,9 +41,11 @@ export async function POST(request: NextRequest) {
 
   if (payload.characters && payload.characters.length > 0) {
     for (const c of payload.characters) {
+      const character = c.trim().toLowerCase();
+      if (!character) continue;
       await db
         .insert(gseState)
-        .values({ character: c, running: target })
+        .values({ character, running: target })
         .onConflictDoUpdate({
           target: gseState.character,
           set: { running: target, updatedAt: new Date() },

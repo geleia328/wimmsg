@@ -38,6 +38,7 @@ type Controls = {
 };
 
 const POLL_MS = 2000;
+const characterKey = (character: string) => character.trim().toLowerCase();
 
 export function GseView() {
   const [windows, setWindows] = useState<WindowStatus[]>([]);
@@ -87,7 +88,7 @@ export function GseView() {
       setWindows((w as { windows: WindowStatus[] }).windows ?? []);
       const map: Record<string, GseRow> = {};
       for (const s of (g as { states: GseRow[] }).states ?? []) {
-        map[s.character] = s;
+        map[characterKey(s.character)] = s;
       }
       // Merge server states but KEEP local unsaved edits (dirty characters)
       // so the 2s polling never overwrites what the user is typing.
@@ -124,14 +125,21 @@ export function GseView() {
   }, [refresh]);
 
   const characters = useMemo(() => {
-    const set = new Set<string>();
-    for (const w of windows) if (w.character) set.add(w.character);
-    for (const c of Object.keys(states)) set.add(c);
-    return Array.from(set).sort();
+    // The API stores character keys in lowercase while Windows keeps the
+    // in-game casing. Deduplicate by key but retain the pleasant game casing.
+    const names = new Map<string, string>();
+    for (const w of windows) {
+      if (w.character) names.set(characterKey(w.character), w.character);
+    }
+    for (const s of Object.values(states)) {
+      const key = characterKey(s.character);
+      if (!names.has(key)) names.set(key, s.character);
+    }
+    return Array.from(names.values()).sort((a, b) => a.localeCompare(b));
   }, [windows, states]);
 
   const runningCount = useMemo(
-    () => characters.filter((c) => states[c]?.running).length,
+    () => characters.filter((c) => states[characterKey(c)]?.running).length,
     [characters, states],
   );
 
@@ -161,8 +169,9 @@ export function GseView() {
     setSavingChars(true);
     try {
       for (const c of characters) {
-        if (!charDirtyRef.current[c]) continue;
-        const st = states[c];
+        const key = characterKey(c);
+        if (!charDirtyRef.current[key]) continue;
+        const st = states[key];
         if (!st) continue;
         const res = await fetch(`/api/gse/${encodeURIComponent(c)}`, {
           method: "POST",
@@ -207,7 +216,7 @@ export function GseView() {
         }
         // Drop any pending local edits for this character before resyncing.
         const nd = { ...charDirtyRef.current };
-        delete nd[character];
+        delete nd[characterKey(character)];
         charDirtyRef.current = nd;
         setCharDirty(nd);
         await refresh();
@@ -308,8 +317,8 @@ export function GseView() {
   ) {
     setStates((s) => ({
       ...s,
-      [character]: {
-        ...(s[character] ?? {
+      [characterKey(character)]: {
+        ...(s[characterKey(character)] ?? {
           character,
           running: false,
           keybind: "1",
@@ -319,8 +328,9 @@ export function GseView() {
         [field]: field === "intervalMs" ? Number(value) : value,
       },
     }));
-    charDirtyRef.current = { ...charDirtyRef.current, [character]: true };
-    setCharDirty((d) => ({ ...d, [character]: true }));
+    const key = characterKey(character);
+    charDirtyRef.current = { ...charDirtyRef.current, [key]: true };
+    setCharDirty((d) => ({ ...d, [key]: true }));
   }
 
   return (
@@ -759,15 +769,18 @@ export function GseView() {
                 </tr>
               )}
               {characters.map((c) => {
-                const win = windows.find((w) => w.character === c);
-                const state = states[c] ?? {
+                const key = characterKey(c);
+                const win = windows.find(
+                  (w) => characterKey(w.character) === key,
+                );
+                const state = states[key] ?? {
                   character: c,
                   running: false,
                   keybind: "1",
                   intervalMs: 100,
                   updatedAt: new Date().toISOString(),
                 };
-                const dirty = charDirty[c];
+                const dirty = charDirty[key];
                 return (
                   <tr key={c} className="border-t border-slate-800/60">
                     <td className="px-4 py-3 font-mono text-sm text-emerald-300">
