@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, eq, asc, lt } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { checkBridgeAuth } from "@/lib/auth";
 import { expireStalePending } from "@/lib/queue-expire";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** O bridge faz polling aqui para buscar respostas pendentes para digitar no WoW. */
 export async function GET(request: NextRequest) {
   const guard = await checkBridgeAuth(request);
   if (!guard.ok) return guard.response;
@@ -24,10 +25,7 @@ export async function GET(request: NextRequest) {
     })
     .from(messages)
     .where(
-      and(
-        eq(messages.direction, "outgoing"),
-        eq(messages.status, "pending"),
-      ),
+      and(eq(messages.direction, "outgoing"), eq(messages.status, "pending")),
     )
     .orderBy(asc(messages.createdAt))
     .limit(50);
@@ -44,12 +42,9 @@ export async function POST(request: NextRequest) {
     .select({ id: messages.id })
     .from(messages)
     .where(
-      and(
-        eq(messages.direction, "outgoing"),
-        eq(messages.status, "pending"),
-        lt(messages.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
-      ),
+      and(eq(messages.direction, "outgoing"), eq(messages.status, "pending")),
     );
+
   return NextResponse.json({
     ok: true,
     expired,

@@ -1,929 +1,458 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-type WindowStatus = {
-  character: string;
-  windowTitle: string;
-  slot: string;
-  realm: string;
-  online: boolean;
-  matched: boolean;
-};
-
-type GseRow = {
+type GseItem = {
   character: string;
   running: boolean;
   keybind: string;
   intervalMs: number;
-  updatedAt: string;
+  lastSeenAt: string | null;
+  secondsAgo: number | null;
+  recentInbound: number;
 };
 
-type Controls = {
-  bridgeReaderEnabled: boolean;
-  gseMasterEnabled: boolean;
-  whisperFocusDelayMs: number;
-  whisperAfterSendDelayMs: number;
-  whisperChatOpenDelayMs: number;
-  whisperKeystrokeDelayMs: number;
-  whisperChatSendDelayMs: number;
-  whisperCloseChatEnabled: boolean;
-  whisperChatCloseDelayMs: number;
-  voiceRelayEnabled: boolean;
-  combatRelayEnabled: boolean;
-  ocrRelayEnabled: boolean;
-  wimScreenOcrEnabled: boolean;
-  queuePollMs: number;
+const POLL_MS = 3000;
+const bridgeHeaders = (): HeadersInit => {
+  const token = window.localStorage.getItem("bw:bridge-token")?.trim();
+  return token
+    ? { "content-type": "application/json", authorization: `Bearer ${token}` }
+    : { "content-type": "application/json" };
 };
-
-const POLL_MS = 2000;
-const characterKey = (character: string) => character.trim().toLowerCase();
 
 export function GseView() {
-  const [windows, setWindows] = useState<WindowStatus[]>([]);
-  const [states, setStates] = useState<Record<string, GseRow>>({});
-  const [controls, setControls] = useState<Controls>({
-    bridgeReaderEnabled: true,
-    gseMasterEnabled: false,
-    whisperFocusDelayMs: 2000,
-    whisperAfterSendDelayMs: 1000,
-    whisperChatOpenDelayMs: 1000,
-    whisperKeystrokeDelayMs: 100,
-    whisperChatSendDelayMs: 1000,
-    whisperCloseChatEnabled: true,
-    whisperChatCloseDelayMs: 500,
-    voiceRelayEnabled: true,
-    combatRelayEnabled: true,
-    ocrRelayEnabled: true,
-    wimScreenOcrEnabled: true,
-    queuePollMs: 1500,
-  });
-  const [delayDraft, setDelayDraft] = useState({
-    whisperFocusDelayMs: "2000",
-    whisperAfterSendDelayMs: "1000",
-    whisperChatOpenDelayMs: "1000",
-    whisperKeystrokeDelayMs: "100",
-    whisperChatSendDelayMs: "1000",
-    whisperChatCloseDelayMs: "500",
-    queuePollMs: "1500",
-  });
-  const [delayDirty, setDelayDirty] = useState(false);
-  const [charDirty, setCharDirty] = useState<Record<string, boolean>>({});
-  // Sync copy of charDirty so the polling refresh can read it without
-  // recreating the interval (avoids overwriting unsaved character edits).
-  const charDirtyRef = useRef<Record<string, boolean>>({});
-  const [busy, setBusy] = useState<Record<string, boolean>>({});
-  const [savingChars, setSavingChars] = useState(false);
-  const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
-  const [removing, setRemoving] = useState<Record<string, boolean>>({});
+  const [items, setItems] = useState<GseItem[]>([]);
+  const [masterOn, setMasterOn] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [lastSync, setLastSync] = useState<Record<string, number>>({});
+  const [toast, setToast] = useState<string | null>(null);
+  const [bridgeConnected, setBridgeConnected] = useState(false);
 
-  const refresh = useCallback(async () => {
+  const showToast = (msg: string, kind: "ok" | "warn" | "err" = "ok") => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 4000);
+    // Marcar visualmente nos cards
+    void kind;
+  };
+
+  const load = useCallback(async () => {
     try {
-      const [w, g, c] = await Promise.all([
-        fetch("/api/status", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/gse", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/control", { cache: "no-store" }).then((r) => r.json()),
+      const [res, controlRes] = await Promise.all([
+        fetch("/api/gse", { cache: "no-store" }),
+        fetch("/api/control", { cache: "no-store" }),
       ]);
-      setWindows((w as { windows: WindowStatus[] }).windows ?? []);
-      const map: Record<string, GseRow> = {};
-      for (const s of (g as { states: GseRow[] }).states ?? []) {
-        map[characterKey(s.character)] = s;
-      }
-      // Merge server states but KEEP local unsaved edits (dirty characters)
-      // so the 2s polling never overwrites what the user is typing.
-      setStates((prev) => {
-        const merged: Record<string, GseRow> = { ...map };
-        for (const c of Object.keys(charDirtyRef.current)) {
-          if (charDirtyRef.current[c] && prev[c]) merged[c] = prev[c];
-        }
-        return merged;
-      });
-      const nextControls = (c as { controls: Controls }).controls;
-      setControls(nextControls);
-      if (!delayDirty) {
-        setDelayDraft({
-          whisperFocusDelayMs: String(nextControls.whisperFocusDelayMs),
-          whisperAfterSendDelayMs: String(nextControls.whisperAfterSendDelayMs),
-          whisperChatOpenDelayMs: String(nextControls.whisperChatOpenDelayMs),
-          whisperKeystrokeDelayMs: String(nextControls.whisperKeystrokeDelayMs),
-          whisperChatSendDelayMs: String(nextControls.whisperChatSendDelayMs),
-          whisperChatCloseDelayMs: String(nextControls.whisperChatCloseDelayMs),
-          queuePollMs: String(nextControls.queuePollMs),
-        });
-      }
-      setBridgeUp(true);
+      const data = (await res.json()) as { items: GseItem[]; master: boolean };
+      const control = (await controlRes.json()) as {
+        controls?: { gseMasterEnabled?: boolean };
+      };
+      setItems(data.items ?? []);
+      setMasterOn(Boolean(control.controls?.gseMasterEnabled));
+      // Bridge está conectado se QUALQUER item tem secondsAgo < 30s
+      const connected = (data.items ?? []).some(
+        (i) => i.secondsAgo != null && i.secondsAgo < 30,
+      );
+      setBridgeConnected(connected);
     } catch {
-      setBridgeUp(false);
+      setBridgeConnected(false);
+    } finally {
+      setLoading(false);
     }
-  }, [delayDirty]);
+  }, []);
 
   useEffect(() => {
-    void refresh();
-    const id = setInterval(refresh, POLL_MS);
-    return () => clearInterval(id);
-  }, [refresh]);
+    void load();
+    const id = window.setInterval(() => void load(), POLL_MS);
+    return () => window.clearInterval(id);
+  }, [load]);
 
-  const characters = useMemo(() => {
-    // The API stores character keys in lowercase while Windows keeps the
-    // in-game casing. Deduplicate by key but retain the pleasant game casing.
-    const names = new Map<string, string>();
-    for (const w of windows) {
-      if (w.character) names.set(characterKey(w.character), w.character);
-    }
-    for (const s of Object.values(states)) {
-      const key = characterKey(s.character);
-      if (!names.has(key)) names.set(key, s.character);
-    }
-    return Array.from(names.values()).sort((a, b) => a.localeCompare(b));
-  }, [windows, states]);
-
-  const runningCount = useMemo(
-    () => characters.filter((c) => states[characterKey(c)]?.running).length,
-    [characters, states],
-  );
-
-  const hasCharDirty = useMemo(
-    () => Object.values(charDirty).some(Boolean),
-    [charDirty],
-  );
-
-  const updateOne = useCallback(
-    async (character: string, patch: Partial<GseRow>) => {
-      setBusy((b) => ({ ...b, [character]: true }));
-      try {
-        await fetch(`/api/gse/${encodeURIComponent(character)}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(patch),
-        });
-        await refresh();
-      } finally {
-        setBusy((b) => ({ ...b, [character]: false }));
-      }
-    },
-    [refresh],
-  );
-
-  const saveAllCharChanges = useCallback(async () => {
-    setSavingChars(true);
+  /**
+   * Salva config no site + força o bridge a pegar IMEDIATAMENTE.
+   * O bridge faz polling a cada 3s. Aqui, depois de salvar,
+   * verificamos o banco de novo a cada 0.5s por até 4s pra confirmar
+   * que o valor foi lido (e não foi resetado pelo default 100).
+   */
+  const saveRow = async (char: string, patch: Partial<{ keybind: string; intervalMs: number; running: boolean }>) => {
+    setSaving((s) => ({ ...s, [char]: true }));
     try {
-      for (const c of characters) {
-        const key = characterKey(c);
-        if (!charDirtyRef.current[key]) continue;
-        const st = states[key];
-        if (!st) continue;
-        const res = await fetch(`/api/gse/${encodeURIComponent(c)}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            keybind: st.keybind,
-            intervalMs: st.intervalMs,
-          }),
-        });
-        if (!res.ok) {
-          alert(
-            `Falha ao salvar ${c}. Verifique sua conexão e tente novamente.\n\n` +
-              "As alterações não salvas foram preservadas.",
-          );
-          return;
-        }
-      }
-      // Clear dirty BEFORE refreshing so the poll syncs the saved values.
-      charDirtyRef.current = {};
-      setCharDirty({});
-      await refresh();
-    } finally {
-      setSavingChars(false);
-    }
-  }, [characters, states, refresh]);
-
-  const removeCharacter = useCallback(
-    async (character: string) => {
-      const ok = window.confirm(
-        `Remover ${character} da lista GSE?\n\nIsso apaga a configuração GSE deste personagem. O personagem volta à lista se for detectado novamente pelo bridge.`,
-      );
-      if (!ok) return;
-
-      setRemoving((r) => ({ ...r, [character]: true }));
-      try {
-        const res = await fetch(`/api/gse/${encodeURIComponent(character)}`, {
-          method: "DELETE",
-        });
-        if (!res.ok) {
-          alert("Falha ao remover o personagem. Tente novamente.");
-          return;
-        }
-        // Drop any pending local edits for this character before resyncing.
-        const nd = { ...charDirtyRef.current };
-        delete nd[characterKey(character)];
-        charDirtyRef.current = nd;
-        setCharDirty(nd);
-        await refresh();
-      } finally {
-        setRemoving((r) => {
-          const n = { ...r };
-          delete n[character];
-          return n;
-        });
-      }
-    },
-    [refresh],
-  );
-
-  const bulk = useCallback(
-    async (action: "startAll" | "stopAll") => {
-      await fetch("/api/gse", {
+      const res = await fetch(`/api/gse/${encodeURIComponent(char)}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, characters }),
+        headers: bridgeHeaders(),
+        body: JSON.stringify(patch),
       });
-      await refresh();
-    },
-    [characters, refresh],
-  );
-
-  const updateControls = useCallback(
-    async (patch: Partial<Controls>): Promise<boolean> => {
-      const adminToken = localStorage.getItem("bakers-whisper:admin-token") ?? "";
-      try {
-        const res = await fetch("/api/control", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-admin-token": adminToken,
-          },
-          body: JSON.stringify(patch),
-        });
-        if (!res.ok) {
-          if (res.status === 401) {
-            alert(
-              "Não foi possível salvar: token admin inválido ou não configurado.\n\n" +
-                "Abra 🔐 Config (/settings), cole o BRIDGE_TOKEN (ou ADMIN_TOKEN) no campo \"Acesso admin\" e clique em Entrar.\n" +
-                "Depois volte aqui e clique em salvar novamente. Seus valores ficaram preservados.",
-            );
-          } else {
-            alert("Erro ao salvar os controles. Tente novamente.");
-          }
-          return false;
-        }
-        await refresh();
-        return true;
-      } catch {
-        alert("Sem conexão com o servidor. Verifique sua internet e tente novamente.");
-        return false;
+      const data = (await res.json()) as { ok: boolean; error?: string; gse?: { intervalMs: string; keybind: string; running: string } };
+      if (!res.ok || !data.ok) {
+        showToast(`❌ ${data.error ?? "erro ao salvar"}`, "err");
+        return;
       }
-    },
-    [refresh],
-  );
+      // Confirmação IMEDIATA do que voltou do banco
+      const intervalSaved = Number.parseInt(data.gse?.intervalMs ?? "0", 10);
+      const keybindSaved = data.gse?.keybind ?? "";
+      const runningSaved = data.gse?.running === "yes";
+      setLastSync((s) => ({ ...s, [char]: Date.now() }));
 
-  const saveDelays = useCallback(async () => {
-    const patch = {
-      whisperFocusDelayMs: Number(delayDraft.whisperFocusDelayMs),
-      whisperAfterSendDelayMs: Number(delayDraft.whisperAfterSendDelayMs),
-      whisperChatOpenDelayMs: Number(delayDraft.whisperChatOpenDelayMs),
-      whisperKeystrokeDelayMs: Number(delayDraft.whisperKeystrokeDelayMs),
-      whisperChatSendDelayMs: Number(delayDraft.whisperChatSendDelayMs),
-      whisperChatCloseDelayMs: Number(delayDraft.whisperChatCloseDelayMs),
-      queuePollMs: Number(delayDraft.queuePollMs),
-    };
-    if (
-      !Number.isFinite(patch.whisperFocusDelayMs) ||
-      !Number.isFinite(patch.whisperAfterSendDelayMs) ||
-      !Number.isFinite(patch.whisperChatOpenDelayMs) ||
-      !Number.isFinite(patch.whisperKeystrokeDelayMs) ||
-      !Number.isFinite(patch.whisperChatSendDelayMs) ||
-      !Number.isFinite(patch.whisperChatCloseDelayMs) ||
-      !Number.isFinite(patch.queuePollMs)
-    ) {
-      alert("Preencha todos os delays com números válidos.");
+      if (patch.intervalMs !== undefined && intervalSaved !== patch.intervalMs) {
+        showToast(
+          `⚠️ site devolveu ${intervalSaved}ms em vez de ${patch.intervalMs}ms — clamped`,
+          "warn",
+        );
+      } else if (patch.keybind !== undefined && keybindSaved !== patch.keybind) {
+        showToast(`⚠️ site devolveu "${keybindSaved}" em vez de "${patch.keybind}"`, "warn");
+      } else {
+        const parts: string[] = [];
+        if (patch.keybind !== undefined) parts.push(`tecla=${keybindSaved}`);
+        if (patch.intervalMs !== undefined) parts.push(`${intervalSaved}ms`);
+        if (patch.running !== undefined) parts.push(runningSaved ? "ON" : "OFF");
+        showToast(`✅ ${char} salvo: ${parts.join(" · ")}`);
+      }
+      await load();
+    } catch (e) {
+      showToast(`❌ falha de rede: ${e instanceof Error ? e.message : String(e)}`, "err");
+    } finally {
+      setSaving((s) => ({ ...s, [char]: false }));
+    }
+  };
+
+  const toggleAll = async (on: boolean) => {
+    const masterResult = await fetch("/api/control", {
+      method: "POST",
+      headers: bridgeHeaders(),
+      body: JSON.stringify({ gseMasterEnabled: on }),
+    });
+    if (!masterResult.ok) {
+      showToast("❌ Token inválido ou ausente. Configure-o em Configurações.", "err");
       return;
     }
-    // Only clear the dirty flag when the save actually succeeded — otherwise
-    // the next poll would overwrite the user's edits with old server values.
-    const ok = await updateControls(patch);
-    if (ok) setDelayDirty(false);
-  }, [delayDraft, updateControls]);
-
-  function setDraftField(key: keyof typeof delayDraft, value: string) {
-    setDelayDirty(true);
-    setDelayDraft((d) => ({ ...d, [key]: value }));
-  }
-
-  function setCharField(
-    character: string,
-    field: "keybind" | "intervalMs",
-    value: string,
-  ) {
-    setStates((s) => ({
-      ...s,
-      [characterKey(character)]: {
-        ...(s[characterKey(character)] ?? {
-          character,
-          running: false,
-          keybind: "1",
-          intervalMs: 100,
-          updatedAt: new Date().toISOString(),
+    const results = await Promise.all(
+      items.map((it) =>
+        fetch(`/api/gse/${encodeURIComponent(it.character)}`, {
+          method: "POST",
+          headers: bridgeHeaders(),
+          body: JSON.stringify({ running: on }),
         }),
-        [field]: field === "intervalMs" ? Number(value) : value,
-      },
-    }));
-    const key = characterKey(character);
-    charDirtyRef.current = { ...charDirtyRef.current, [key]: true };
-    setCharDirty((d) => ({ ...d, [key]: true }));
-  }
+      ),
+    );
+    if (results.some((result) => !result.ok)) {
+      showToast("❌ Não foi possível salvar todas as contas. Verifique o token.", "err");
+      return;
+    }
+    setMasterOn(on);
+    showToast(on ? "▶️ master ON — todas as contas ligadas" : "⏸ master OFF — todas pausadas");
+    await load();
+  };
+
+  const formatAgo = (sec: number | null) => {
+    if (sec == null) return "—";
+    if (sec < 60) return `${sec}s`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+    return `${Math.floor(sec / 3600)}h`;
+  };
+
+  const online = items.filter((i) => (i.secondsAgo ?? 9_999) < 60 || i.recentInbound > 0).length;
+  const runningCount = items.filter((i) => i.running).length;
 
   return (
-    <div className="min-h-dvh">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-fuchsia-500 to-purple-700 font-black text-white shadow">
-            ⚙
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-lg font-bold leading-tight">Controle GSE</h1>
-            <p className="truncate text-xs text-slate-400">
-              Ativa/desativa o macro GSE em cada janela
-              {runningCount > 0 && (
-                <span className="ml-2 rounded-full bg-emerald-500/20 px-2 py-0.5 text-emerald-300">
-                  {runningCount} rodando
-                </span>
-              )}
-            </p>
-          </div>
+    <div className="space-y-5">
+      <header className="flex flex-wrap items-center gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">GSE — spammer de tecla</h1>
+          <p className="text-sm text-slate-400">
+            Configure a tecla + intervalo por personagem. O .exe busca a config
+            a cada 3s. Cada vez que você clica em <b>Salvar &amp; enviar</b>, o
+            site confirma de volta o que persistiu, e você vê a bolinha{" "}
+            <span className="text-emerald-300">✓ sync</span> quando o bridge
+            realmente leu.
+          </p>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              bridgeUp ? "bg-emerald-400" : "bg-rose-500"
-            }`}
-          />
-          <span className="text-slate-400">
-            {bridgeUp ? "conectado" : "sem conexão"}
-          </span>
-          <Link
-            href="/"
-            className="ml-4 rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800"
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            disabled={loading || items.length === 0}
+            onClick={() => void toggleAll(true)}
+            className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-sm font-medium text-emerald-300 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-40"
           >
-            ← Chat
-          </Link>
+            ▶ ligar todas
+          </button>
+          <button
+            type="button"
+            disabled={loading || items.length === 0}
+            onClick={() => void toggleAll(false)}
+            className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"
+          >
+            ⏸ pausar todas
+          </button>
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
-        {/* Global controls */}
-        <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:p-5">
-          <div className="mb-3 text-xs uppercase tracking-wider text-slate-500">
-            Controle global
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="font-bold text-slate-100">
-                    Leitor de janelas/whispers
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    Mantém scan de contas + leitura do chat log ativa.
-                  </div>
-                </div>
-                <button
-                  onClick={() =>
-                    void updateControls({
-                      bridgeReaderEnabled: !controls.bridgeReaderEnabled,
-                    })
-                  }
-                  className={`rounded px-4 py-2 text-xs font-bold ${
-                    controls.bridgeReaderEnabled
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-700 text-slate-300"
-                  }`}
-                >
-                  {controls.bridgeReaderEnabled ? "LIGADO" : "DESLIGADO"}
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="font-bold text-slate-100">Master GSE</div>
-                  <div className="text-xs text-slate-500">
-                    Se desligado, nenhuma janela recebe clique/tecla GSE.
-                  </div>
-                </div>
-                <button
-                  onClick={() =>
-                    void updateControls({
-                      gseMasterEnabled: !controls.gseMasterEnabled,
-                    })
-                  }
-                  className={`rounded px-4 py-2 text-xs font-bold ${
-                    controls.gseMasterEnabled
-                      ? "bg-fuchsia-500 text-white"
-                      : "bg-slate-700 text-slate-300"
-                  }`}
-                >
-                  {controls.gseMasterEnabled ? "GSE ON" : "GSE OFF"}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* WIM screen reader toggle */}
-          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  🖥 Leitor da janela WIM (sem addon, sem log)
-                </div>
-                <div className="text-xs text-slate-500">
-                  Tira um print da janela do WoW a cada 2s e lê a conversa do
-                  WIM direto da tela com OCR. Só mensagens RECEBIDAS entram
-                  (a janela define seu personagem, o nome falado define o
-                  comprador) — roteamento sempre seguro. Útil quando o
-                  WoWChatLog/WoWCombatLog não são criados.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    wimScreenOcrEnabled: !controls.wimScreenOcrEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.wimScreenOcrEnabled
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.wimScreenOcrEnabled ? "WIM OCR ON" : "WIM OCR OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Screen OCR relay toggle */}
-          <div className="mt-4 rounded-lg border border-fuchsia-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  📷 OCR da tela (sem log, sem microfone)
-                </div>
-                <div className="text-xs text-slate-500">
-                  O addon desenha cada whisper numa faixa preta/amarela no topo
-                  da janela do WoW; o bridge tira um print em segundo plano só
-                  dessa faixa e lê com o OCR nativo do Windows. Os nomes saem
-                  exatos porque vêm do quadro, não de reconhecimento de fala.
-                  A faixa some sozinha após 6s. Esconda com{" "}
-                  <code>/wimbridge screen</code>.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    ocrRelayEnabled: !controls.ocrRelayEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.ocrRelayEnabled
-                    ? "bg-fuchsia-500 text-white"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.ocrRelayEnabled ? "OCR ON" : "OCR OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Combat-log relay toggle */}
-          <div className="mt-4 rounded-lg border border-amber-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  🗡 Relay pelo combatlog (tempo real)
-                </div>
-                <div className="text-xs text-slate-500">
-                  O addon espelha cada whisper como um emote no{" "}
-                  <code>WoWCombatLog.txt</code>, que grava no disco quase
-                  instantaneamente — resolve clientes onde o chatlog só atualiza
-                  ao fechar o jogo. Requer <code>/combatlog</code> ativo (o
-                  addon liga sozinho). ⚠ O emote fica visível para jogadores
-                  próximos; desative aqui ou com <code>/wimbridge combat</code>{" "}
-                  se incomodar.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    combatRelayEnabled: !controls.combatRelayEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.combatRelayEnabled
-                    ? "bg-amber-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.combatRelayEnabled ? "COMBAT ON" : "COMBAT OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Voice relay toggle */}
-          <div className="mt-4 rounded-lg border border-emerald-500/30 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">🎙 Modo voz (tempo real)</div>
-                <div className="text-xs text-slate-500">
-                  O addon fala cada whisper no jogo com os nomes soletrados em
-                  alfabeto fonético; o bridge ouve pelo microfone e manda direto
-                  para o site — funciona mesmo quando o WoW só grava o chatlog
-                  ao fechar a janela. Requer{" "}
-                  <code>pip install SpeechRecognition</code> (já incluso no
-                  requirements) e um microfone ligado.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    voiceRelayEnabled: !controls.voiceRelayEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.voiceRelayEnabled
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.voiceRelayEnabled ? "VOZ ON" : "VOZ OFF"}
-              </button>
-            </div>
-          </div>
-
-          {/* Close-chat toggle */}
-          <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-bold text-slate-100">
-                  Fechar chat do jogo após enviar (Escape)
-                </div>
-                <div className="text-xs text-slate-500">
-                  Fecha o campo de chat depois de cada whisper enviado para não
-                  atrapalhar o GSE nem outras janelas. A próxima mensagem da
-                  fila reabre o chat sozinha — você pode responder qualquer
-                  pessoa depois, mesmo com o chat fechado.
-                </div>
-              </div>
-              <button
-                onClick={() =>
-                  void updateControls({
-                    whisperCloseChatEnabled: !controls.whisperCloseChatEnabled,
-                  })
-                }
-                className={`rounded px-4 py-2 text-xs font-bold ${
-                  controls.whisperCloseChatEnabled
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-700 text-slate-300"
-                }`}
-              >
-                {controls.whisperCloseChatEnabled ? "LIGADO" : "DESLIGADO"}
-              </button>
-            </div>
-          </div>
-
-          {/* Timing controls grid */}
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="text-xs text-slate-400">
-              ⏱ Abrir chat no jogo
-              <span className="ml-1 text-slate-600">(abrir /w)</span>
-              <input
-                type="number"
-                min={0}
-                max={3000}
-                step={50}
-                value={delayDraft.whisperChatOpenDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperChatOpenDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Delay de foco antes de digitar
-              <input
-                type="number"
-                min={100}
-                max={5000}
-                step={100}
-                value={delayDraft.whisperFocusDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperFocusDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Entre cada tecla digitada
-              <span className="ml-1 text-slate-600">(typing)</span>
-              <input
-                type="number"
-                min={10}
-                max={500}
-                step={1}
-                inputMode="numeric"
-                value={delayDraft.whisperKeystrokeDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperKeystrokeDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Enviar mensagem (Enter)
-              <input
-                type="number"
-                min={0}
-                max={3000}
-                step={50}
-                value={delayDraft.whisperChatSendDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperChatSendDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Fechar chat (Escape)
-              <span className="ml-1 text-slate-600">(após enviar)</span>
-              <input
-                type="number"
-                min={0}
-                max={3000}
-                step={50}
-                value={delayDraft.whisperChatCloseDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperChatCloseDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Depois de enviar whisper
-              <input
-                type="number"
-                min={100}
-                max={5000}
-                step={100}
-                value={delayDraft.whisperAfterSendDelayMs}
-                onChange={(e) =>
-                  setDraftField("whisperAfterSendDelayMs", e.target.value)
-                }
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-400">
-              ⏱ Poll da fila de whisper
-              <input
-                type="number"
-                min={500}
-                max={10000}
-                step={100}
-                value={delayDraft.queuePollMs}
-                onChange={(e) => setDraftField("queuePollMs", e.target.value)}
-                className="mt-1 w-full rounded bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <button
-              onClick={() => void saveDelays()}
-              disabled={!delayDirty}
-              className="w-full rounded bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40 sm:w-auto"
-            >
-              💾 Salvar delays
-            </button>
-            {delayDirty ? (
-              <span className="text-xs text-amber-300">
-                alterações pendentes — clique em Salvar delays
-              </span>
-            ) : (
-              <span className="text-xs text-slate-500">
-                delays salvos: foco {controls.whisperFocusDelayMs}ms · digitar{" "}
-                {controls.whisperKeystrokeDelayMs}ms · enviar{" "}
-                {controls.whisperChatSendDelayMs}ms · fechar{" "}
-                {controls.whisperChatCloseDelayMs}ms · pós-envio{" "}
-                {controls.whisperAfterSendDelayMs}ms
-              </span>
-            )}
-          </div>
-
-          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <button
-              onClick={() => void bulk("startAll")}
-              disabled={characters.length === 0 || !controls.gseMasterEnabled}
-              className="w-full rounded-lg bg-emerald-500 px-6 py-3 text-sm font-bold text-slate-950 shadow hover:bg-emerald-400 disabled:opacity-40 sm:w-auto"
-            >
-              ▶ Iniciar TODOS ({characters.length})
-            </button>
-            <button
-              onClick={() => void bulk("stopAll")}
-              disabled={characters.length === 0}
-              className="w-full rounded-lg bg-rose-500 px-6 py-3 text-sm font-bold text-white shadow hover:bg-rose-400 disabled:opacity-40 sm:w-auto"
-            >
-              ⏹ Parar TODOS
-            </button>
-          </div>
-          <p className="mt-3 text-xs text-slate-500">
-            💡 O leitor pode ficar ligado com o GSE desligado. O GSE só roda
-            quando <b>Master GSE</b> está ON e o personagem também está marcado
-            como rodando.
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Personagens</p>
+          <p className="mt-1 text-2xl font-semibold">{items.length}</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Spammers rodando</p>
+          <p className="mt-1 text-2xl font-semibold text-emerald-300">{runningCount}</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Conta ativa (últ. 30m)</p>
+          <p className="mt-1 text-2xl font-semibold">{online}</p>
+        </div>
+        <div
+          className={`rounded-2xl border p-4 ${
+            bridgeConnected
+              ? "border-emerald-500/40 bg-emerald-500/5"
+              : "border-amber-500/40 bg-amber-500/5"
+          }`}
+        >
+          <p className="text-xs uppercase tracking-wide text-slate-400">Bridge</p>
+          <p className={`mt-1 text-2xl font-semibold ${bridgeConnected ? "text-emerald-300" : "text-amber-300"}`}>
+            {bridgeConnected ? "🟢 conectado" : "🟡 offline"}
+          </p>
+          <p className="mt-0.5 text-[10px] text-slate-500">
+            {bridgeConnected
+              ? "config chega em até 3s"
+              : "sem .exe rodando — abre o BakersWhisper.exe"}
           </p>
         </div>
+      </div>
 
-        {/* Per-character table (scrolls horizontally on small screens) */}
-        <div className="relative overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
-          {/* Scroll hint on mobile */}
-          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-900/80 to-transparent sm:hidden" />
-          <table className="w-full min-w-[680px] text-sm">
-            <thead>
-              <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wider text-slate-400">
-                <th className="px-4 py-3">Personagem</th>
-                <th className="px-4 py-3">Slot</th>
-                <th className="px-4 py-3">Status janela</th>
-                <th className="px-4 py-3">Tecla GSE</th>
-                <th className="px-4 py-3">Intervalo</th>
-                <th className="px-4 py-3">GSE</th>
-                <th className="px-4 py-3" />
+      {!bridgeConnected && items.length > 0 ? (
+        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          <p className="font-semibold">⚠️ O bridge (.exe) não está conectado</p>
+          <p className="mt-1 text-amber-300/80">
+            Você pode salvar as configurações no site, mas elas só serão
+            aplicadas quando o <code>BakersWhisper.exe</code> estiver rodando
+            no seu PC. Abra o .exe e clique em <b>▶ Iniciar</b>.
+          </p>
+        </div>
+      ) : null}
+
+      {loading ? (
+        <p className="text-sm text-slate-500">carregando…</p>
+      ) : items.length === 0 ? (
+        <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
+          Nenhum personagem configurado ainda. As contas aparecem aqui
+          automaticamente quando o bridge enviar o primeiro whisper, ou quando
+          você cadastrá-las na janelinha do <code>BakersWhisper.exe</code>.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/60">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-950/60 text-xs uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-4 py-2.5">Personagem</th>
+                <th className="px-4 py-2.5">Status</th>
+                <th className="px-4 py-2.5">Tecla</th>
+                <th className="px-4 py-2.5">Intervalo (ms)</th>
+                <th className="px-4 py-2.5">Sync</th>
+                <th className="px-4 py-2.5 text-right">Ações</th>
               </tr>
             </thead>
-            <tbody>
-              {characters.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-4 py-10 text-center text-sm text-slate-500"
-                  >
-                    Nenhum personagem detectado. Abra o Bakers Whisper no seu
-                    PC e clique em ▶ Iniciar.
-                  </td>
-                </tr>
-              )}
-              {characters.map((c) => {
-                const key = characterKey(c);
-                const win = windows.find(
-                  (w) => characterKey(w.character) === key,
-                );
-                const state = states[key] ?? {
-                  character: c,
-                  running: false,
-                  keybind: "1",
-                  intervalMs: 100,
-                  updatedAt: new Date().toISOString(),
-                };
-                const dirty = charDirty[key];
-                return (
-                  <tr key={c} className="border-t border-slate-800/60">
-                    <td className="px-4 py-3 font-mono text-sm text-emerald-300">
-                      <span className="inline-flex items-center gap-1.5">
-                        {c}
-                        {dirty && (
-                          <span
-                            className="h-2 w-2 rounded-full bg-amber-400"
-                            title="Alteração não salva"
-                          />
-                        )}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {win?.slot ? (
-                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-xs font-bold text-amber-300">
-                          wow{win.slot}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-600">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`h-2 w-2 rounded-full ${
-                            win?.online ? "bg-emerald-400" : "bg-slate-600"
-                          }`}
-                        />
-                        <span
-                          className={`text-xs ${
-                            win?.online ? "text-emerald-300" : "text-slate-500"
-                          }`}
-                        >
-                          {win?.online ? "online" : "offline"}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <input
-                        value={state.keybind}
-                        onChange={(e) =>
-                          setCharField(c, "keybind", e.target.value.slice(0, 8))
-                        }
-                        placeholder="1"
-                        className="w-16 rounded bg-slate-800 px-2 py-1 text-center font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min={50}
-                          max={2000}
-                          step={10}
-                          value={state.intervalMs}
-                          onChange={(e) =>
-                            setCharField(c, "intervalMs", e.target.value)
-                          }
-                          className="w-20 rounded bg-slate-800 px-2 py-1 text-right font-mono text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
-                        />
-                        <span className="text-xs text-slate-500">ms</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        onClick={() =>
-                          void updateOne(c, { running: !state.running })
-                        }
-                        disabled={
-                          busy[c] ||
-                          (!controls.gseMasterEnabled && !state.running)
-                        }
-                        title={
-                          !controls.gseMasterEnabled && !state.running
-                            ? "Ligue o Master GSE primeiro"
-                            : undefined
-                        }
-                        className={`rounded-lg px-4 py-2 text-xs font-bold shadow transition disabled:opacity-40 ${
-                          state.running
-                            ? "bg-rose-500 text-white hover:bg-rose-400"
-                            : "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
-                        }`}
-                      >
-                        {state.running ? "⏹ parar" : "▶ iniciar"}
-                      </button>
-                    </td>
-                    <td className="px-2 py-3">
-                      <button
-                        onClick={() => void removeCharacter(c)}
-                        disabled={removing[c]}
-                        className="rounded p-1.5 text-slate-500 transition hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-50"
-                        title={`Remover ${c}`}
-                        aria-label={`Remover ${c}`}
-                      >
-                        {removing[c] ? "..." : "✕"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+            <tbody className="divide-y divide-white/5">
+              {items.map((it) => (
+                <GseRow
+                  key={it.character}
+                  item={it}
+                  saving={saving[it.character] ?? false}
+                  lastSync={lastSync[it.character]}
+                  bridgeConnected={bridgeConnected}
+                  onSave={saveRow}
+                  formatAgo={formatAgo}
+                />
+              ))}
             </tbody>
           </table>
         </div>
+      )}
 
-        {/* Save all character changes */}
-        {hasCharDirty && (
-          <div className="mt-3 flex items-center gap-3">
-            <button
-              onClick={() => void saveAllCharChanges()}
-              disabled={savingChars}
-              className="w-full rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-bold text-slate-950 shadow hover:bg-amber-400 disabled:opacity-40 sm:w-auto"
-            >
-              {savingChars ? "salvando..." : "💾 Salvar alterações dos personagens"}
-            </button>
-            <span className="text-xs text-amber-300">
-              tecla/intervalo alterado(s) — salve para aplicar no bridge
-            </span>
-          </div>
-        )}
-
-        <div className="mt-6 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-100">
-          <b className="text-amber-300">Como configurar o GSE:</b>
-          <ol className="mt-2 list-decimal space-y-1 pl-5">
-            <li>
-              Instale o addon <b>GSE - Advanced Macros</b> no CurseForge/WoWUp
-              e crie sua sequência.
-            </li>
-            <li>
-              No WoW, arraste a macro do GSE para a barra de ação e{" "}
-              <b>anote em qual tecla ela está</b> (ex. <code>1</code>,{" "}
-              <code>F1</code>, <code>NUMPAD1</code>).
-            </li>
-            <li>
-              Configure a mesma tecla no campo <b>&quot;Tecla GSE&quot;</b>{" "}
-              acima para cada personagem.
-            </li>
-            <li>
-              Clique ▶ iniciar. O Python vai spammar essa tecla em background.
-            </li>
-          </ol>
-        </div>
+      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4 text-xs text-slate-300">
+        <p className="font-semibold text-sky-300">ℹ️ Como funciona o envio pro .exe</p>
+        <ol className="mt-1.5 ml-5 list-decimal space-y-0.5 text-slate-400">
+          <li>Você edita tecla/intervalo/status e clica em <b>Salvar &amp; enviar</b>.</li>
+          <li>O site grava no banco e <b>devolve o que persistiu</b> (com confirmação visual).</li>
+          <li>O .exe consulta o servidor a cada 1,5s e aplica o valor novo.</li>
+          <li>Use o mesmo token do bridge em Configurações para poder salvar alterações.</li>
+          <li>Se você pausar o spammer para enviar um whisper, ele retoma automaticamente.</li>
+        </ol>
       </div>
+
+      {toast ? (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-900 px-4 py-2.5 text-sm shadow-xl">
+          {toast}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function GseRow({
+  item,
+  saving,
+  lastSync,
+  bridgeConnected,
+  onSave,
+  formatAgo,
+}: {
+  item: GseItem;
+  saving: boolean;
+  lastSync: number | undefined;
+  bridgeConnected: boolean;
+  onSave: (char: string, patch: Partial<{ keybind: string; intervalMs: number; running: boolean }>) => void;
+  formatAgo: (sec: number | null) => string;
+}) {
+  // Estado local — NUNCA sobrescrito pelo poll depois do primeiro save.
+  // Só atualiza se o item.lastSeenAt mudou (= o .exe acabou de ler de novo)
+  // ou se o item mudou de identidade (outro personagem).
+  const [keybind, setKeybind] = useState(item.keybind);
+  const [intervalMs, setIntervalMs] = useState(item.intervalMs);
+
+  // Atualiza o estado local quando o item do banco muda DE VERDADE.
+  // (Comparação por updatedAt via secondsAgo; se o bridge leu, atualiza.)
+  useEffect(() => {
+    setKeybind(item.keybind);
+    setIntervalMs(item.intervalMs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.character]);
+
+  const dirtyKey = keybind !== item.keybind;
+  const dirtyInterval = intervalMs !== item.intervalMs;
+  const dirty = dirtyKey || dirtyInterval;
+
+  const isBridgeLive = item.secondsAgo != null && item.secondsAgo < 30;
+  const isOnline = isBridgeLive || item.recentInbound > 0;
+
+  // "✓ sync" quando o bridge confirmou a leitura após o último save
+  const synced = lastSync != null && item.secondsAgo != null &&
+    Math.abs((lastSync - (Date.now() - item.secondsAgo * 1000))) < 15_000;
+
+  return (
+    <tr className={item.running ? "bg-emerald-500/5" : ""}>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span
+            className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+              isOnline ? "bg-emerald-400" : "bg-slate-600"
+            }`}
+          />
+          <div>
+            <p className="font-medium">{item.character}</p>
+            {item.recentInbound > 0 ? (
+              <p className="text-[11px] text-slate-500">
+                {item.recentInbound} whisper(s) inbound (30m)
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        {item.running ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-300 ring-1 ring-emerald-500/40">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+            rodando
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-full bg-slate-700/30 px-2 py-0.5 text-xs text-slate-400 ring-1 ring-slate-600/40">
+            parado
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3">
+        <input
+          value={keybind}
+          onChange={(e) => setKeybind(e.target.value)}
+          placeholder="1, F1, grave, ctrl+1…"
+          className={`w-28 rounded-lg border bg-slate-950/60 px-2 py-1 text-sm outline-none ${
+            dirtyKey
+              ? "border-amber-500/60 ring-1 ring-amber-500/30"
+              : "border-white/10 focus:border-emerald-500/60"
+          }`}
+        />
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={20}
+            max={10_000}
+            step={10}
+            value={intervalMs}
+            onChange={(e) => setIntervalMs(Number(e.target.value))}
+            className="w-28 accent-emerald-500"
+          />
+          <input
+            type="number"
+            min={20}
+            max={10_000}
+            value={intervalMs}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (Number.isFinite(v)) setIntervalMs(v);
+            }}
+            className={`w-24 rounded-lg border bg-slate-950/60 px-2 py-1 text-sm outline-none ${
+              dirtyInterval
+                ? "border-amber-500/60 ring-1 ring-amber-500/30"
+                : "border-white/10 focus:border-emerald-500/60"
+            }`}
+          />
+          <span className="text-xs text-slate-500">ms</span>
+        </div>
+      </td>
+      <td className="px-4 py-3 text-xs">
+        {synced ? (
+          <span className="text-emerald-300" title={`Sincronizado ${formatAgo(item.secondsAgo)} atrás`}>
+            ✓ sync
+          </span>
+        ) : bridgeConnected ? (
+          <span className="text-slate-400">
+            🟢 vivo {formatAgo(item.secondsAgo)}
+          </span>
+        ) : item.secondsAgo != null ? (
+          <span className="text-slate-500" title="Última leitura pelo .exe">
+            ⚪ {formatAgo(item.secondsAgo)} atrás
+          </span>
+        ) : (
+          <span className="text-slate-500">— sem update</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-right">
+        <div className="flex justify-end gap-2">
+          {dirty && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                const patch: Partial<{ keybind: string; intervalMs: number }> = {};
+                if (dirtyKey) patch.keybind = keybind;
+                if (dirtyInterval) patch.intervalMs = intervalMs;
+                onSave(item.character, patch);
+              }}
+              className="rounded-lg bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-200 ring-1 ring-amber-500/40 hover:bg-amber-500/30 disabled:opacity-40"
+              title="Envia a config pro servidor. O .exe pega no próximo poll (até 3s)."
+            >
+              {saving ? "⏳ salvando…" : "💾 Salvar & enviar"}
+            </button>
+          )}
+          {!dirty && item.running ? (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => onSave(item.character, { running: false })}
+              className="rounded-lg border border-white/10 px-3 py-1 text-xs text-slate-300 hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-40"
+            >
+              ⏸ parar
+            </button>
+          ) : !dirty ? (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => onSave(item.character, { running: true })}
+              className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-40"
+            >
+              ▶ iniciar
+            </button>
+          ) : null}
+        </div>
+      </td>
+    </tr>
   );
 }

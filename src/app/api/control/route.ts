@@ -30,9 +30,7 @@ type Controls = {
   queuePollMs: number;
 };
 
-function normalize(
-  rows: Array<{ key: string; value: string }>,
-): Controls {
+function normalize(rows: Array<{ key: string; value: string }>): Controls {
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const get = (key: keyof typeof DEFAULT_APP_CONTROLS) =>
     map.get(key) ?? DEFAULT_APP_CONTROLS[key];
@@ -40,23 +38,19 @@ function normalize(
     Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
 
   return {
-    bridgeReaderEnabled: true,
+    bridgeReaderEnabled: get("bridge_reader_enabled") === "yes",
     gseMasterEnabled: get("gse_master_enabled") === "yes",
     whisperFocusDelayMs: num(get("whisper_focus_delay_ms"), 100, 5000),
-    whisperAfterSendDelayMs: num(
-      get("whisper_after_send_delay_ms"),
-      100,
-      5000,
-    ),
+    whisperAfterSendDelayMs: num(get("whisper_after_send_delay_ms"), 100, 5000),
     whisperChatOpenDelayMs: num(get("whisper_chat_open_delay_ms"), 0, 3000),
     whisperKeystrokeDelayMs: num(get("whisper_keystroke_delay_ms"), 10, 500),
     whisperChatSendDelayMs: num(get("whisper_chat_send_delay_ms"), 0, 3000),
     whisperCloseChatEnabled: get("whisper_close_chat_enabled") === "yes",
     whisperChatCloseDelayMs: num(get("whisper_chat_close_delay_ms"), 0, 3000),
-    voiceRelayEnabled: false,
-    combatRelayEnabled: false,
-    ocrRelayEnabled: true,
-    wimScreenOcrEnabled: false,
+    voiceRelayEnabled: get("voice_relay_enabled") === "yes",
+    combatRelayEnabled: get("combat_relay_enabled") === "yes",
+    ocrRelayEnabled: get("ocr_relay_enabled") === "yes",
+    wimScreenOcrEnabled: get("wim_screen_ocr_enabled") === "yes",
     ocrStripTopPx: num(get("ocr_strip_top_px"), 0, 200),
     ocrStripHeightPx: num(get("ocr_strip_height_px"), 60, 260),
     queuePollMs: num(get("queue_poll_ms"), 500, 10000),
@@ -85,6 +79,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const guard = await checkBridgeAuth(request);
+  if (!guard.ok) return guard.response;
   let payload: Partial<Controls> = {};
   try {
     payload = (await request.json()) as Partial<Controls>;
@@ -104,8 +100,7 @@ export async function POST(request: NextRequest) {
     [payload.wimScreenOcrEnabled, "wim_screen_ocr_enabled"],
   ];
   for (const [val, key] of boolPairs) {
-    if (typeof val === "boolean")
-      pairs.push({ key, value: val ? "yes" : "no" });
+    if (typeof val === "boolean") pairs.push({ key, value: val ? "yes" : "no" });
   }
 
   const numPairs: Array<[number | undefined, string, number, number]> = [

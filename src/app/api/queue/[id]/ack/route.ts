@@ -8,8 +8,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Python bridge calls this once it has typed a queued reply into the right
- * WoW window. `status` is "sent" on success or "failed" with an error reason.
+ * O bridge chama isso depois de digitar a resposta na janela certa do WoW.
+ * `status` é "sent" em sucesso ou "failed" com o motivo do erro.
  */
 export async function POST(
   request: NextRequest,
@@ -28,7 +28,7 @@ export async function POST(
   try {
     payload = await request.json();
   } catch {
-    // empty body is fine — defaults to "sent"
+    // corpo vazio é ok — assume "sent"
   }
 
   const next = payload.status === "failed" ? "failed" : "sent";

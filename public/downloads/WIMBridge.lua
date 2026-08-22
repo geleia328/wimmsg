@@ -1,16 +1,37 @@
--- WIMBridge v3.2.0 — OCR strip queue focused build
+-- WIMBridge v3.3.0 — OCR strip focused build
 -- A faixa preta/amarela é o ÚNICO alvo de OCR em tempo real.
 -- Cada janela do WoW tem sua própria fila local, então várias janelas funcionam
 -- em paralelo sem misturar compradores/personagens.
+--
+-- Comandos slash (v3.3.0 — todos funcionais):
+--   /wimbridge who                          → status completo (versão, OWN, eventos, fila…)
+--   /wimbridge test                         → coloca uma faixa de teste
+--   /wimbridge screen on|off                → liga/desliga a faixa
+--   /wimbridge font 55                      → tamanho da FONTE (recomendado: 55)
+--   /wimbridge size 700                     → altura da FAIXA em px (recomendado: 500-700)
+--   /wimbridge delay 1.8                    → segundos que a faixa fica visível
+--                                            para o OCR ler (recomendado: 1.5-2.0)
+--   /wimbridge reset                        → restaura os padrões recomendados
+--
+-- Formato da faixa propositalmente simples para OCR:
+--   BW 123 FROM Nome-Reino: mensagem
+--   BW 124 TO   Nome-Reino: mensagem
 
-WIMBRIDGE_VERSION = "3.2.0"
+WIMBRIDGE_VERSION = "3.3.0"
 WIMBridgeDB = WIMBridgeDB or {}
-if WIMBridgeDB.screenEnabled == nil then WIMBridgeDB.screenEnabled = true end
-if WIMBridgeDB.stripHeight == nil then WIMBridgeDB.stripHeight = 140 end
-if WIMBridgeDB.fontSize == nil then WIMBridgeDB.fontSize = 28 end
--- Tempo que cada mensagem fica visível para o OCR. Aceita decimal.
-if WIMBridgeDB.stripDelay == nil then WIMBridgeDB.stripDelay = 1.6 end
-if WIMBridgeDB.voiceEnabled == nil then WIMBridgeDB.voiceEnabled = false end
+
+-- Defaults alinhados com o que o usuário pediu como recomendado.
+local DEFAULTS = {
+    screenEnabled = true,
+    stripHeight = 500,        -- /wimbridge size (altura da faixa preta em px)
+    fontSize = 55,            -- /wimbridge font (tamanho da fonte em px)
+    stripDelay = 1.8,         -- /wimbridge delay (segundos)
+}
+if WIMBridgeDB.screenEnabled == nil then WIMBridgeDB.screenEnabled = DEFAULTS.screenEnabled end
+if WIMBridgeDB.stripHeight   == nil then WIMBridgeDB.stripHeight   = DEFAULTS.stripHeight end
+if WIMBridgeDB.fontSize      == nil then WIMBridgeDB.fontSize      = DEFAULTS.fontSize end
+if WIMBridgeDB.stripDelay    == nil then WIMBridgeDB.stripDelay    = DEFAULTS.stripDelay end
+if WIMBridgeDB.voiceEnabled  == nil then WIMBridgeDB.voiceEnabled  = false end
 if WIMBridgeDB.combatEnabled == nil then WIMBridgeDB.combatEnabled = false end
 
 local ownName = "Unknown"
@@ -20,10 +41,14 @@ local relayQueue = {}
 local relayBusy = false
 local relaySeq = WIMBridgeDB.relaySeq or 0
 
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
 local function normalize(name)
     if not name or name == "" then return "Unknown" end
     if not name:find("-") then
-        local realm = (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName())
+        local realm = (GetNormalizedRealmName and GetNormalizedRealmName())
+                    or (GetRealmName and GetRealmName())
         if realm then
             realm = realm:gsub("%s+", "")
             name = name .. "-" .. realm
@@ -54,8 +79,8 @@ local function clampMin(v, minValue, fallback)
 end
 
 local function applyVisualSettings()
-    local h = clampMin(WIMBridgeDB.stripHeight, 30, 140)
-    local fs = clampMin(WIMBridgeDB.fontSize, 8, 28)
+    local h = clampMin(WIMBridgeDB.stripHeight, 30, DEFAULTS.stripHeight * 2)
+    local fs = clampMin(WIMBridgeDB.fontSize, 8, 96)
     if relayFrame then relayFrame:SetHeight(h) end
     if relayText then
         local font = "Fonts\\FRIZQT__.TTF"
@@ -97,21 +122,23 @@ local function sanitizeForOcr(s)
     s = s:gsub("|r", "")
     s = s:gsub("|H.-|h", "")
     s = s:gsub("|h", "")
-    s = s:gsub("[\r\n]+", " ")
+    s = s:gsub("[%r%n]+", " ")
     s = s:gsub("%s+", " ")
     if #s > 180 then s = s:sub(1, 180) end
     return s
 end
 
+-- ---------------------------------------------------------------------------
+-- Render queue
+-- ---------------------------------------------------------------------------
 local function renderStrip(item)
     if WIMBridgeDB.screenEnabled == false then return end
     ensureScreenFrame()
     if not relayFrame or not relayText then return end
 
     local label = (item.kind == "in") and "FROM" or "TO"
-    -- Formato propositalmente simples para OCR:
-    -- BW 123 FROM Gasquatro-Azralon: mensagem
-    local line = "BW " .. tostring(item.id) .. " " .. label .. " " .. sanitizeForOcr(item.other) .. ": " .. sanitizeForOcr(item.body)
+    local line = "BW " .. tostring(item.id) .. " " .. label .. " "
+                .. sanitizeForOcr(item.other) .. ": " .. sanitizeForOcr(item.body)
 
     pcall(function()
         applyVisualSettings()
@@ -133,8 +160,9 @@ local function nextQueuedStrip()
     end
     relayBusy = true
     renderStrip(item)
-    local delay = tonumber(WIMBridgeDB.stripDelay) or 1.6
-    if delay > 20 then delay = delay / 1000 end -- permite /wimbridge delay 1500
+    local delay = tonumber(WIMBridgeDB.stripDelay) or DEFAULTS.stripDelay
+    -- Aceita "delay 1500" (ms) ou "delay 1.5" (s).
+    if delay > 20 then delay = delay / 1000 end
     if delay < 0.2 then delay = 0.2 end
     C_Timer.NewTimer(delay, function()
         if relayFrame then relayFrame:Hide() end
@@ -161,7 +189,11 @@ local function relay(kind, other, body)
 
     pcall(function()
         if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00WIMBridge OCR: " .. (kind == "in" and "FROM " or "TO ") .. normalize(other) .. " (#" .. tostring(relaySeq) .. ")|r", 1, 1, 0)
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cffffcc00WIMBridge OCR: "
+                .. (kind == "in" and "FROM " or "TO ")
+                .. normalize(other) .. " (#" .. tostring(relaySeq) .. ")|r",
+                1, 1, 0)
         end
     end)
 
@@ -172,56 +204,89 @@ local function showTest()
     enqueueStrip("in", "Teste-Azralon", "mensagem de teste da faixa OCR")
 end
 
+local function resetDefaults()
+    WIMBridgeDB.screenEnabled = DEFAULTS.screenEnabled
+    WIMBridgeDB.stripHeight   = DEFAULTS.stripHeight
+    WIMBridgeDB.fontSize      = DEFAULTS.fontSize
+    WIMBridgeDB.stripDelay    = DEFAULTS.stripDelay
+    applyVisualSettings()
+    showTest()
+end
+
+-- ---------------------------------------------------------------------------
+-- Slash commands (/wimbridge ...)
+-- ---------------------------------------------------------------------------
 pcall(function()
     SLASH_WIMBRIDGE1 = "/wimbridge"
     SLASH_WIMBRIDGE2 = "/wbw"
     SlashCmdList["WIMBRIDGE"] = function(cmd)
         computeOwnName()
-        cmd = (cmd or ""):lower()
-        if cmd == "who" or cmd == "status" then
+        cmd = (cmd or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+
+        if cmd == "who" or cmd == "status" or cmd == "" then
             print("|cffffcc00WIMBridge|r versao = " .. WIMBRIDGE_VERSION)
             print("|cffffcc00WIMBridge|r own = " .. ownName)
             print("|cffffcc00WIMBridge|r eventos = " .. (alive.events and "OK" or "FALHA"))
             print("|cffffcc00WIMBridge|r whispers capturados = " .. tostring(alive.whisperSeen))
-            print("|cffffcc00WIMBridge|r OCR faixa = " .. tostring(WIMBridgeDB.screenEnabled ~= false))
-            print("|cffffcc00WIMBridge|r tamanho faixa = " .. tostring(WIMBridgeDB.stripHeight or 140) .. "px")
-            print("|cffffcc00WIMBridge|r fonte faixa = " .. tostring(WIMBridgeDB.fontSize or 28) .. "px")
-            print("|cffffcc00WIMBridge|r delay OCR = " .. tostring(WIMBridgeDB.stripDelay or 1.6) .. "s")
+            print("|cffffcc00WIMBridge|r faixa OCR = " .. tostring(WIMBridgeDB.screenEnabled ~= false))
+            print("|cffffcc00WIMBridge|r tamanho faixa = " .. tostring(WIMBridgeDB.stripHeight) .. "px (recomendado: 500-700)")
+            print("|cffffcc00WIMBridge|r fonte faixa = " .. tostring(WIMBridgeDB.fontSize) .. "px (recomendado: 55)")
+            print("|cffffcc00WIMBridge|r delay OCR = " .. tostring(WIMBridgeDB.stripDelay) .. "s (recomendado: 1.5-1.8)")
             print("|cffffcc00WIMBridge|r fila OCR = " .. tostring(#relayQueue) .. " pendente(s)")
+            print("|cffffcc00WIMBridge|r comandos: who | test | screen on|off | font N | size N | delay N | reset")
+
         elseif cmd == "test" then
             showTest()
             print("|cffffcc00WIMBridge|r teste OCR enfileirado na faixa.")
-        elseif cmd == "screen" then
-            WIMBridgeDB.screenEnabled = not (WIMBridgeDB.screenEnabled ~= false)
+
+        elseif cmd == "screen" or cmd == "screen on" or cmd == "screen off" then
+            if cmd == "screen on"  then WIMBridgeDB.screenEnabled = true  end
+            if cmd == "screen off" then WIMBridgeDB.screenEnabled = false end
+            if cmd == "screen"     then WIMBridgeDB.screenEnabled = not (WIMBridgeDB.screenEnabled ~= false) end
             print("|cffffcc00WIMBridge|r faixa OCR " .. ((WIMBridgeDB.screenEnabled ~= false) and "LIGADA" or "DESLIGADA"))
-        elseif cmd:match("^size%s+%d+") or cmd:match("^height%s+%d+") then
-            local n = tonumber(cmd:match("(%d+)")) or 140
-            n = math.max(30, n)
+            if WIMBridgeDB.screenEnabled == false and relayFrame then relayFrame:Hide() end
+
+        elseif cmd:match("^size%s+[%d%.]+") or cmd:match("^height%s+[%d%.]+")
+            or cmd:match("^tamanho%s+[%d%.]+") then
+            local n = tonumber(cmd:match("([%d%.]+)")) or DEFAULTS.stripHeight
+            n = math.max(30, math.floor(n))
             WIMBridgeDB.stripHeight = n
             applyVisualSettings()
-            print("|cffffcc00WIMBridge|r tamanho da faixa OCR = " .. tostring(n) .. "px")
+            print("|cffffcc00WIMBridge|r tamanho da faixa OCR = " .. tostring(n) .. "px (recomendado: 500-700)")
             showTest()
-        elseif cmd:match("^font%s+%d+") or cmd:match("^fontsize%s+%d+") or cmd:match("^fonte%s+%d+") then
-            local n = tonumber(cmd:match("(%d+)")) or 28
-            n = math.max(8, n)
+
+        elseif cmd:match("^font%s+[%d%.]+") or cmd:match("^fontsize%s+[%d%.]+")
+            or cmd:match("^fonte%s+[%d%.]+") then
+            local n = tonumber(cmd:match("([%d%.]+)")) or DEFAULTS.fontSize
+            n = math.max(8, math.floor(n))
             WIMBridgeDB.fontSize = n
             applyVisualSettings()
-            print("|cffffcc00WIMBridge|r fonte da faixa OCR = " .. tostring(n) .. "px")
+            print("|cffffcc00WIMBridge|r fonte da faixa OCR = " .. tostring(n) .. "px (recomendado: 55)")
             showTest()
+
         elseif cmd:match("^delay%s+[%d%.]+") or cmd:match("^tempo%s+[%d%.]+") then
-            local n = tonumber(cmd:match("([%d%.]+)")) or 1.6
+            local n = tonumber(cmd:match("([%d%.]+)")) or DEFAULTS.stripDelay
             if n > 20 then n = n / 1000 end
             if n < 0.2 then n = 0.2 end
             WIMBridgeDB.stripDelay = n
-            print("|cffffcc00WIMBridge|r delay da faixa OCR = " .. tostring(n) .. "s")
+            print("|cffffcc00WIMBridge|r delay da faixa OCR = " .. tostring(n) .. "s (recomendado: 1.5-1.8)")
             showTest()
+
+        elseif cmd == "reset" or cmd == "default" then
+            resetDefaults()
+            print("|cffffcc00WIMBridge|r defaults restaurados: font 55 / size 500 / delay 1.8 / screen on")
+
         else
-            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION .. " | comandos: who | test | screen | size 140 | font 32 | delay 1.6")
+            print("|cffffcc00WIMBridge|r " .. WIMBRIDGE_VERSION
+                .. " | comandos: who | test | screen on|off | font 55 | size 500 | delay 1.8 | reset")
         end
     end
     alive.slash = true
 end)
 
+-- ---------------------------------------------------------------------------
+-- Whisper events
+-- ---------------------------------------------------------------------------
 pcall(function()
     local f = CreateFrame("Frame")
     f:RegisterEvent("CHAT_MSG_WHISPER")
@@ -236,7 +301,10 @@ pcall(function()
             ensureChatLog()
             ensureScreenFrame()
             alive.events = true
-            bigNotice("WIMBridge " .. WIMBRIDGE_VERSION .. " ATIVO")
+            bigNotice("WIMBridge " .. WIMBRIDGE_VERSION .. " ATIVO (font "
+                .. tostring(WIMBridgeDB.fontSize) .. " / size "
+                .. tostring(WIMBridgeDB.stripHeight) .. " / delay "
+                .. tostring(WIMBridgeDB.stripDelay) .. "s)")
             return
         end
         if ownName == "Unknown" then computeOwnName() end
@@ -249,5 +317,3 @@ pcall(function()
     end)
     alive.events = true
 end)
-
-print("|cffffcc00WIMBridge|r v" .. WIMBRIDGE_VERSION .. " carregado. Digite /wimbridge who para confirmar.")

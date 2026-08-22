@@ -1,72 +1,115 @@
-name: Build Windows Executable
+name: Build BakersWhisper.exe
+
+# Compila o wim_bridge_ocr.py num .exe único com Windows OCR embutido
+# e publica automaticamente como Release.
+#
+# Como funciona:
+#   - Push na main → faz build + cria release "rolling" (latest)
+#   - Push de tag v* → cria release versionada (ex: v1.2.3)
+#   - workflow_dispatch → build manual (não publica)
+#
+# Configurar no GitHub (uma vez):
+#   1. Settings → Secrets and variables → Actions → New repository secret
+#      - API_URL:        https://seu-site.vercel.app   (opcional)
+#      - BRIDGE_TOKEN:   mesmo token do site           (opcional)
+#   2. Settings → Actions → General → Workflow permissions
+#      - Read and write permissions  ← IMPORTANTE
+#   3. O botão de download do site usa a env BRIDGE_EXE_URL apontando
+#      pra release mais recente. Formato:
+#      https://github.com/SEU_USER/SEU_REPO/releases/latest/download/BakersWhisper.exe
+#
+# Resultado:
+#   Cada push em main atualiza o .exe em ~5-8 min sem você fazer NADA.
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      no_release:
+        description: "Apenas buildar, não publicar release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # necessário pra criar release
 
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+    timeout-minutes: 30
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           architecture: "x64"
 
-      - name: Install dependencies
+      - name: 📦 Install PyInstaller
         shell: pwsh
         run: |
           python -m pip install --upgrade pip setuptools wheel
+          pyinstaller --version
           pip install "pyinstaller==6.11.1"
+
+      - name: 📦 Install bridge dependencies (winocr + PyWinRT)
+        shell: pwsh
+        run: |
           pip install -r public/downloads/requirements.txt
           pip install pywin32-ctypes
-          python -c "import winocr; print('winocr OK')"
-          python -c "import winrt.windows.foundation.collections; print('winrt foundation collections OK')"
-          python -c "import winrt.windows.media.ocr; print('winrt media OCR OK')"
-          python -c "import mss, PIL; print('OCR capture deps OK')"
+          # Confirma que os módulos críticos estão disponíveis
+          python -c "import winocr; print('  ✓ winocr', winocr.__version__ if hasattr(winocr, '__version__') else 'OK')"
+          python -c "import winrt.windows.foundation.collections; print('  ✓ winrt.foundation.collections')"
+          python -c "import winrt.windows.media.ocr; print('  ✓ winrt.media.ocr')"
+          python -c "import winrt.windows.graphics.imaging; print('  ✓ winrt.graphics.imaging')"
+          python -c "import winrt.windows.globalization; print('  ✓ winrt.globalization')"
+          python -c "import winrt.windows.storage.streams; print('  ✓ winrt.storage.streams')"
+          python -c "import mss; print('  ✓ mss', mss.__version__)"
+          python -c "import PIL; print('  ✓ Pillow', PIL.__version__)"
+          python -c "import pydirectinput; print('  ✓ pydirectinput')"
 
-      - name: Inject build constants
+      - name: 🔐 Inject build-time config (opcional)
         shell: pwsh
         env:
           API_URL: ${{ secrets.API_URL }}
           BRIDGE_TOKEN: ${{ secrets.BRIDGE_TOKEN }}
         run: |
-          $src = "public/downloads/wim_bridge_gui.py"
+          # Se você setar as secrets no GitHub, o .exe já vem com
+          # URL/token pré-configurados. Caso contrário, o usuário
+          # preenche na janelinha do .exe na primeira execução.
+          $src = "public\downloads\wim_bridge_ocr.py"
+          if (-not (Test-Path $src)) { throw "Arquivo não encontrado: $src" }
           $content = [System.IO.File]::ReadAllText((Resolve-Path $src), [System.Text.Encoding]::UTF8)
           if ($env:API_URL) {
-            $content = $content -replace 'API_URL = "https://[^"]*"', ('API_URL = "' + $env:API_URL + '"')
-            Write-Host "✓ API_URL injected"
+            $pattern = 'os\.environ\.get\("BRIDGE_OCR_API_URL",\s*"[^"]*"\)'
+            $replacement = 'os.environ.get("BRIDGE_OCR_API_URL", "' + $env:API_URL + '")'
+            $content = [regex]::Replace($content, $pattern, $replacement)
+            Write-Host "  ✓ API_URL injetada"
           }
           if ($env:BRIDGE_TOKEN) {
-            $content = $content -replace 'BRIDGE_TOKEN = "REPLACE_WITH_YOUR_TOKEN"', ('BRIDGE_TOKEN = "' + $env:BRIDGE_TOKEN + '"')
-            Write-Host "✓ BRIDGE_TOKEN injected"
+            $pattern = 'os\.environ\.get\("BRIDGE_OCR_TOKEN",\s*"[^"]*"\)'
+            $replacement = 'os.environ.get("BRIDGE_OCR_TOKEN", "' + $env:BRIDGE_TOKEN + '")'
+            $content = [regex]::Replace($content, $pattern, $replacement)
+            Write-Host "  ✓ BRIDGE_TOKEN injetado"
           }
           [System.IO.File]::WriteAllText((Resolve-Path $src), $content, [System.Text.UTF8Encoding]::new($false))
 
-      - name: Sanity check source
+      - name: 🔨 Build with PyInstaller
         shell: pwsh
         run: |
-          python -c "import ast; ast.parse(open('public/downloads/wim_bridge_gui.py', encoding='utf-8').read()); print('Python syntax OK')"
-
-      - name: Build with PyInstaller
-        shell: pwsh
-        run: |
-          $pyargs = @(
-            "--onefile", "--noconsole", "--name", "WhisperRelay",
-            "--collect-submodules", "pyautogui",
-            "--collect-submodules", "pydirectinput",
-            "--collect-submodules", "psutil",
+          $args = @(
+            "--onefile",
+            "--noconsole",
+            "--name", "BakersWhisper",
+            # Captura tudo do winocr/PyWinRT (DLLs, .pyi, etc.)
             "--collect-all", "winocr",
             "--collect-submodules", "winrt",
-            "--hidden-import", "winocr",
+            "--hidden-import", "winrt.windows.foundation",
             "--hidden-import", "winrt.windows.foundation",
             "--hidden-import", "winrt.windows.foundation.collections",
             "--hidden-import", "winrt.windows.globalization",
@@ -79,37 +122,73 @@ jobs:
             "--hidden-import", "win32con",
             "--hidden-import", "win32api",
             "--hidden-import", "win32process",
+            "--hidden-import", "win32ui",
             "--hidden-import", "pywintypes",
-            "--hidden-import", "speech_recognition",
-            "--hidden-import", "pyaudio",
-            "--hidden-import", "soundcard",
-            "--hidden-import", "numpy",
-            "public/downloads/wim_bridge_gui.py"
+            "--hidden-import", "pydirectinput",
+            "--hidden-import", "requests",
+            # Janelinha do .exe (Tk) — pequena, vale o tamanho
+            "public/downloads/wim_bridge_ocr.py"
           )
-          pyinstaller @pyargs
+          pyinstaller @args
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou (exit $LASTEXITCODE)" }
 
-      - name: Verify OCR imports in build env
+      - name: ✅ Verify build
         shell: pwsh
         run: |
-          if (!(Test-Path dist/WhisperRelay.exe)) { throw "Executable not found" }
-          Write-Host "✅ Build successful: dist/WhisperRelay.exe"
-          Get-Item dist/WhisperRelay.exe | Format-List FullName,Length
+          if (-not (Test-Path "dist/BakersWhisper.exe")) {
+            throw "BakersWhisper.exe não foi gerado!"
+          }
+          $size = [math]::Round((Get-Item dist/BakersWhisper.exe).Length / 1MB, 1)
+          Write-Host ""
+          Write-Host "✅ Build OK — BakersWhisper.exe ($size MB)" -ForegroundColor Green
+          Write-Host "📂 Local: dist\BakersWhisper.exe" -ForegroundColor Cyan
 
-      - name: Upload artifact
+      - name: 📤 Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WhisperRelay-Windows
-          path: dist/WhisperRelay.exe
-          retention-days: 30
+          name: BakersWhisper-Windows-x64
+          path: dist/BakersWhisper.exe
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Create Release for tags
+      # Cria Release só em push de tag, ou se não for workflow_dispatch=no_release
+      - name: 🚀 Publish release on tag push
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/WhisperRelay.exe
+          files: dist/BakersWhisper.exe
           name: Bakers Whisper ${{ github.ref_name }}
           body: |
-            Build com OCR principal corrigido: winocr + PyWinRT empacotados no .exe.
+            🥐 Bakers Whisper ${{ github.ref_name }}
+
+            Build automático do bridge OCR.
+
+            **Como usar:**
+            1. Baixe `BakersWhisper.exe`
+            2. Execute (SmartScreen → "Mais informações" → "Executar mesmo assim")
+            3. Preencha URL do site + token na janelinha
+            4. Pronto
+
+            Mais detalhes: https://github.com/${{ github.repository }}#readme
           draft: false
           prerelease: false
+
+      - name: 🚀 Publish rolling release on main
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/BakersWhisper.exe
+          tag_name: latest
+          name: 🥐 Bakers Whisper (latest)
+          body: |
+            🥐 Bakers Whisper — build mais recente da main.
+
+            Sempre aponta pro último push que passou no build.
+            Use esta URL no site (env `BRIDGE_EXE_URL`):
+
+            ```
+            https://github.com/${{ github.repository }}/releases/latest/download/BakersWhisper.exe
+            ```
+          draft: false
+          prerelease: true
+          overwrite: true

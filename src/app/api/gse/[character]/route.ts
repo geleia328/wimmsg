@@ -1,120 +1,135 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { gseState } from "@/db/schema";
-import { checkBridgeAuth } from "@/lib/auth";
 import { eq, sql } from "drizzle-orm";
+import { canonicalName } from "@/lib/realm";
+import { checkBridgeAuth } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ character: string }> },
-) {
-  const { character } = await params;
-  const target = decodeURIComponent(character).toLowerCase();
-  const [found] = await db
-    .select()
-    .from(gseState)
-    .where(eq(gseState.character, target))
-    .limit(1);
 
-  if (!found) {
-    return NextResponse.json({
-      character: target,
-      running: false,
-      keybind: "1",
-      intervalMs: 100,
-    });
-  }
-  return NextResponse.json({
-    character: found.character,
-    running: found.running === "yes",
-    keybind: found.keybind,
-    intervalMs: Number(found.intervalMs) || 100,
-    updatedAt: found.updatedAt,
-  });
-}
-
+/**
+ * POST /api/gse/[character]
+ *   { keybind?: string, intervalMs?: number, running?: boolean }
+ *
+ *   - Se vier `running:true`, define running=yes.
+ *   - Se vier `running:false`, define running=no.
+ *   - Se vier `keybind` ou `intervalMs`, atualiza esses campos.
+ *
+ * O bridge faz polling nesta rota a cada 1.5s (queue_poll_ms) e:
+ *   - Lê a config salva
+ *   - Se running=yes e a janela do personagem está aberta, ele
+ *     pressiona a tecla em loop no intervalo configurado.
+ *   - Atualiza o `updated_at` para o painel saber que o bridge
+ *     continua "vivo" naquela conta.
+ *
+ * Se o nome do personagem for inválido (com dígito, OCR zoado), 400.
+ */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ character: string }> },
+  context: { params: Promise<{ character: string }> },
 ) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader) {
-    const guard = await checkBridgeAuth(request);
-    if (!guard.ok) return guard.response;
+  const guard = await checkBridgeAuth(request);
+  if (!guard.ok) return guard.response;
+  const { character: rawChar } = await context.params;
+  const character = canonicalName(decodeURIComponent(rawChar));
+  if (!character) {
+    return NextResponse.json(
+      { error: `personagem inválido: "${rawChar}"` },
+      { status: 400 },
+    );
   }
 
-  const { character } = await params;
-  const target = decodeURIComponent(character).toLowerCase();
-
-  let payload: {
-    running?: boolean;
-    keybind?: string;
-    intervalMs?: number;
-  } = {};
+  let payload: { keybind?: string; intervalMs?: number; running?: boolean } = {};
   try {
-    payload = await request.json();
+    payload = (await request.json()) as typeof payload;
   } catch {
-    // empty body is allowed
+    payload = {};
   }
 
-  const set: Record<string, unknown> = { updatedAt: new Date() };
-  if (typeof payload.running === "boolean") {
-    set.running = payload.running ? "yes" : "no";
-  }
-  if (typeof payload.keybind === "string" && payload.keybind.trim()) {
-    set.keybind = payload.keybind.trim();
+  const update: Record<string, unknown> = { updatedAt: new Date() };
+
+  if (typeof payload.keybind === "string") {
+    const k = payload.keybind.trim();
+    if (k.length === 0 || k.length > 32) {
+      return NextResponse.json(
+        { error: "keybind deve ter entre 1 e 32 caracteres" },
+        { status: 400 },
+      );
+    }
+    update.keybind = k;
   }
   if (typeof payload.intervalMs === "number") {
-    set.intervalMs = String(
-      Math.max(50, Math.min(60000, Math.floor(payload.intervalMs))),
-    );
+    const n = Math.max(20, Math.min(10_000, Math.floor(payload.intervalMs)));
+    update.intervalMs = String(n);
+  }
+  if (typeof payload.running === "boolean") {
+    update.running = payload.running ? "yes" : "no";
   }
 
   await db
     .insert(gseState)
     .values({
-      character: target,
-      running:
-        typeof payload.running === "boolean"
-          ? payload.running
-            ? "yes"
-            : "no"
-          : "no",
-      keybind: payload.keybind?.trim() || "1",
-      intervalMs:
-        typeof payload.intervalMs === "number"
-          ? String(
-              Math.max(10, Math.min(60000, Math.floor(payload.intervalMs))),
-            )
-          : "100",
+      character,
+      keybind: (update.keybind as string) ?? "1",
+      intervalMs: (update.intervalMs as string) ?? "100",
+      running: (update.running as string) ?? "no",
     })
     .onConflictDoUpdate({
       target: gseState.character,
-      set,
+      set: update,
     });
 
-  return NextResponse.json({ ok: true, character: target, ...payload });
+  const [row] = await db
+    .select()
+    .from(gseState)
+    .where(eq(gseState.character, character))
+    .limit(1);
+
+  return NextResponse.json({ ok: true, gse: row });
 }
 
-// A character can be present only in the bridge's live-window list, without a
-// saved GSE row yet. Deleting that entry is still a successful no-op: it keeps
-// the UI resilient and avoids showing a false "failed to remove" message.
+/** Remove apenas a configuração GSE. A janela/conversa continua intacta. */
 export async function DELETE(
-  _request: NextRequest,
-  { params }: { params: Promise<{ character: string }> },
+  request: NextRequest,
+  context: { params: Promise<{ character: string }> },
 ) {
-  const { character } = await params;
-  const target = decodeURIComponent(character).trim().toLowerCase();
-  if (!target) {
-    return NextResponse.json({ error: "invalid_character" }, { status: 400 });
+  const guard = await checkBridgeAuth(request);
+  if (!guard.ok) return guard.response;
+
+  const { character: rawChar } = await context.params;
+  const character = canonicalName(decodeURIComponent(rawChar));
+  if (!character) {
+    return NextResponse.json({ error: "personagem inválido" }, { status: 400 });
   }
+  await db.delete(gseState).where(sql`lower(${gseState.character}) = ${character}`);
+  return NextResponse.json({ ok: true, character });
+}
 
-  await db
-    .delete(gseState)
-    .where(sql`lower(${gseState.character}) = ${target}`);
-
-  return NextResponse.json({ ok: true, character: target });
+export async function GET(
+  _request: NextRequest,
+  context: { params: Promise<{ character: string }> },
+) {
+  const { character: rawChar } = await context.params;
+  const character = canonicalName(decodeURIComponent(rawChar));
+  if (!character) {
+    return NextResponse.json({ error: "personagem inválido" }, { status: 400 });
+  }
+  const [row] = await db
+    .select()
+    .from(gseState)
+    .where(eq(gseState.character, character))
+    .limit(1);
+  return NextResponse.json({
+    ok: true,
+    character,
+    gse: row ?? {
+      character,
+      running: "no",
+      keybind: "1",
+      intervalMs: "100",
+      updatedAt: null,
+    },
+  });
 }

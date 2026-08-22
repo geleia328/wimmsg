@@ -32,3 +32,31 @@ export function randomId(prefix = "id") {
     128,
   );
 }
+
+/** Nomes de canal / sistema que nunca são um personagem de verdade. */
+export const NOISE_NAMES = [
+  "unknown",
+  "guild",
+  "party",
+  "raid",
+  "system",
+  "wim",
+  "general",
+  "comercio",
+  "trade",
+];
+
+export function isLikelyPlayerName(player: string): boolean {
+  const p = player.trim().toLowerCase();
+  if (p.length < 2 || p.length > 64) return false;
+  if (!/[a-zà-ÿ]/i.test(p)) return false;
+  if (/^\d+$/.test(p)) return false;
+  return !NOISE_NAMES.includes(p);
+}
+
+/** Corpo de mensagem que veio de OCR de UI, não de um sussurro real. */
+export function isLikelyPollutedBody(body: string): boolean {
+  return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(
+    body,
+  );
+}

@@ -3,7 +3,12 @@ import { db } from "@/db";
 import { appSettings, messages } from "@/db/schema";
 import { checkBridgeAuth } from "@/lib/auth";
 import { filterDuplicateContent } from "@/lib/dedupe";
+import {
+  isLikelyPlayerName,
+  isLikelyPollutedBody,
+} from "@/lib/shared";
 import { normalizeNameForStorage } from "@/lib/unicode";
+import { canonicalName } from "@/lib/realm";
 import { sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -33,35 +38,7 @@ type IncomingPayload = {
   message?: IncomingMessage;
 };
 
-function isLikelyPlayerName(player: string): boolean {
-  const p = player.trim().toLowerCase();
-  if (p.length < 2 || p.length > 64) return false;
-  if (!/[a-zà-ÿ]/i.test(p)) return false;
-  if (/^\d+$/.test(p)) return false;
-  if (
-    [
-      "unknown",
-      "guild",
-      "party",
-      "raid",
-      "system",
-      "wim",
-      "general",
-      "comercio",
-      "trade",
-    ].includes(p)
-  )
-    return false;
-  return true;
-}
-
-function isLikelyPollutedBody(body: string): boolean {
-  const b = body.toLowerCase();
-  return /\b(no do canal|intervalo|flood\s*&\s*queue|status:\s*desligado|criar link|exportar perfil|importar perfil|ligar sistema|todos os objetivos|missões|recompensas|comércio\s*-\s*cidade|guilda ativa|recruta dps|lf craft)\b/i.test(
-    b,
-  );
-}
-
+/** Converteções apagadas no painel ficam em quarentena por 2 min. */
 async function filterDeletedConversationGrace<
   T extends { character: string; player: string; createdAt: Date },
 >(rows: T[]): Promise<T[]> {
@@ -75,10 +52,7 @@ async function filterDeletedConversationGrace<
 
     const deleted = new Map<string, number>();
     for (const t of tombstones) {
-      deleted.set(
-        t.key.replace(/^deleted_conversation:/, ""),
-        Number(t.value) || 0,
-      );
+      deleted.set(t.key.replace(/^deleted_conversation:/, ""), Number(t.value) || 0);
     }
 
     const GRACE_MS = 120_000;
@@ -93,6 +67,10 @@ async function filterDeletedConversationGrace<
   }
 }
 
+/**
+ * O bridge pode encapsular sussurros de outra janela no formato
+ * `<Personagem> <Jogador> texto` (relay entre janelas via addon).
+ */
 function parseEmbeddedRelay(
   body: string,
 ): {
@@ -146,12 +124,7 @@ export async function POST(request: NextRequest) {
   const rows = rawMessages
     .map((m) => {
       const rawBody = (m.body ?? m.text ?? m.message ?? "").trim();
-      const rawCharacter = (
-        m.character ??
-        m.char ??
-        m.own ??
-        "unknown"
-      ).trim();
+      const rawCharacter = (m.character ?? m.char ?? m.own ?? "unknown").trim();
       const rawPlayer = (m.player ?? m.from ?? m.to ?? "").trim();
 
       if (!rawBody || !rawPlayer) return null;
@@ -177,9 +150,13 @@ export async function POST(request: NextRequest) {
 
       const ts = m.receivedAt ?? m.received_at ?? m.createdAt;
 
+      const cleanCharacter = canonicalName(character) ?? normalizeNameForStorage(character);
+      const cleanPlayer = canonicalName(player);
+      if (!cleanPlayer) return null;
+
       return {
-        character: normalizeNameForStorage(character),
-        player: normalizeNameForStorage(player),
+        character: cleanCharacter,
+        player: cleanPlayer,
         body,
         direction,
         status: direction === "outgoing" ? (m.status ?? "sent") : "sent",
@@ -188,26 +165,15 @@ export async function POST(request: NextRequest) {
       };
     })
     .filter(
-      (
-        r,
-      ): r is NonNullable<typeof r> & {
-        direction: "incoming" | "outgoing";
-      } => Boolean(r && r.player.length > 0 && r.body.length > 0),
+      (r): r is NonNullable<typeof r> & { direction: "incoming" | "outgoing" } =>
+        Boolean(r && r.player.length > 0 && r.body.length > 0),
     );
 
   if (rows.length === 0) {
-    return NextResponse.json({ inserted: 0 });
+    return NextResponse.json({ inserted: 0, received: rawMessages.length });
   }
 
   const visibleRows = await filterDeletedConversationGrace(rows);
-  if (visibleRows.length === 0) {
-    return NextResponse.json({
-      inserted: 0,
-      received: rows.length,
-      skipped: "recently_deleted",
-    });
-  }
-
   const uniqueRows = await filterDuplicateContent(visibleRows);
   if (uniqueRows.length === 0) {
     return NextResponse.json({ inserted: 0, received: rows.length });
@@ -221,7 +187,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     inserted: inserted.length,
-    received: rows.length,
+    received: rawMessages.length,
   });
 }
 

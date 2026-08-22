@@ -1,62 +1,86 @@
 import { NextResponse } from "next/server";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const KNOWN: Record<string, string> = {
-  "wim_bridge_gui.py":
-    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/wim_bridge_gui.py",
-  "whisper_announcer.py":
-    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/whisper_announcer.py",
-  "requirements.txt":
-    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/requirements.txt",
-  "config.example.ini":
-    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/config.example.ini",
-  "wim_bridge.py":
-    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/wim_bridge.py",
-  "WIMBridge.lua":
-    "https://raw.githubusercontent.com/geleia328/wimmsg/main/public/downloads/WIMBridge/WIMBridge.lua",
-};
-
-const CONTENT_TYPES: Record<string, string> = {
-  ".py": "text/x-python; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".ini": "text/plain; charset=utf-8",
-  ".lua": "text/plain; charset=utf-8",
-};
-
-function contentTypeFor(file: string) {
-  const ext = file.includes(".") ? file.slice(file.lastIndexOf(".")) : "";
-  return CONTENT_TYPES[ext] ?? "application/octet-stream";
-}
-
 /**
- * Public downloads. Prefer local patched files in public/downloads; fall back
- * to GitHub raw for files that are not bundled in this deployment.
+ * Servidor de downloads.
+ *
+ * Para o .exe:
+ *   1) Se a env BRIDGE_EXE_URL estiver setada, faz redirect 302 pra ela
+ *      (use isto: o .exe fica no GitHub Releases e o site só aponta).
+ *   2) Se existir public/downloads/BakersWhisper.exe, redireciona ao CDN
+ *      estático (evita carregar o binário inteiro na função serverless).
+ *   3) Senão, devolve 404 com mensagem amigável.
+ *
+ * Para os outros arquivos, serve de public/downloads.
  */
+
+const TEXT_FILES: Record<string, { path: string; ctype: string }> = {
+  "WIMBridge.lua": { path: "WIMBridge.lua", ctype: "text/plain; charset=utf-8" },
+  "WIMBridge.toc": { path: "WIMBridge.toc", ctype: "text/plain; charset=utf-8" },
+  "config.example.ini": { path: "config.example.ini", ctype: "text/plain; charset=utf-8" },
+  "requirements.txt": { path: "requirements.txt", ctype: "text/plain; charset=utf-8" },
+  "LEIA-ME.txt": { path: "LEIA-ME.txt", ctype: "text/plain; charset=utf-8" },
+  // código-fonte, escondido na UI mas continua acessível por URL
+  "wim_bridge_ocr.py": { path: "wim_bridge_ocr.py", ctype: "text/x-python; charset=utf-8" },
+  "wim_bridge.py": { path: "wim_bridge.py", ctype: "text/x-python; charset=utf-8" },
+};
+
+const EXE_NAME = "BakersWhisper.exe";
+const EXE_LOCAL = join(process.cwd(), "public", "downloads", EXE_NAME);
+const EXE_URL = process.env.BRIDGE_EXE_URL?.trim();
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ file: string }> },
 ) {
   const { file } = await params;
-  if (!KNOWN[file]) {
-    return NextResponse.json({ error: "unknown_file" }, { status: 404 });
+
+  // ---- .exe (binário) -------------------------------------------------
+  if (file === EXE_NAME || file === "BakersWhisper.exe") {
+    if (EXE_URL) {
+      return NextResponse.redirect(EXE_URL, { status: 302 });
+    }
+    try {
+      await stat(EXE_LOCAL);
+      // Arquivos grandes devem ser servidos pelo CDN estático, não carregados
+      // por inteiro em uma função serverless.
+      return NextResponse.redirect(
+        new URL(`/downloads/${EXE_NAME}`, _request.url),
+        { status: 302 },
+      );
+    } catch {
+      return NextResponse.json(
+        {
+          error: "exe_not_published",
+          message:
+            "O BakersWhisper.exe ainda não foi publicado. Defina BRIDGE_EXE_URL no .env " +
+            "apontando para o GitHub Releases, ou coloque o .exe em public/downloads/.",
+        },
+        { status: 404 },
+      );
+    }
   }
 
+  // ---- arquivos texto --------------------------------------------------
+  const entry = TEXT_FILES[file];
+  if (!entry) {
+    return NextResponse.json({ error: "unknown_file" }, { status: 404 });
+  }
   try {
-    const localPath = join(process.cwd(), "public", "downloads", file);
-    const body = await readFile(localPath);
+    const body = await readFile(join(process.cwd(), "public", "downloads", entry.path));
     return new NextResponse(body, {
       status: 200,
       headers: {
-        "content-type": contentTypeFor(file),
+        "content-type": entry.ctype,
         "content-disposition": `attachment; filename="${file}"`,
         "cache-control": "no-store",
       },
     });
   } catch {
-    return NextResponse.redirect(KNOWN[file], { status: 302 });
+    return NextResponse.json({ error: "file_not_found" }, { status: 404 });
   }
 }

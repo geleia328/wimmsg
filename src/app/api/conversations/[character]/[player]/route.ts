@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { messages } from "@/db/schema";
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, gt, sql } from "drizzle-orm";
+import { canonicalName } from "@/lib/realm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET  → messages between `character` (your window) and `player` (the other end).
- * POST → queues a new outgoing whisper to be typed in that specific window.
+ * GET  → mensagens entre `character` (sua janela) e `player` (o outro lado).
+ * POST → enfileira um novo sussurro de saída para ser digitado nessa janela.
  */
 export async function GET(
   request: NextRequest,
@@ -56,38 +57,54 @@ export async function POST(
   }
 
   const body = (payload.body ?? "").trim();
-  if (!player || !body || !character) {
-    return NextResponse.json(
-      { error: "character, player and body required" },
-      { status: 400 },
-    );
+  if (!body) {
+    return NextResponse.json({ error: "body required" }, { status: 400 });
   }
   if (body.length > 255) {
     return NextResponse.json(
-      { error: "message too long (255 char max)" },
+      { error: "mensagem muito longa (máx. 255 caracteres)" },
       { status: 400 },
     );
   }
 
-  // Detect potential realm mismatch: WoW whispers only work between the same
-  // realm or across officially connected realms. We can't know the connected
-  // realm groups, but we can flag when suffixes differ.
-  const charRealm = character.includes("-")
-    ? character.split("-").slice(-1)[0].toLowerCase()
+  // Validação estrita: o painel recusa nomes com dígito ou ruído
+  // (corrige o caso "bleedingh0110w" / "Illidan" vs "illidan").
+  const canonicalCharacter = canonicalName(character);
+  const canonicalPlayer = canonicalName(player);
+  if (!canonicalCharacter) {
+    return NextResponse.json(
+      { error: `personagem inválido: "${character}"` },
+      { status: 400 },
+    );
+  }
+  if (!canonicalPlayer) {
+    return NextResponse.json(
+      {
+        error:
+          `destinatário inválido: "${player}". O nome precisa ser ` +
+          `"Personagem-Realm" com apenas letras (ex: fataburns-illidan). ` +
+          `Sem dígitos — OCR não pode transformar 'o' em '0' ou 'l' em '1'.`,
+      },
+      { status: 400 },
+    );
+  }
+
+  const charRealm = canonicalCharacter.includes("-")
+    ? canonicalCharacter.split("-").slice(-1)[0]
     : "";
-  const playerRealm = player.includes("-")
-    ? player.split("-").slice(-1)[0].toLowerCase()
+  const playerRealm = canonicalPlayer.includes("-")
+    ? canonicalPlayer.split("-").slice(-1)[0]
     : "";
   const realmWarning =
     charRealm && playerRealm && charRealm !== playerRealm
-      ? `Personagem está em ${character.split("-").slice(-1)[0]} mas o destinatário está em ${player.split("-").slice(-1)[0]}. O envio pode falhar se os servidores não estiverem conectados.`
+      ? `Personagem está em ${canonicalCharacter.split("-").slice(-1)[0]} mas o destinatário está em ${canonicalPlayer.split("-").slice(-1)[0]}. O envio pode falhar se os servidores não estiverem conectados.`
       : undefined;
 
   const [inserted] = await db
     .insert(messages)
     .values({
-      character,
-      player,
+      character: canonicalCharacter,
+      player: canonicalPlayer,
       body,
       direction: "outgoing",
       status: "pending",

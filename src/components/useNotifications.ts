@@ -1,197 +1,133 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-type Prefs = {
-  sound: boolean;
-  desktop: boolean;
-  volume: number; // 0..1
-};
+/**
+ * Notificações sonoras + Notification API para novos sussurros.
+ *
+ * - Beep: sempre toca quando `enabled` (mesmo que a aba esteja visível,
+ *   o usuário pode estar em outra janela). Usa WebAudio — sem arquivo
+ *   externo.
+ * - Notification: pede permissão no primeiro clique no 🔔. Só dispara
+ *   se a aba estiver OCULTA (se a aba está visível, o som + a bolinha
+ *   na sidebar já são feedback suficiente; o Notification do browser
+ *   não dispara quando a aba está em foco).
+ */
+export function useNotifications() {
+  const ready = true;
+  const [enabled, setEnabled] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.localStorage.getItem("bw:sound") !== "0";
+  });
+  const [permission, setPermission] = useState<NotificationPermission>(() =>
+    typeof Notification === "undefined" ? "default" : Notification.permission,
+  );
+  const ctxRef = useRef<AudioContext | null>(null);
+  const lastBeepAt = useRef(0);
 
-const STORAGE_KEY = "bakers-whisper:notif-prefs";
-const DEFAULTS: Prefs = { sound: true, desktop: false, volume: 0.5 };
+  // Persiste a preferência.
+  useEffect(() => {
+    if (ready) window.localStorage.setItem("bw:sound", enabled ? "1" : "0");
+  }, [enabled, ready]);
 
-function loadPrefs(): Prefs {
-  if (typeof window === "undefined") return DEFAULTS;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULTS;
-    const parsed = JSON.parse(raw) as Partial<Prefs>;
-    return { ...DEFAULTS, ...parsed };
-  } catch {
-    return DEFAULTS;
-  }
-}
+  const context = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined") return null;
+    const Ctor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctor) return null;
+    if (!ctxRef.current) ctxRef.current = new Ctor();
+    return ctxRef.current;
+  }, []);
 
-function savePrefs(p: Prefs) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
-  } catch {
-    /* ignore */
-  }
-}
+  const beep = useCallback(() => {
+    // Evita encavalar beeps se vier mensagem muito rápida
+    const now = Date.now();
+    if (now - lastBeepAt.current < 300) return;
+    lastBeepAt.current = now;
 
-function playChime(ctx: AudioContext, volume: number) {
-  const now = ctx.currentTime;
-  const master = ctx.createGain();
-  master.gain.value = volume;
-  master.connect(ctx.destination);
+    const ctx = context();
+    if (!ctx) return;
+    if (ctx.state === "suspended") void ctx.resume();
 
-  const notes = [
-    { freq: 880, start: 0.0, dur: 0.12 }, // A5
-    { freq: 1318.5, start: 0.09, dur: 0.16 }, // E6
-  ];
-
-  for (const n of notes) {
+    const t = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.value = n.freq;
-    gain.gain.setValueAtTime(0, now + n.start);
-    gain.gain.linearRampToValueAtTime(0.6, now + n.start + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + n.start + n.dur);
-    osc.connect(gain);
-    gain.connect(master);
-    osc.start(now + n.start);
-    osc.stop(now + n.start + n.dur + 0.02);
-  }
-}
+    // Dois tons curtos em sequência (mais "notificação" do que "erro")
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.exponentialRampToValueAtTime(1320, t + 0.08);
+    osc.frequency.setValueAtTime(1320, t + 0.10);
+    osc.frequency.exponentialRampToValueAtTime(1100, t + 0.20);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.36);
+  }, [context]);
 
-export function useNotifications() {
-  const [prefs, setPrefs] = useState<Prefs>(DEFAULTS);
-  const [ready, setReady] = useState(false);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const unreadRef = useRef(0);
-  const baseTitleRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    const loaded = loadPrefs();
-    setTimeout(() => {
-      setPrefs(loaded);
-      setReady(true);
-    }, 0);
-    if (typeof document !== "undefined") {
-      baseTitleRef.current = document.title;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (ready) savePrefs(prefs);
-  }, [prefs, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    const prime = () => {
-      if (!audioCtxRef.current) {
-        try {
-          const AC =
-            window.AudioContext ||
-            (window as unknown as { webkitAudioContext: typeof AudioContext })
-              .webkitAudioContext;
-          audioCtxRef.current = new AC();
-        } catch {
-          /* audio unsupported */
-        }
-      }
-      audioCtxRef.current?.resume().catch(() => {});
-    };
-    window.addEventListener("click", prime, { once: false });
-    window.addEventListener("keydown", prime, { once: false });
-    return () => {
-      window.removeEventListener("click", prime);
-      window.removeEventListener("keydown", prime);
-    };
-  }, [ready]);
-
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        unreadRef.current = 0;
-        if (baseTitleRef.current) document.title = baseTitleRef.current;
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
-
-  const setSound = useCallback(
-    (v: boolean) => setPrefs((p) => ({ ...p, sound: v })),
-    [],
-  );
-  const setVolume = useCallback(
-    (v: number) => setPrefs((p) => ({ ...p, volume: Math.max(0, Math.min(1, v)) })),
-    [],
-  );
-  const setDesktop = useCallback(async (v: boolean) => {
-    if (v && typeof Notification !== "undefined" && Notification.permission !== "granted") {
+  const notify = useCallback(
+    (title: string, body: string) => {
+      if (!enabled) return;
+      beep();
+      // Notificação do SO só quando a aba está OCULTA (senão o browser
+      // ignora, e o som + a bolinha na sidebar já dão feedback)
+      const tabHidden = typeof document !== "undefined" && document.hidden;
+      if (!tabHidden) return;
       try {
-        const res = await Notification.requestPermission();
-        if (res !== "granted") {
-          setPrefs((p) => ({ ...p, desktop: false }));
-          return;
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          const n = new Notification(title, {
+            body,
+            icon: "/icon.svg",
+            badge: "/icon.svg",
+            tag: "bw-whisper",
+            requireInteraction: false,
+            silent: true, // o beep já tocou
+          });
+          n.onclick = () => {
+            try {
+              window.focus();
+              n.close();
+            } catch {
+              /* ignore */
+            }
+          };
         }
       } catch {
-        return;
-      }
-    }
-    setPrefs((p) => ({ ...p, desktop: v }));
-  }, []);
-
-  const testChime = useCallback(() => {
-    if (!audioCtxRef.current) return;
-    try {
-      playChime(audioCtxRef.current, prefs.volume);
-    } catch {
-      /* ignore */
-    }
-  }, [prefs.volume]);
-
-  const notifyIncoming = useCallback(
-    (msg: { character: string; player: string; body: string }) => {
-      if (prefs.sound && audioCtxRef.current) {
-        try {
-          playChime(audioCtxRef.current, prefs.volume);
-        } catch {
-          /* ignore */
-        }
-      }
-      if (
-        prefs.desktop &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted" &&
-        document.visibilityState !== "visible"
-      ) {
-        try {
-          new Notification(`Whisper de ${msg.player}`, {
-            body: `[${msg.character}] ${msg.body}`,
-            tag: `wim-${msg.character}-${msg.player}`,
-            silent: prefs.sound, 
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-      if (document.visibilityState !== "visible") {
-        unreadRef.current += 1;
-        if (baseTitleRef.current) {
-          document.title = `(${unreadRef.current}) ${baseTitleRef.current}`;
-        }
+        /* notificações do SO são opcionais */
       }
     },
-    [prefs],
+    [beep, enabled],
   );
 
-  return useMemo(
-    () => ({
-      ready,
-      prefs,
-      setSound,
-      setVolume,
-      setDesktop,
-      testChime,
-      notifyIncoming,
-    }),
-    [ready, prefs, setSound, setVolume, setDesktop, testChime, notifyIncoming],
-  );
+  const requestPermission = useCallback(async () => {
+    try {
+      if (typeof Notification !== "undefined" && Notification.permission === "default") {
+        const p = await Notification.requestPermission();
+        setPermission(p);
+        return p;
+      }
+      return Notification.permission;
+    } catch {
+      return "denied" as NotificationPermission;
+    }
+  }, []);
+
+  const toggleEnabled = useCallback(() => {
+    setEnabled((v) => !v);
+  }, []);
+
+  return {
+    ready,
+    enabled,
+    permission,
+    setEnabled,
+    toggleEnabled,
+    notify,
+    requestPermission,
+    beep, // exposto para teste
+  };
 }

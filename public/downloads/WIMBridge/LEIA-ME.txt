@@ -1,0 +1,67 @@
+🥐 BakersWhisper.exe — bridge para o painel Bakers Whisper
+=========================================================
+
+Este é o ÚNICO arquivo que você precisa baixar. Um botão no site
+(/setup) já baixa ele direto, sem precisar de Python, pip, venv,
+terminal nem nada.
+
+O QUE FAZ
+---------
+- Roda no seu PC, em segundo plano, junto com o WoW.
+- Para cada janela do WoW configurada, lê a faixa preta/amarela
+  que o addon WIMBridge desenha no topo da tela (via OCR nativo
+  do Windows).
+- Manda os whispers pro painel web (/api/ingest).
+- Pega as suas respostas do painel e digita na janela certa do WoW
+  com /w Nome-Realm mensagem.
+
+COMO USAR
+---------
+1. Abra o BakersWhisper.exe (Windows pode pedir confirmação
+   de SmartScreen — clique em "Mais informações" → "Executar mesmo assim").
+2. Ele abre uma janelinha com 4 campos:
+     URL do site  → http://localhost:3000  (ou seu site na Vercel)
+     Token        → o mesmo BRIDGE_TOKEN configurado no site
+     [Personagem] → fataburns-illidan
+     Título janela → WoW - fataburns
+   Clique em "Adicionar" e o bridge já começa a funcionar.
+3. Abra o WoW com /reload e digite /wimbridge who pra confirmar
+   que o addon está ativo (vai aparecer "WIMBridge 3.3.0 ATIVO").
+4. Abra o painel web em http://localhost:3000 (ou o seu site).
+   As conversas vão aparecer em tempo real.
+
+NÃO PRECISA
+------------
+- Python, pip, venv
+- Editar .ini na mão
+- Instalar requisitos manualmente
+- Compilar nada
+- Comando no terminal (a janelinha do .exe já tem tudo)
+
+O QUE PRECISA ESTAR NO PC
+--------------------------
+- Windows 10 ou 11 (64 bits)
+- Visual C++ Redistributable (já vem no Windows 11; em Windows 10
+  mais antigo pode precisar instalar — o .exe avisa se faltar)
+- O addon WIMBridge.lua dentro de:
+    World of Warcraft\_retail_\Interface\AddOns\WIMBridge\
+  (WIMBridge.lua + WIMBridge.toc juntos)
+- A Vercel rodando o site, OU o site rodando local em
+  http://localhost:3000
+
+PERGUNTAS
+---------
+O bridge não conecta?
+  → Confira se a URL do site está certa e se o token bate com o
+    BRIDGE_TOKEN do site.
+
+O OCR está confundindo letras (ex: "bleedingh0110w")?
+  → O painel já rejeita esses casos. Mas para o OCR errar menos:
+    /wimbridge font 55
+    /wimbridge size 500
+    /wimbridge delay 1.8
+
+O addon não aparece no jogo?
+  → Conferiu que copiou WIMBridge.lua + WIMBridge.toc para a pasta
+    Interface\AddOns\WIMBridge\ e deu /reload? Veja a página /setup
+    do site, tem um passo-a-passo com prints.

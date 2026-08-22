@@ -6,6 +6,7 @@ import { and, desc, eq, gt } from "drizzle-orm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Usado pelo painel para disparar notificações sonoras de novos sussurros. */
 export async function GET(request: NextRequest) {
   const since = Number.parseInt(
     request.nextUrl.searchParams.get("since") ?? "0",
@@ -29,7 +30,7 @@ export async function GET(request: NextRequest) {
     .limit(50);
 
   return NextResponse.json({
-    messages: rows.reverse(),
+    messages: rows.slice().reverse(),
     latestId: rows.length > 0 ? Math.max(...rows.map((r) => r.id)) : since,
   });
 }

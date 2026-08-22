@@ -10,6 +10,7 @@ type Conversation = {
   lastBody: string;
   lastDirection: "incoming" | "outgoing";
   incomingCount: number;
+  pendingOut: number;
   totalCount: number;
 };
 
@@ -18,15 +19,21 @@ type CharacterInfo = {
   total: number;
   incoming: number;
   pendingOut: number;
-  lastAt: string;
+  lastAt: string | null;
 };
 
 type WindowStatus = {
   character: string;
   windowTitle: string;
   online: boolean;
+  onlineByScan?: boolean;
+  onlineByActivity?: boolean;
+  secondsAgo: number;
+  secondsSinceIncoming?: number | null;
   foreground: boolean;
   matched: boolean;
+  slot: string;
+  realm: string;
 };
 
 type Message = {
@@ -41,23 +48,55 @@ type Message = {
   sentAt: string | null;
 };
 
-// Polling cadences tuned for fluidity + low server load:
-//  - incoming/notificações: 2.5s
-//  - lista/contas/status:   4s
-//  - conversa aberta:       2.5s
-// This is responsive enough for chat while being substantially lighter on
-// mobile networks and serverless database reads.
-const POLL_MS = 2500;
-const TOP_POLL_MS = 4000;
-const INITIAL_CONVERSATION_LIMIT = 100;
 const ALL = "__ALL__";
+const POLL_LIST_MS = 3000;
+const POLL_CHAT_MS = 1500;
+const POLL_INCOMING_MS = 2000;
+const DEMO_TICK_MS = 4000;
 
-function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
-  return (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+function titleCase(value: string) {
+  if (!value) return value;
+  const [name] = value.split("-");
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-function timeAgo(iso: string): string {
+function realmOf(value: string) {
+  if (!value) return "";
+  const idx = value.lastIndexOf("-");
+  if (idx < 0) return "";
+  return value.slice(idx + 1);
+}
+
+function realmMismatchWarning(
+  player: string,
+  character: string,
+): string | null {
+  const a = realmOf(player);
+  const b = realmOf(character);
+  if (!a || !b) return null;
+  if (a.toLowerCase() === b.toLowerCase()) return null;
+  return `Servidor diferente: seu personagem está em ${b} mas o destinatário está em ${a}. A mensagem pode falhar se os servidores não estiverem conectados.`;
+}
+
+function copyToClipboard(value: string) {
+  if (typeof navigator === "undefined" || !navigator.clipboard) return;
+  void navigator.clipboard
+    .writeText(value)
+    .then(() => {
+      // Feedback visual simples via toast se a função estiver disponível
+      window.dispatchEvent(
+        new CustomEvent("bw:toast", { detail: `📋 copiado: ${value}` }),
+      );
+    })
+    .catch(() => {
+      /* silencioso */
+    });
+}
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return "";
   const d = new Date(iso).getTime();
+  if (Number.isNaN(d)) return "";
   const diff = Date.now() - d;
   if (diff < 60_000) return "agora";
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
@@ -65,32 +104,20 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86_400_000)}d`;
 }
 
-function statusBadge(status: string): { label: string; classes: string } {
-  switch (status) {
-    case "pending":
-      return {
-        label: "aguardando envio",
-        classes: "bg-amber-500/20 text-amber-300 border border-amber-500/40",
-      };
-    case "sent":
-      return {
-        label: "enviado no jogo",
-        classes:
-          "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40",
-      };
-    case "failed":
-      return {
-        label: "falhou",
-        classes: "bg-rose-500/20 text-rose-300 border border-rose-500/40",
-      };
-    case "received":
-      return { label: "recebido", classes: "" };
-    default:
-      return { label: status, classes: "" };
-  }
+function clockOf(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 }
 
-function realmColor(name: string): string {
+function formatRelative(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
+function charColor(name: string): string {
   const palette = [
     "bg-sky-500/20 text-sky-300 border-sky-500/40",
     "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/40",
@@ -103,164 +130,123 @@ function realmColor(name: string): string {
     "bg-teal-500/20 text-teal-300 border-teal-500/40",
     "bg-rose-500/20 text-rose-300 border-rose-500/40",
   ];
-  // Keep all characters from the same realm visually grouped.
-  const realm = name.includes("-") ? name.split("-").at(-1)! : name;
   let h = 0;
-  for (let i = 0; i < realm.length; i += 1) h = (h * 31 + realm.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 }
 
+function statusTick(status: string): string {
+  if (status === "pending") return "🕓";
+  if (status === "sent") return "✓✓";
+  if (status === "failed") return "⚠";
+  return "";
+}
+
 export function ChatApp() {
+  const notif = useNotifications();
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [characters, setCharacters] = useState<CharacterInfo[]>([]);
-  const [statusMap, setStatusMap] = useState<Record<string, WindowStatus>>({});
-  const [totalWindowsOnline, setTotalWindowsOnline] = useState(0);
-  const [characterFilter, setCharacterFilter] = useState<string>(ALL);
-  const [selected, setSelected] = useState<{
-    character: string;
-    player: string;
-  } | null>(null);
+  const [windows, setWindows] = useState<WindowStatus[]>([]);
+  const [serverUp, setServerUp] = useState(true);
+  const [filter, setFilter] = useState<string>(ALL);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<{ character: string; player: string } | null>(
+    null,
+  );
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const [deletingIds, setDeletingIds] = useState<Record<number, boolean>>({});
-  const [clearingConversation, setClearingConversation] = useState(false);
-  const [newCharacter, setNewCharacter] = useState("");
-  const [newPlayer, setNewPlayer] = useState("");
-  const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
-  const [showNotifSettings, setShowNotifSettings] = useState(false);
-  const [conversationLimit, setConversationLimit] = useState(
-    INITIAL_CONVERSATION_LIMIT,
-  );
+  const [toast, setToast] = useState<string | null>(null);
+  const [demo, setDemo] = useState(false);
 
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  // Only auto-scroll to the newest message when the user is already near the
-  // bottom. Fixes the bug where reading history was impossible because every
-  // poll yanked the scrollbar back to the end.
-  const stickToBottomRef = useRef(true);
-  const onChatScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    stickToBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-  }, []);
-  const scrollIfStuck = useCallback(() => {
-    const el = scrollRef.current;
-    if (el && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, []);
-  const notif = useNotifications();
+  const readRef = useRef<Record<string, string>>({});
   const lastIncomingIdRef = useRef<number>(-1);
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-  const maxMessageIdRef = useRef(0);
-  // Track which conversations have unseen incoming messages
-  const [unreadMap, setUnreadMap] = useState<Record<string, boolean>>({});
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const seededRef = useRef(false);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  // Ouve eventos globais de toast (disparado pelo copyToClipboard, por ex.)
+  useEffect(() => {
+    const onToast = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (typeof detail === "string") showToast(detail);
+    };
+    window.addEventListener("bw:toast", onToast as EventListener);
+    return () => window.removeEventListener("bw:toast", onToast as EventListener);
+  }, [showToast]);
 
   const refreshTop = useCallback(async () => {
     try {
-      const [c1, c2, c3] = await Promise.all([
-        fetch("/api/conversations", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/characters", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/status", { cache: "no-store" }).then((r) => r.json()),
+      const [convRes, charRes, statusRes] = await Promise.all([
+        fetch("/api/conversations", { cache: "no-store" }),
+        fetch("/api/characters", { cache: "no-store" }),
+        fetch("/api/status", { cache: "no-store" }),
       ]);
-      const rawConvos =
-        (c1 as { conversations: Conversation[] }).conversations ?? [];
-      const nextCharacters =
-        (c2 as { characters: CharacterInfo[] }).characters ?? [];
-      const wins =
-        (c3 as { windows: Array<WindowStatus & { character: string }> })
-          .windows ?? [];
-      const map: Record<string, WindowStatus> = {};
-      let onlineCount = 0;
-      for (const w of wins) {
-        if (w.online) onlineCount += 1;
-        if (w.character) map[w.character] = w;
-      }
-      const knownOwnCharacters = new Set<string>([
-        ...nextCharacters.map((c) => c.character),
-        ...wins.map((w) => w.character).filter(Boolean),
-      ]);
-      const convMap = new Map<string, Conversation>();
-      for (const c of rawConvos) {
-        convMap.set(`${c.character}::${c.player}`, c);
-        // Messenger behavior for your own characters: if the other side is
-        // also one of your windows, create the mirror conversation so opening
-        // taldoglaidon↔madelina shows the same chat in reverse perspective.
-        if (knownOwnCharacters.has(c.player)) {
-          const mirrorKey = `${c.player}::${c.character}`;
-          if (!convMap.has(mirrorKey)) {
-            convMap.set(mirrorKey, {
-              character: c.player,
-              player: c.character,
-              lastAt: c.lastAt,
-              lastBody: c.lastBody,
-              lastDirection:
-                c.lastDirection === "outgoing" ? "incoming" : "outgoing",
-              incomingCount: c.lastDirection === "outgoing" ? 1 : c.incomingCount,
-              totalCount: c.totalCount,
-            });
-          }
-        }
-      }
-      const newConvos = Array.from(convMap.values()).sort(
-        (a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime(),
-      );
-      setConversations(newConvos);
-      setCharacters(nextCharacters);
-      setStatusMap(map);
-      setTotalWindowsOnline(onlineCount);
-      setBridgeUp(true);
+      const convData = (await convRes.json()) as { conversations: Conversation[] };
+      const charData = (await charRes.json()) as { characters: CharacterInfo[] };
+      const statusData = (await statusRes.json()) as {
+        windows: WindowStatus[];
+      };
+      setConversations(convData.conversations ?? []);
+      setCharacters(charData.characters ?? []);
+      setWindows(statusData.windows ?? []);
+      setServerUp(true);
     } catch {
-      setBridgeUp(false);
+      setServerUp(false);
     }
   }, []);
 
-  // Single source of truth for the open chat: the bidirectional endpoint
-  // returns both sides (A→B and B→A) normalized — one fetch instead of two.
-  const fetchBidirectionalMessages = useCallback(
-    async (charA: string, charB: string) => {
+  const loadMessages = useCallback(async (charA: string, charB: string) => {
+    try {
+      const res = await fetch(
+        `/api/conversations/bidirectional?charA=${encodeURIComponent(charA)}&charB=${encodeURIComponent(charB)}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { messages: Message[] };
+      setMessages(data.messages ?? []);
+    } catch {
+      /* mantém o último estado bom; o próximo poll tenta de novo */
+    }
+  }, []);
+
+  // Seed de demonstração (só se o banco estiver vazio).
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    void (async () => {
       try {
-        const res = await fetch(
-          `/api/conversations/bidirectional?charA=${encodeURIComponent(charA)}&charB=${encodeURIComponent(charB)}`,
-          { cache: "no-store" },
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as { messages: Message[] };
-        const msgs = data.messages ?? [];
-        setMessages(msgs);
-        for (const m of msgs) {
-          if (m.id > maxMessageIdRef.current) maxMessageIdRef.current = m.id;
-        }
+        await fetch("/api/bridge-sim", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "seed" }),
+        });
+        await refreshTop();
       } catch {
-        /* keep last good state — next poll retries */
+        /* silencioso */
       }
-    },
-    [],
-  );
+    })();
+  }, [refreshTop]);
 
   useEffect(() => {
     void refreshTop();
-    const id = setInterval(refreshTop, TOP_POLL_MS);
-    return () => clearInterval(id);
+    const id = window.setInterval(() => void refreshTop(), POLL_LIST_MS);
+    return () => window.clearInterval(id);
   }, [refreshTop]);
 
-  // Poll for new incoming whispers globally so we can fire notifications
-  // even for conversations that aren't currently open.
+  // Notificações de novos sussurros (mesmo em conversas fechadas).
   useEffect(() => {
     if (!notif.ready) return;
-    let cancelled = false;
-
     const tick = async () => {
       try {
         const since = lastIncomingIdRef.current;
         const url =
-          since < 0
-            ? "/api/incoming/recent"
-            : `/api/incoming/recent?since=${since}`;
+          since < 0 ? "/api/incoming/recent" : `/api/incoming/recent?since=${since}`;
         const res = await fetch(url, { cache: "no-store" });
         const data = (await res.json()) as {
           messages: Array<{
@@ -271,82 +257,89 @@ export function ChatApp() {
           }>;
           latestId: number;
         };
-        if (cancelled) return;
-
         if (lastIncomingIdRef.current < 0) {
           lastIncomingIdRef.current = data.latestId ?? 0;
           return;
         }
-
-        for (const m of data.messages) {
-          if (m.id > lastIncomingIdRef.current) {
-            notif.notifyIncoming({
-              character: m.character,
-              player: m.player,
-              body: m.body,
-            });
-            lastIncomingIdRef.current = m.id;
-
-            const sel = selectedRef.current;
-            const isCurrentChat =
-              sel &&
-              ((sel.character === m.character && sel.player === m.player) ||
-                (sel.character === m.player && sel.player === m.character));
-
-            if (isCurrentChat && sel) {
-              // Auto-refresh usando bidirecional para mostrar mensagens de ambos os lados
-              await fetchBidirectionalMessages(sel.character, sel.player);
-              setTimeout(scrollIfStuck, 50);
-            } else {
-              // Mark as unread for the conversation list badge
-              const key = `${m.character}::${m.player}`;
-              setUnreadMap((prev) => ({ ...prev, [key]: true }));
-            }
-          }
+        const fresh = (data.messages ?? []).filter(
+          (m) => m.id > lastIncomingIdRef.current,
+        );
+        lastIncomingIdRef.current = data.latestId ?? lastIncomingIdRef.current;
+        for (const m of fresh) {
+          notif.notify(`${titleCase(m.player)} → ${titleCase(m.character)}`, m.body);
         }
+        if (fresh.length > 0) void refreshTop();
       } catch {
-        /* silent */
+        /* silencioso */
       }
     };
-
     void tick();
-    const id = setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [notif, fetchBidirectionalMessages]);
+    const id = window.setInterval(() => void tick(), POLL_INCOMING_MS);
+    return () => window.clearInterval(id);
+  }, [notif, refreshTop]);
 
-  // When a conversation becomes selected, clear its unread badge
+  // Conversa aberta
   useEffect(() => {
     if (!selected) {
       setMessages([]);
       return;
     }
-    const key = `${selected.character}::${selected.player}`;
-    setUnreadMap((prev) => {
-      if (!prev[key]) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-    // Abrir conversa sempre mostra o final; depois disso o usuário pode rolar
-    // para cima livremente sem ser "puxado" de volta.
-    stickToBottomRef.current = true;
-    // Usar API bidirecional para mostrar conversa completa (A→B e B→A)
-    void fetchBidirectionalMessages(selected.character, selected.player);
-    // A lista de notificações já atualiza em paralelo; 2.5s mantém a conversa
-    // fluida sem requisitar o histórico inteiro em excesso no celular.
-    const id = setInterval(
-      () => void fetchBidirectionalMessages(selected.character, selected.player),
-      POLL_MS,
+    void loadMessages(selected.character, selected.player);
+    const id = window.setInterval(
+      () => void loadMessages(selected.character, selected.player),
+      POLL_CHAT_MS,
     );
-    return () => clearInterval(id);
-  }, [selected, fetchBidirectionalMessages]);
+    return () => window.clearInterval(id);
+  }, [selected, loadMessages]);
+
+  // Modo demonstração: simula o bridge entregando a fila e mandando sussurros.
+  useEffect(() => {
+    if (!demo) return;
+    const id = window.setInterval(async () => {
+      try {
+        await fetch("/api/bridge-sim", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "tick" }),
+        });
+        if (selected) void loadMessages(selected.character, selected.player);
+        void refreshTop();
+      } catch {
+        /* silencioso */
+      }
+    }, DEMO_TICK_MS);
+    return () => window.clearInterval(id);
+  }, [demo, selected, loadMessages, refreshTop]);
 
   useEffect(() => {
-    scrollIfStuck();
-  }, [messages, scrollIfStuck]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!selected) return;
+    readRef.current[`${selected.character}:${selected.player}`] = new Date().toISOString();
+  }, [selected, messages]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return conversations.filter((c) => {
+      if (filter !== ALL && c.character !== filter) return false;
+      if (!q) return true;
+      return (
+        c.player.toLowerCase().includes(q) ||
+        c.character.toLowerCase().includes(q) ||
+        c.lastBody.toLowerCase().includes(q)
+      );
+    });
+  }, [conversations, filter, search]);
+
+  const onlineCount = windows.filter((w) => w.online).length;
+  const totalIncoming = characters.reduce((acc, c) => acc + c.incoming, 0);
+  const totalPending = characters.reduce((acc, c) => acc + c.pendingOut, 0);
+
+  const isUnread = (c: Conversation) =>
+    c.lastDirection === "incoming" &&
+    readRef.current[`${c.character}:${c.player}`] !== c.lastAt;
 
   const sendReply = useCallback(async () => {
     if (!selected || !draft.trim()) return;
@@ -360,652 +353,389 @@ export function ChatApp() {
           body: JSON.stringify({ body: draft.trim() }),
         },
       );
+      const data = (await res.json()) as { warning?: string; error?: string };
       if (res.ok) {
-        const data = (await res.json()) as { warning?: string };
-        if (data.warning) {
-          alert(`⚠ Aviso de servidor:\n\n${data.warning}`);
+        if (data.warning) showToast(`⚠️ ${data.warning}`);
+        const inline = realmMismatchWarning(selected.player, selected.character);
+        if (inline) {
+          // warning do backend + heurística local (mesma comparação case-insensitive)
         }
         setDraft("");
-        void fetchBidirectionalMessages(selected.character, selected.player);
+        void loadMessages(selected.character, selected.player);
         void refreshTop();
       } else {
-        const err = (await res.json()) as { error?: string };
-        alert(err.error ?? "erro ao enfileirar mensagem");
+        showToast(`❌ ${data.error ?? "erro ao enfileirar mensagem"}`);
       }
     } finally {
       setSending(false);
     }
-  }, [selected, draft, fetchBidirectionalMessages, refreshTop]);
+  }, [selected, draft, loadMessages, refreshTop, showToast]);
 
   const deleteMessage = useCallback(
-    async (message: Message) => {
-      if (!selected) return;
-      const ok = window.confirm(
-        "Apagar esta mensagem do chat?\n\n" +
-          "Se ela ainda estiver pendente, também será removida da fila de envio.",
-      );
-      if (!ok) return;
-
-      setDeletingIds((current) => ({ ...current, [message.id]: true }));
-      try {
-        const res = await fetch(`/api/messages/${message.id}`, {
-          method: "DELETE",
-        });
-        if (!res.ok) {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          alert(err.error ?? "erro ao apagar mensagem");
-          return;
-        }
-        setMessages((prev) => prev.filter((m) => m.id !== message.id));
-        void refreshTop();
-      } finally {
-        setDeletingIds((current) => {
-          const next = { ...current };
-          delete next[message.id];
-          return next;
-        });
-      }
+    async (id: number) => {
+      await fetch(`/api/messages/${id}`, { method: "DELETE" });
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      void refreshTop();
     },
-    [selected, refreshTop],
+    [refreshTop],
   );
 
   const clearConversation = useCallback(async () => {
     if (!selected) return;
-    const ok = window.confirm(
-      `Apagar TODAS as mensagens entre ${selected.character} e ${selected.player}?\n\n` +
-        "Isso também remove respostas pendentes dessa conversa da fila.",
+    if (!window.confirm("Apagar toda a conversa? As pendentes saem da fila.")) return;
+    await fetch(
+      `/api/conversations/${encodeURIComponent(selected.character)}/${encodeURIComponent(selected.player)}`,
+      { method: "DELETE" },
     );
-    if (!ok) return;
-
-    setClearingConversation(true);
-    try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(selected.character)}/${encodeURIComponent(selected.player)}`,
-        { method: "DELETE" },
-      );
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        alert(err.error ?? "erro ao limpar conversa");
-        return;
-      }
-      setMessages([]);
-      setConversations((prev) =>
-        prev.filter(
-          (c) =>
-            c.character !== selected.character || c.player !== selected.player,
-        ),
-      );
-      setSelected(null);
-      void refreshTop();
-    } finally {
-      setClearingConversation(false);
-    }
+    setMessages([]);
+    setSelected(null);
+    void refreshTop();
   }, [selected, refreshTop]);
 
-  const realmMismatch = useMemo(() => {
-    if (!selected) return null;
-    const cr = selected.character.includes("-")
-      ? selected.character.split("-").slice(-1)[0]
-      : "";
-    const pr = selected.player.includes("-")
-      ? selected.player.split("-").slice(-1)[0]
-      : "";
-    if (cr && pr && cr.toLowerCase() !== pr.toLowerCase()) {
-      return { charRealm: cr, playerRealm: pr };
-    }
-    return null;
-  }, [selected]);
-
-  const startNewConversation = useCallback(() => {
-    const c = newCharacter.trim();
-    const p = newPlayer.trim();
-    if (!c || !p) return;
-    setSelected({ character: c, player: p });
-    setNewPlayer("");
-    if (!conversations.some((cv) => cv.character === c && cv.player === p)) {
-      setConversations((prev) => [
-        {
-          character: c,
-          player: p,
-          lastAt: new Date().toISOString(),
-          lastBody: "(nova conversa)",
-          lastDirection: "outgoing",
-          incomingCount: 0,
-          totalCount: 0,
-        },
-        ...prev,
-      ]);
-    }
-  }, [newCharacter, newPlayer, conversations]);
-
-  const filteredConversations = useMemo(() => {
-    if (characterFilter === ALL) return conversations;
-    return conversations.filter((c) => sameName(c.character, characterFilter));
-  }, [conversations, characterFilter]);
-
-  const visibleConversations = useMemo(
-    () => filteredConversations.slice(0, conversationLimit),
-    [filteredConversations, conversationLimit],
-  );
-
-  useEffect(() => {
-    setConversationLimit(INITIAL_CONVERSATION_LIMIT);
-  }, [characterFilter]);
-
-  const totalPendingOut = useMemo(
-    () => characters.reduce((s, c) => s + c.pendingOut, 0),
-    [characters],
-  );
-
-  // Clear unread badges when tab becomes visible
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        // Don't clear unreads immediately — let user see the badges.
-        // They clear when the user opens each conversation.
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
-
   return (
-    <div className="flex h-dvh w-full flex-col">
-      <header className="relative flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900/80 px-3 py-2.5 backdrop-blur sm:px-6">
-        <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-yellow-500 to-amber-700 font-black text-slate-900 shadow sm:h-9 sm:w-9">
-            🥐
-          </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-bold leading-tight sm:text-lg">
-              Bakers Whisper
-            </h1>
-            <p className="truncate text-[11px] text-slate-400 sm:text-xs">
-              <span className="mr-2">
-                <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60 align-middle" />{" "}
-                {totalWindowsOnline} janela(s) online
-              </span>
-              · {characters.length} personagens · {conversations.length}{" "}
-              conversas
-              {totalPendingOut > 0 && (
-                <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-amber-300">
-                  {totalPendingOut} pendente(s)
-                </span>
-              )}
-            </p>
-          </div>
-        </div>
-        <nav className="order-last -mx-1 flex w-full items-center gap-1.5 overflow-x-auto px-1 pb-0.5 text-xs md:order-none md:mx-0 md:w-auto md:overflow-visible md:px-0 md:pb-0">
-          <a
-            href="/download"
-            className="whitespace-nowrap rounded border border-amber-500/50 bg-amber-500/10 px-2.5 py-1 text-amber-300 hover:bg-amber-500/20 md:px-3"
-          >
-            📥 Download
-          </a>
-          <a
-            href="/accounts"
-            className="whitespace-nowrap rounded border border-emerald-500/50 bg-emerald-500/10 px-2.5 py-1 text-emerald-300 hover:bg-emerald-500/20 md:px-3"
-          >
-            📡 Contas
-          </a>
-          <a
-            href="/gse"
-            className="whitespace-nowrap rounded border border-fuchsia-500/50 bg-fuchsia-500/10 px-2.5 py-1 text-fuchsia-300 hover:bg-fuchsia-500/20 md:px-3"
-          >
-            ⚙ GSE
-          </a>
-          <a
-            href="/settings"
-            className="whitespace-nowrap rounded border border-sky-500/50 bg-sky-500/10 px-2.5 py-1 text-sky-300 hover:bg-sky-500/20 md:px-3"
-          >
-            🔐 Config
-          </a>
-          <a
-            href="/setup"
-            className="whitespace-nowrap rounded border border-slate-700 px-2.5 py-1 text-slate-300 hover:bg-slate-800 md:px-3"
-          >
-            Setup
-          </a>
-        </nav>
-        <div className="flex shrink-0 items-center gap-2 text-xs">
-          <div className="relative">
+    <div className="grid h-[calc(100vh-9.5rem)] grid-cols-1 gap-4 lg:grid-cols-[340px_1fr]">
+      {/* Sidebar */}
+      <aside className="bw-scroll flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/60">
+        <div className="border-b border-white/10 p-3">
+          <div className="flex items-center gap-2">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar jogador ou mensagem…"
+              className="w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm outline-none placeholder:text-slate-500 focus:border-emerald-500/60"
+            />
             <button
-              onClick={() => setShowNotifSettings((s) => !s)}
-              className={`rounded border px-3 py-1 transition ${
-                notif.prefs.sound || notif.prefs.desktop
-                  ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
-                  : "border-slate-700 text-slate-400 hover:bg-slate-800"
-              }`}
-              title="Preferências de notificação"
-            >
-              {notif.prefs.sound ? "🔔" : "🔕"}
-            </button>
-            {showNotifSettings && (
-              <div className="absolute right-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-2xl">
-                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Notificações
-                </div>
-                <label className="flex cursor-pointer items-center justify-between py-2 text-sm">
-                  <span>🔔 Som ao receber whisper</span>
-                  <input
-                    type="checkbox"
-                    checked={notif.prefs.sound}
-                    onChange={(e) => notif.setSound(e.target.checked)}
-                    className="h-4 w-4 accent-amber-500"
-                  />
-                </label>
-                <div className="mb-2 flex items-center gap-2 py-1 text-xs text-slate-400">
-                  <span>Volume</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={notif.prefs.volume}
-                    onChange={(e) =>
-                      notif.setVolume(parseFloat(e.target.value))
-                    }
-                    className="flex-1 accent-amber-500"
-                    disabled={!notif.prefs.sound}
-                  />
-                  <button
-                    onClick={notif.testChime}
-                    disabled={!notif.prefs.sound}
-                    className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300 hover:bg-slate-800 disabled:opacity-40"
-                  >
-                    testar
-                  </button>
-                </div>
-                <label className="flex cursor-pointer items-center justify-between py-2 text-sm">
-                  <span>💻 Notificação do navegador</span>
-                  <input
-                    type="checkbox"
-                    checked={notif.prefs.desktop}
-                    onChange={(e) => void notif.setDesktop(e.target.checked)}
-                    className="h-4 w-4 accent-amber-500"
-                  />
-                </label>
-                <p className="mt-2 text-[10px] text-slate-500">
-                  O som só toca em navegadores que permitem áudio após a
-                  primeira interação com a página (clique/tecla).
-                </p>
-              </div>
-            )}
-          </div>
-          <span
-            className={`h-2 w-2 rounded-full ${
-              bridgeUp === null
-                ? "bg-slate-500"
-                : bridgeUp
-                  ? "bg-emerald-400"
-                  : "bg-rose-500"
-            }`}
-          />
-          <span className="hidden text-slate-400 sm:inline">
-            {bridgeUp === null
-              ? "conectando..."
-              : bridgeUp
-                ? "API online"
-                : "sem conexão"}
-          </span>
-        </div>
-      </header>
-
-      {/* Character filter bar */}
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/50 px-3 py-2 text-xs sm:px-4">
-        <button
-          onClick={() => setCharacterFilter(ALL)}
-          className={`whitespace-nowrap rounded-full border px-3 py-1 transition ${
-            characterFilter === ALL
-              ? "border-amber-500 bg-amber-500/10 text-amber-300"
-              : "border-slate-700 text-slate-300 hover:bg-slate-800"
-          }`}
-        >
-          Todos ({conversations.length})
-        </button>
-        {characters.map((c) => {
-          const st = statusMap[c.character];
-          const online = st?.online;
-          return (
-            <button
-              key={c.character}
-              onClick={() => setCharacterFilter(c.character)}
-              className={`flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 transition ${
-                characterFilter === c.character
-                  ? "border-amber-500 bg-amber-500/10 text-amber-300"
-                  : `${realmColor(c.character)} hover:opacity-80`
-              }`}
+              type="button"
+              onClick={() => {
+                notif.toggleEnabled();
+                if (!notif.enabled) {
+                  void notif.requestPermission();
+                }
+              }}
               title={
-                st
-                  ? `${online ? "online" : "offline"} — ${st.windowTitle}`
-                  : "janela não detectada"
+                notif.permission === "default"
+                  ? "Ativar som + notificações do navegador"
+                  : notif.enabled
+                    ? "Silenciar som"
+                    : "Ativar som"
               }
+              className="rounded-lg border border-white/10 bg-slate-950/60 px-2.5 py-2 text-sm hover:bg-white/10"
             >
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full ${
-                  online
-                    ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60"
-                    : "bg-slate-600"
-                }`}
-              />
-              {c.character}
-              {c.pendingOut > 0 && (
-                <span className="rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-900">
-                  {c.pendingOut}
-                </span>
-              )}
+              {notif.enabled ? "🔔" : "🔕"}
             </button>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar: full-width on mobile when no chat selected, responsive width on tablets/desktop */}
-        <aside
-          className={`${
-            selected ? "hidden md:flex" : "flex"
-          } w-full flex-col border-r border-slate-800 bg-slate-900/40 md:w-80 lg:w-96`}
-        >
-          <div className="border-b border-slate-800 p-3">
-            <div className="mb-2 text-[10px] uppercase tracking-wider text-slate-500">
-              Nova conversa
-            </div>
-            <div className="flex flex-col gap-2">
-              <input
-                value={newCharacter}
-                onChange={(e) => setNewCharacter(e.target.value)}
-                placeholder="Seu personagem (ex: Aragorn-Nemesis)"
-                list="known-chars"
-                className="rounded bg-slate-800 px-3 py-2 text-sm placeholder-slate-500 outline-none focus:ring-2 focus:ring-amber-500/60"
-              />
-              <datalist id="known-chars">
-                {characters.map((c) => (
-                  <option key={c.character} value={c.character} />
-                ))}
-              </datalist>
-              <div className="flex gap-2">
-                <input
-                  value={newPlayer}
-                  onChange={(e) => setNewPlayer(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") startNewConversation();
-                  }}
-                  placeholder="Whisper para: Nome-Reino"
-                  className="flex-1 rounded bg-slate-800 px-3 py-2 text-sm placeholder-slate-500 outline-none focus:ring-2 focus:ring-amber-500/60"
-                />
-                <button
-                  onClick={startNewConversation}
-                  className="rounded bg-amber-600 px-3 text-sm font-semibold text-slate-900 hover:bg-amber-500"
-                >
-                  +
-                </button>
-              </div>
-            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
-            {filteredConversations.length === 0 && (
-              <div className="p-6 text-center text-sm text-slate-500">
-                Nenhuma conversa {characterFilter !== ALL && "para este personagem"}.
-                <br />
-                Aguarde um whisper ou inicie um novo acima.
-              </div>
-            )}
-            {visibleConversations.map((c) => {
-              const convKey = `${c.character}::${c.player}`;
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => setFilter(ALL)}
+              className={`rounded-full px-2.5 py-1 text-xs transition ${
+                filter === ALL
+                  ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
+                  : "bg-white/5 text-slate-300 hover:bg-white/10"
+              }`}
+            >
+              Todas ({conversations.length})
+            </button>
+            {characters.map((c) => (
+              <button
+                key={c.character}
+                type="button"
+                onClick={() => setFilter(c.character)}
+                className={`rounded-full px-2.5 py-1 text-xs transition ${
+                  filter === c.character
+                    ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
+                    : "bg-white/5 text-slate-300 hover:bg-white/10"
+                }`}
+              >
+                {titleCase(c.character)}
+                {c.pendingOut > 0 ? ` •${c.pendingOut}` : ""}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+            <span>
+              {serverUp ? "🟢 servidor ok" : "🔴 servidor offline"} · 🪟 {onlineCount}{" "}
+              janelas · 📨 {totalIncoming} · 🕓 {totalPending}
+            </span>
+            <button
+              type="button"
+              onClick={() => setDemo((v) => !v)}
+              className={`rounded-full px-2 py-0.5 text-[11px] transition ${
+                demo
+                  ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40"
+                  : "bg-white/5 text-slate-300 hover:bg-white/10"
+              }`}
+            >
+              {demo ? "⏸ modo demo" : "▶ modo demo"}
+            </button>
+          </div>
+        </div>
+
+        <div className="bw-scroll min-h-0 flex-1 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <p className="p-6 text-center text-sm text-slate-500">
+              Nenhuma conversa ainda. Ligue o <b>modo demo</b> ou suba o bridge
+              Python do seu PC.
+            </p>
+          ) : (
+              filtered.map((c) => {
+              const key = `${c.character}:${c.player}`;
               const active =
                 selected?.character === c.character && selected?.player === c.player;
-              const hasUnread = unreadMap[convKey];
               return (
-                <button
-                  key={convKey}
-                  onClick={() =>
-                    setSelected({ character: c.character, player: c.player })
-                  }
-                  style={{ contentVisibility: "auto", containIntrinsicSize: "72px" }}
-                  className={`flex w-full flex-col gap-1 border-b border-slate-800/60 px-4 py-3 text-left transition ${
-                    active
-                      ? "bg-amber-500/10 border-l-2 border-l-amber-500"
-                      : hasUnread
-                        ? "bg-amber-500/5 border-l-2 border-l-amber-400/50"
-                        : "hover:bg-slate-800/40"
+                <div
+                  key={key}
+                  className={`group flex w-full items-stretch gap-0 border-b border-white/5 transition ${
+                    active ? "bg-emerald-500/10" : "hover:bg-white/5"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={`truncate ${
-                        hasUnread
-                          ? "font-bold text-amber-200"
-                          : "font-semibold text-slate-100"
-                      }`}
-                    >
-                      {c.player}
-                    </span>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {hasUnread && (
-                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-slate-950">
-                          !
-                        </span>
-                      )}
-                      <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                  <button
+                    type="button"
+                    onClick={() => setSelected({ character: c.character, player: c.player })}
+                    className="flex min-w-0 flex-1 gap-3 px-3 py-2.5 text-left"
+                  >
+                  <span
+                    className={`grid h-10 w-10 shrink-0 place-items-center rounded-full border text-sm font-semibold uppercase ${charColor(c.player)}`}
+                  >
+                    {c.player.slice(0, 2)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-slate-100">
+                        {titleCase(c.player)}
+                      </span>
+                      <span className="ml-auto shrink-0 text-[11px] text-slate-500">
                         {timeAgo(c.lastAt)}
                       </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${realmColor(c.character)}`}
-                    >
-                      {c.character}
                     </span>
-                    <span
-                      className={`truncate text-xs ${
-                        hasUnread ? "font-medium text-amber-300" : "text-slate-400"
-                      }`}
-                    >
-                      {c.lastDirection === "outgoing" ? "→ " : ""}
+                    <span className="mt-0.5 flex items-center gap-2">
+                      <span
+                        className={`inline-block max-w-[8rem] truncate rounded px-1.5 py-0.5 text-[10px] ${charColor(c.character)}`}
+                      >
+                        {titleCase(c.character)}
+                        {realmOf(c.character) ? ` · ${realmOf(c.character)}` : ""}
+                      </span>
+                      {c.pendingOut > 0 ? (
+                        <span className="text-[10px] text-amber-300">
+                          🕓 {c.pendingOut}
+                        </span>
+                      ) : null}
+                      {isUnread(c) && !active ? (
+                        <span className="ml-auto h-2 w-2 rounded-full bg-emerald-400" />
+                      ) : null}
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-slate-400">
+                      {c.lastDirection === "outgoing" ? "✓✓ " : ""}
                       {c.lastBody}
                     </span>
-                  </div>
-                </button>
-              );
-              })}
-            {filteredConversations.length > visibleConversations.length && (
-              <button
-                onClick={() =>
-                  setConversationLimit((current) => current + INITIAL_CONVERSATION_LIMIT)
-                }
-                className="m-3 w-[calc(100%-1.5rem)] rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700"
-              >
-                Mostrar mais conversas ({filteredConversations.length - visibleConversations.length})
-              </button>
-            )}
-          </div>
-        </aside>
-
-        {/* Message pane: full-width on mobile when chat selected */}
-        <main
-          className={`${
-            selected ? "flex" : "hidden md:flex"
-          } flex-1 flex-col bg-[radial-gradient(circle_at_top,rgba(120,80,20,0.15),transparent_60%)]`}
-        >
-          {!selected ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center text-slate-500">
-              <div className="text-6xl">💬</div>
-              <div>Selecione uma conversa</div>
-              <div className="text-xs">
-                ou aguarde um whisper chegar em qualquer uma das suas janelas.
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Chat header */}
-              <div className="shrink-0 border-b border-slate-800 px-3 py-2.5 sm:px-6 sm:py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <button
-                      onClick={() => setSelected(null)}
-                      aria-label="Voltar para a lista de conversas"
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-300 transition hover:bg-slate-700 md:hidden"
-                    >
-                      ←
-                    </button>
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold text-amber-300">
-                        {selected.player}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] sm:text-xs">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono ${realmColor(selected.character)}`}
-                        >
-                          <span
-                            className={`h-1.5 w-1.5 rounded-full ${
-                              statusMap[selected.character]?.online
-                                ? "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-500/60"
-                                : "bg-slate-600"
-                            }`}
-                          />
-                          {selected.character}
-                        </span>
-                        {statusMap[selected.character]?.online ? (
-                          <span className="text-emerald-400">
-                            online
-                          </span>
-                        ) : (
-                          <span className="text-rose-400">
-                            offline — envio pode falhar
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  </span>
+                  </button>
                   <button
-                    onClick={() => void clearConversation()}
-                    disabled={clearingConversation || messages.length === 0}
-                    className="shrink-0 rounded-lg border border-rose-500/40 bg-rose-500/10 px-2.5 py-1 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800/50 disabled:text-slate-500 sm:px-3 sm:text-xs"
-                    title="Apagar todas as mensagens desta conversa"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyToClipboard(c.player);
+                    }}
+                    title={`Copiar "${c.player}"`}
+                    className="self-start px-2 py-2 text-xs text-slate-500 opacity-0 transition group-hover:opacity-100 hover:text-sky-300"
                   >
-                    {clearingConversation ? "apagando..." : "🗑 Limpar"}
+                    📋
                   </button>
                 </div>
-                {realmMismatch && (
-                  <div className="mt-2 rounded border border-rose-500/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                    ⚠ <b>Servidor diferente:</b> seu personagem está em{" "}
-                    <b>{realmMismatch.charRealm}</b> mas o destinatário está em{" "}
-                    <b>{realmMismatch.playerRealm}</b>. A mensagem pode falhar
-                    se os servidores não forem conectados.
-                  </div>
-                )}
-              </div>
+              );
+            })
+          )}
+        </div>
+      </aside>
 
-              {/* Messages area */}
-              <div
-                ref={scrollRef}
-                onScroll={onChatScroll}
-                className="flex-1 space-y-3 overflow-y-auto px-3 py-3 sm:px-6 sm:py-4"
+      {/* Conversa */}
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/60">
+        {!selected ? (
+          <div className="grid flex-1 place-items-center p-10 text-center">
+            <div className="max-w-md">
+              <div className="text-5xl">🥐</div>
+              <h1 className="mt-4 text-2xl font-semibold">Bakers Whisper</h1>
+              <p className="mt-2 text-sm text-slate-400">
+                Selecione uma conversa à esquerda para responder. As respostas entram
+                na fila e o bridge Python digita no jogo automaticamente.
+              </p>
+              <p className="mt-4 text-xs text-slate-500">
+                Este preview roda com um bridge simulado (modo demo). Para usar de
+                verdade, veja a página{" "}
+                <a className="text-emerald-400 underline" href="/setup">
+                  Setup / Bridge
+                </a>
+                .
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
+              <span
+                className={`grid h-10 w-10 place-items-center rounded-full border text-sm font-semibold uppercase ${charColor(selected.player)}`}
               >
-                {messages.length === 0 && (
-                  <div className="pt-12 text-center text-sm text-slate-500">
-                    Sem mensagens ainda entre {selected.character} e{" "}
-                    {selected.player}.
-                  </div>
-                )}
-                {messages.map((m) => {
-                  const mine = m.direction === "outgoing";
-                  const badge = statusBadge(m.status);
-                  return (
-                    <div
-                      key={m.id}
-                      className={`flex ${mine ? "justify-end" : "justify-start"}`}
-                    >
+                {selected.player.slice(0, 2)}
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">
+                  {titleCase(selected.player)}
+                  {realmOf(selected.player) ? (
+                    <span className="ml-2 text-xs font-normal text-slate-400">
+                      {realmOf(selected.player)}
+                    </span>
+                  ) : null}
+                </p>
+                <p className="truncate text-xs text-slate-400">
+                  via {titleCase(selected.character)}
+                  {realmOf(selected.character)
+                    ? ` (${realmOf(selected.character)})`
+                    : ""}{" "}
+                  ·{" "}
+                  {(() => {
+                    const w = windows.find(
+                      (x) => x.character === selected.character,
+                    );
+                    if (!w) return "janela desconhecida";
+                    if (w.onlineByScan) {
+                      return w.foreground ? "🟢 online · em foco" : "🟢 online";
+                    }
+                    if (w.onlineByActivity) {
+                      return `🟡 ativo (último whisper há ${formatRelative(w.secondsSinceIncoming)})`;
+                    }
+                    return "⚪ offline";
+                  })()}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(selected.player)}
+                title="Copiar Nome-Servidor para a área de transferência"
+                className="ml-auto rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-sky-500/10 hover:text-sky-300"
+              >
+                📋 Copiar
+              </button>
+              <button
+                type="button"
+                onClick={() => void clearConversation()}
+                className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-rose-500/10 hover:text-rose-300"
+              >
+                🗑 limpar
+              </button>
+            </header>
+
+            {(() => {
+              const warn = realmMismatchWarning(selected.player, selected.character);
+              if (!warn) return null;
+              return (
+                <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+                  ⚠ <b>Servidor diferente</b>: {warn}
+                </div>
+              );
+            })()}
+
+            <div className="bw-scroll min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(800px_400px_at_50%_0%,rgba(16,185,129,0.06),transparent)] p-4">
+              {messages.length === 0 ? (
+                <p className="text-center text-sm text-slate-500">
+                  Nenhuma mensagem ainda.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {messages.map((m) => {
+                    const outgoing = m.direction === "outgoing";
+                    return (
                       <div
-                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 shadow sm:max-w-lg sm:px-4 ${
-                          mine
-                            ? "bg-amber-600 text-slate-950"
-                            : "bg-slate-800 text-slate-100"
-                        }`}
+                        key={m.id}
+                        className={`group flex ${outgoing ? "justify-end" : "justify-start"}`}
                       >
-                        <div className="whitespace-pre-wrap break-words text-[13px] sm:text-sm">
-                          {m.body}
-                        </div>
                         <div
-                          className={`mt-1 flex flex-wrap items-center gap-1.5 text-[10px] ${
-                            mine ? "text-slate-900/70" : "text-slate-400"
+                          className={`bw-in max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow-sm ${
+                            outgoing
+                              ? "bg-emerald-600/25 text-emerald-50 ring-1 ring-emerald-500/30"
+                              : "bg-slate-800/70 text-slate-100 ring-1 ring-white/10"
                           }`}
                         >
-                          <span>
-                            {new Date(m.createdAt).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                          {mine && badge.label && (
-                            <span
-                              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${badge.classes || "bg-slate-900/20"}`}
+                          <p className="whitespace-pre-wrap break-words">{m.body}</p>
+                          <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-slate-400">
+                            {!outgoing ? (
+                              <span className="opacity-70">
+                                {titleCase(m.player)} → {titleCase(m.character)}
+                              </span>
+                            ) : (
+                              <span
+                                className={
+                                  m.status === "failed" ? "text-rose-400" : ""
+                                }
+                                title={m.error ?? ""}
+                              >
+                                {statusTick(m.status)}{" "}
+                                {m.status === "pending"
+                                  ? "na fila"
+                                  : m.status === "failed"
+                                    ? "falhou"
+                                    : "enviado"}
+                              </span>
+                            )}
+                            <span>{clockOf(m.createdAt)}</span>
+                            <button
+                              type="button"
+                              onClick={() => void deleteMessage(m.id)}
+                              className="opacity-0 transition group-hover:opacity-100 hover:text-rose-300"
+                              title="Apagar mensagem"
                             >
-                              {badge.label}
-                            </span>
-                          )}
-                          {m.error && (
-                            <span className="text-rose-800">— {m.error}</span>
-                          )}
-                          <button
-                            onClick={() => void deleteMessage(m)}
-                            disabled={deletingIds[m.id]}
-                            className={`ml-auto rounded px-1.5 py-0.5 transition disabled:opacity-50 ${
-                              mine
-                                ? "text-slate-900/70 hover:bg-slate-950/10 hover:text-slate-950"
-                                : "text-slate-500 hover:bg-slate-700 hover:text-rose-300"
-                            }`}
-                            title="Apagar mensagem"
-                            aria-label="Apagar mensagem"
-                          >
-                            {deletingIds[m.id] ? "..." : "🗑"}
-                          </button>
+                              ✕
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                  <div ref={bottomRef} />
+                </div>
+              )}
+            </div>
 
-              {/* Input area */}
-              <div className="shrink-0 border-t border-slate-800 bg-slate-900/60 p-2.5 sm:p-3">
-                <div className="flex items-end gap-2">
-                  <textarea
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value.slice(0, 255))}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendReply();
-                      }
-                    }}
-                    rows={2}
-                    placeholder={`Responder ${selected.player}...`}
-                    className="flex-1 resize-none rounded-xl bg-slate-800 px-3 py-2.5 text-sm placeholder-slate-500 outline-none focus:ring-2 focus:ring-amber-500/60"
-                  />
-                  <button
-                    onClick={() => void sendReply()}
-                    disabled={sending || !draft.trim()}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-lg font-bold text-slate-950 shadow disabled:opacity-40 hover:bg-amber-400"
-                    title="Enviar mensagem"
-                  >
-                    {sending ? "..." : "➤"}
-                  </button>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
-                  <span className="hidden sm:inline">
-                    via <b>{selected.character}</b> ·{" "}
-                    <code>/w {selected.player}</code>
-                  </span>
-                  <span>{draft.length}/255</span>
-                </div>
+            <footer className="border-t border-white/10 p-3">
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void sendReply();
+                    }
+                  }}
+                  rows={1}
+                  maxLength={255}
+                  placeholder={`Responder ${titleCase(selected.player)} como ${titleCase(selected.character)}…`}
+                  className="bw-scroll max-h-32 min-h-[42px] flex-1 resize-y rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2.5 text-sm outline-none placeholder:text-slate-500 focus:border-emerald-500/60"
+                />
+                <button
+                  type="button"
+                  onClick={() => void sendReply()}
+                  disabled={sending || !draft.trim()}
+                  className="h-[42px] rounded-xl bg-emerald-500 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Enviar
+                </button>
               </div>
-            </>
-          )}
-        </main>
-      </div>
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                Enter envia · Shift+Enter quebra linha · a mensagem fica
+                &ldquo;na fila&rdquo; até o bridge confirmar o envio no jogo.
+              </p>
+            </footer>
+          </>
+        )}
+      </section>
+
+      {toast ? (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-white/10 bg-slate-900 px-4 py-2.5 text-sm shadow-xl">
+          {toast}
+        </div>
+      ) : null}
     </div>
   );
 }

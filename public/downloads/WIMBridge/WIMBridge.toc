@@ -1,8 +1,8 @@
 ## Interface: 120100
 ## Title: WIM Bridge
-## Notes: Fila de faixas OCR por janela para capturar whispers com precisão.
-## Author: WIM Bridge
-## Version: 3.2.0
+## Notes: Faixa preta/amarela OCR-friendly para o bridge Python. Comandos: /wimbridge who|test|screen|font N|size N|delay N|reset
+## Author: Bakers Whisper
+## Version: 3.3.0
 ## SavedVariables: WIMBridgeDB
 
 WIMBridge.lua

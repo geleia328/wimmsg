@@ -1,392 +1,198 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-type SettingsPayload = {
-  ok: boolean;
-  tablesReady: boolean;
-  tableErrors?: Record<string, string | null>;
-  database: {
-    configured: boolean;
-    maskedUrl: string;
-    note: string;
-  };
-  bridgeToken: {
-    envConfigured: boolean;
-    envMasked: string;
-    dynamicConfigured: boolean;
-    dynamicMasked: string;
-    dynamicUpdatedAt: string | null;
-  };
-  counts: {
-    messages: number;
-    windows: number;
-    gseStates: number;
-  };
+type Controls = {
+  bridgeReaderEnabled: boolean;
+  gseMasterEnabled: boolean;
+  whisperFocusDelayMs: number;
+  whisperAfterSendDelayMs: number;
+  whisperChatOpenDelayMs: number;
+  whisperKeystrokeDelayMs: number;
+  whisperChatSendDelayMs: number;
+  whisperCloseChatEnabled: boolean;
+  whisperChatCloseDelayMs: number;
+  voiceRelayEnabled: boolean;
+  combatRelayEnabled: boolean;
+  ocrRelayEnabled: boolean;
+  wimScreenOcrEnabled: boolean;
+  ocrStripTopPx: number;
+  ocrStripHeightPx: number;
+  queuePollMs: number;
 };
 
-const ADMIN_KEY = "bakers-whisper:admin-token";
+const BOOL_FIELDS: Array<[keyof Controls, string, string]> = [
+  ["bridgeReaderEnabled", "Leitura do bridge", "Ler o WoWChatLog.txt e mandar sussurros para o painel"],
+  ["gseMasterEnabled", "GSE master", "Permite que o bridge dispare macros (GSE)"],
+  ["whisperCloseChatEnabled", "Fechar chat após enviar", "Fecha a janela de whisper depois do envio"],
+  ["ocrRelayEnabled", "Relay por OCR", "Lê whispers da tela via OCR quando não há log"],
+  ["wimScreenOcrEnabled", "OCR da tela do WIM", "Lê a janela flutuante do addon WIM"],
+  ["voiceRelayEnabled", "Voice relay", "Anuncia sussurros em voz alta (TTS)"],
+  ["combatRelayEnabled", "Combat relay", "Relay também durante combate"],
+];
+
+const NUM_FIELDS: Array<[keyof Controls, string, number, number, number]> = [
+  ["queuePollMs", "Intervalo de poll da fila (ms)", 500, 10000, 100],
+  ["whisperFocusDelayMs", "Delay ao focar a janela (ms)", 100, 5000, 50],
+  ["whisperChatOpenDelayMs", "Delay para abrir o chat (ms)", 0, 3000, 50],
+  ["whisperKeystrokeDelayMs", "Delay entre teclas (ms)", 10, 500, 5],
+  ["whisperChatSendDelayMs", "Delay após enviar (ms)", 0, 3000, 50],
+  ["whisperChatCloseDelayMs", "Delay para fechar o chat (ms)", 0, 3000, 50],
+  ["ocrStripTopPx", "OCR — topo da faixa (px)", 0, 200, 1],
+  ["ocrStripHeightPx", "OCR — altura da faixa (px)", 60, 260, 1],
+];
 
 export function SettingsView() {
-  const [adminToken, setAdminToken] = useState("");
+  const [controls, setControls] = useState<Controls | null>(null);
   const [bridgeToken, setBridgeToken] = useState("");
-  const [settings, setSettings] = useState<SettingsPayload | null>(null);
-  const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-
-  // Vercel env updater form. These are intentionally NOT persisted in the
-  // browser except the project name, so secrets are not left behind by default.
-  const [vercelToken, setVercelToken] = useState("");
-  const [vercelProject, setVercelProject] = useState("wimmsg-lntm");
-  const [vercelTeamId, setVercelTeamId] = useState("");
-  const [databaseUrl, setDatabaseUrl] = useState("");
-  const [envBridgeToken, setEnvBridgeToken] = useState("");
-  const [deployHookUrl, setDeployHookUrl] = useState("");
-
-  useEffect(() => {
-    setAdminToken(localStorage.getItem(ADMIN_KEY) ?? "");
-  }, []);
-
-  const headers = useCallback(
-    () => ({ "x-admin-token": adminToken, "content-type": "application/json" }),
-    [adminToken],
-  );
+  const [msg, setMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    setError("");
-    try {
-      localStorage.setItem(ADMIN_KEY, adminToken);
-      const r = await fetch("/api/admin/settings", {
-        headers: headers(),
-        cache: "no-store",
-      });
-      if (!r.ok) {
-        setSettings(null);
-        setError(r.status === 401 ? "Token admin inválido." : await r.text());
-        return;
-      }
-      setSettings((await r.json()) as SettingsPayload);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [adminToken, headers]);
+    const res = await fetch("/api/control", { cache: "no-store" });
+    const data = (await res.json()) as { controls: Controls };
+    setControls(data.controls);
+  }, []);
 
   useEffect(() => {
-    if (adminToken) void load();
-  }, [adminToken, load]);
+    setBridgeToken(window.localStorage.getItem("bw:bridge-token") ?? "");
+    void load();
+  }, [load]);
 
-  const saveBridgeToken = useCallback(async () => {
+  const save = async () => {
+    if (!controls) return;
     setSaving(true);
-    setError("");
+    setMsg(null);
     try {
-      const r = await fetch("/api/admin/settings", {
+      const res = await fetch("/api/control", {
         method: "POST",
-        headers: headers(),
-        body: JSON.stringify({ bridgeToken }),
+        headers: bridgeToken.trim()
+          ? {
+              "content-type": "application/json",
+              authorization: `Bearer ${bridgeToken.trim()}`,
+            }
+          : { "content-type": "application/json" },
+        body: JSON.stringify(controls),
       });
-      if (!r.ok) {
-        const data = (await r.json().catch(() => ({}))) as { error?: string };
-        setError(data.error ?? `Erro HTTP ${r.status}`);
+      if (!res.ok) {
+        setMsg("❌ Token inválido ou ausente. Informe o mesmo BRIDGE_TOKEN do .exe.");
         return;
       }
-      setBridgeToken("");
-      await load();
-      alert("Token salvo com sucesso. Coloque esse mesmo token no BakersWhisper.exe.");
+      const data = (await res.json()) as { controls: Controls };
+      setControls(data.controls);
+      setMsg("✅ Configurações salvas — o bridge pega os novos valores no próximo poll.");
     } finally {
       setSaving(false);
     }
-  }, [bridgeToken, headers, load]);
+  };
 
-  const initDb = useCallback(async () => {
-    setSaving(true);
-    setError("");
-    try {
-      const r = await fetch("/api/admin/init-db", {
-        method: "POST",
-        headers: headers(),
-      });
-      const data = (await r.json().catch(() => ({}))) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (!r.ok || !data.ok) {
-        setError(data.error ?? `Erro HTTP ${r.status}`);
-        return;
-      }
-      await load();
-      alert("Tabelas criadas/atualizadas com sucesso!");
-    } finally {
-      setSaving(false);
-    }
-  }, [headers, load]);
-
-  const updateVercelEnv = useCallback(async () => {
-    setSaving(true);
-    setError("");
-    try {
-      const r = await fetch("/api/admin/vercel-env", {
-        method: "POST",
-        headers: headers(),
-        body: JSON.stringify({
-          vercelToken,
-          projectIdOrName: vercelProject,
-          teamId: vercelTeamId || undefined,
-          databaseUrl: databaseUrl || undefined,
-          bridgeToken: envBridgeToken || undefined,
-          deployHookUrl: deployHookUrl || undefined,
-        }),
-      });
-      const data = (await r.json().catch(() => ({}))) as {
-        ok?: boolean;
-        error?: string;
-        updated?: string[];
-        nextStep?: string;
-      };
-      if (!r.ok || !data.ok) {
-        setError(data.error ?? `Erro HTTP ${r.status}`);
-        return;
-      }
-      setDatabaseUrl("");
-      setEnvBridgeToken("");
-      alert(
-        `Variáveis atualizadas: ${(data.updated ?? []).join(", ")}\n\n${data.nextStep ?? "Faça redeploy na Vercel."}`,
-      );
-    } finally {
-      setSaving(false);
-    }
-  }, [
-    databaseUrl,
-    deployHookUrl,
-    envBridgeToken,
-    headers,
-    vercelProject,
-    vercelTeamId,
-    vercelToken,
-  ]);
+  if (!controls) {
+    return <p className="text-sm text-slate-500">carregando…</p>;
+  }
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <Link href="/" className="text-xs text-amber-400 hover:underline">
-            ← voltar ao chat
-          </Link>
-          <h1 className="mt-2 text-2xl font-bold sm:text-3xl">Configurações</h1>
-          <p className="mt-2 text-sm text-slate-400">
-            Central para ajustar token do bridge e verificar banco/servidor.
-          </p>
-        </div>
-        <div className="hidden text-4xl sm:block">⚙️</div>
-      </div>
-
-      <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:mt-8 sm:p-5">
-        <h2 className="text-base font-bold text-amber-300 sm:text-lg">Acesso admin</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Use o <code>ADMIN_TOKEN</code> se configurou na Vercel. Caso contrário,
-          use o <code>BRIDGE_TOKEN</code> atual.
+    <div className="space-y-5">
+      <header>
+        <h1 className="text-2xl font-semibold">Configurações do bridge</h1>
+        <p className="text-sm text-slate-400">
+          Estes valores ficam na tabela <code>app_settings</code> e são lidos pelo
+          bridge em <code>/api/control</code> a cada ciclo.
         </p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+      </header>
+
+      <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <label className="block text-sm font-medium">
+          Token do bridge
           <input
-            value={adminToken}
-            onChange={(e) => setAdminToken(e.target.value)}
-            placeholder="Cole o token admin aqui"
             type="password"
-            className="flex-1 rounded bg-slate-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-500/60"
+            value={bridgeToken}
+            onChange={(e) => {
+              const value = e.target.value;
+              setBridgeToken(value);
+              window.localStorage.setItem("bw:bridge-token", value);
+            }}
+            placeholder="Mesmo BRIDGE_TOKEN configurado no executável"
+            className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 font-mono text-sm outline-none focus:border-emerald-500/60"
           />
-          <button
-            onClick={() => void load()}
-            className="w-full rounded bg-amber-500 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400 sm:w-auto"
-          >
-            Entrar
-          </button>
-        </div>
-        {error && (
-          <div className="mt-3 rounded border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">
-            {error}
-          </div>
-        )}
+        </label>
+        <p className="mt-2 text-xs text-slate-500">
+          Fica apenas neste navegador e protege as alterações de GSE e controles.
+        </p>
       </section>
 
-      {settings && (
-        <>
-          {!settings.tablesReady && (
-          <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-amber-300 sm:text-lg">
-                Banco conectado, mas tabelas não existem
-              </h2>
-              <p className="mt-2 text-sm text-amber-100">
-                O Neon já está acessível, mas ainda falta criar as tabelas do
-                Bakers Whisper. Clique no botão abaixo para inicializar tudo
-                automaticamente.
-              </p>
-              <button
-                onClick={() => void initDb()}
-                disabled={saving}
-                className="mt-4 rounded bg-amber-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40"
-              >
-                {saving ? "criando..." : "🧱 Criar/atualizar tabelas agora"}
-              </button>
-              {settings.tableErrors && (
-                <pre className="mt-4 max-h-40 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-400">
-                  {JSON.stringify(settings.tableErrors, null, 2)}
-                </pre>
-              )}
-            </section>
-          )}
-
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-emerald-300 sm:text-lg">Status</h2>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Stat label="Mensagens" value={settings.counts.messages} />
-              <Stat label="Janelas" value={settings.counts.windows} />
-              <Stat label="GSE states" value={settings.counts.gseStates} />
-            </div>
-          </section>
-
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-sky-300 sm:text-lg">PostgreSQL / Neon</h2>
-            <div className="mt-3 rounded bg-slate-950 p-3 font-mono text-xs text-slate-300">
-              DATABASE_URL atual: {settings.database.maskedUrl || "não configurada"}
-            </div>
-            <div className="mt-3 rounded border border-sky-500/40 bg-sky-500/10 p-4 text-sm text-sky-100">
-              <b>Alterar DATABASE_URL pela Vercel API</b>
-              <p className="mt-1 text-xs text-sky-200/80">
-                Cole abaixo sua Pooled connection string do Neon, um Vercel
-                Access Token e o nome/id do projeto. O site atualizará as
-                Environment Variables da Vercel para você.
-              </p>
-            </div>
-
-            <div className="mt-4 grid gap-3">
-              <label className="text-xs text-slate-400">
-                Vercel Access Token
-                <input
-                  value={vercelToken}
-                  onChange={(e) => setVercelToken(e.target.value)}
-                  type="password"
-                  placeholder="Cole um token da Vercel aqui"
-                  className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
-                />
-              </label>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="text-xs text-slate-400">
-                  Projeto Vercel / ID
-                  <input
-                    value={vercelProject}
-                    onChange={(e) => setVercelProject(e.target.value)}
-                    placeholder="wimmsg-lntm"
-                    className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
-                  />
-                </label>
-                <label className="text-xs text-slate-400">
-                  Team ID (opcional)
-                  <input
-                    value={vercelTeamId}
-                    onChange={(e) => setVercelTeamId(e.target.value)}
-                    placeholder="team_xxx se o projeto estiver em equipe"
-                    className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
-                  />
-                </label>
-              </div>
-
-              <label className="text-xs text-slate-400">
-                Nova DATABASE_URL do Neon
-                <textarea
-                  value={databaseUrl}
-                  onChange={(e) => setDatabaseUrl(e.target.value)}
-                  rows={3}
-                  placeholder="postgresql://neondb_owner:SENHA@ep-xxx-pooler.../neondb?sslmode=require"
-                  className="mt-1 w-full resize-none rounded bg-slate-800 px-3 py-2 font-mono text-xs text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
-                />
-              </label>
-
-              <label className="text-xs text-slate-400">
-                BRIDGE_TOKEN de produção (opcional)
-                <input
-                  value={envBridgeToken}
-                  onChange={(e) => setEnvBridgeToken(e.target.value)}
-                  type="password"
-                  placeholder="Se quiser atualizar também o token env da Vercel"
-                  className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
-                />
-              </label>
-
-              <label className="text-xs text-slate-400">
-                Deploy Hook URL (opcional, para redeploy automático)
-                <input
-                  value={deployHookUrl}
-                  onChange={(e) => setDeployHookUrl(e.target.value)}
-                  placeholder="https://api.vercel.com/v1/integrations/deploy/..."
-                  className="mt-1 w-full rounded bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/60"
-                />
-              </label>
-
-              <button
-                onClick={() => void updateVercelEnv()}
-                disabled={saving || !vercelToken || !vercelProject || (!databaseUrl && !envBridgeToken)}
-                className="w-full rounded bg-sky-500 px-5 py-2 text-sm font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40 sm:w-auto"
-              >
-                {saving ? "atualizando..." : "☁️ Atualizar variáveis na Vercel"}
-              </button>
-            </div>
-
-            <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">
-              Depois de alterar <code>DATABASE_URL</code>, a Vercel precisa de
-              um <b>Redeploy</b>. Se você não preencher Deploy Hook URL, vá em
-              Vercel → Deployments → três pontinhos → Redeploy.
-            </div>
-          </section>
-
-          <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/50 p-4 sm:p-5">
-            <h2 className="text-base font-bold text-fuchsia-300 sm:text-lg">Bridge Token</h2>
-            <p className="mt-2 text-sm text-slate-400">
-              Esse token é o que o BakersWhisper.exe usa para falar com o site.
-              Você pode trocar aqui sem recompilar o instalador.
-            </p>
-            <div className="mt-3 space-y-2 text-xs text-slate-400">
-              <div>
-                Token da Vercel/env: {settings.bridgeToken.envConfigured ? settings.bridgeToken.envMasked : "não configurado"}
-              </div>
-              <div>
-                Token dinâmico do site: {settings.bridgeToken.dynamicConfigured ? settings.bridgeToken.dynamicMasked : "não configurado"}
-              </div>
-            </div>
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+      <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+          Módulos
+        </h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          {BOOL_FIELDS.map(([key, label, hint]) => (
+            <label
+              key={key}
+              className="flex cursor-pointer items-start gap-3 rounded-xl border border-white/5 bg-slate-950/40 p-3"
+            >
               <input
-                value={bridgeToken}
-                onChange={(e) => setBridgeToken(e.target.value)}
-                placeholder="Novo Bridge Token (mínimo 16 caracteres)"
-                type="password"
-                className="flex-1 rounded bg-slate-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-fuchsia-500/60"
+                type="checkbox"
+                checked={controls[key] as boolean}
+                onChange={(e) =>
+                  setControls({ ...controls, [key]: e.target.checked })
+                }
+                className="mt-0.5 h-4 w-4 accent-emerald-500"
               />
-              <button
-                onClick={() => void saveBridgeToken()}
-                disabled={saving || bridgeToken.length < 16}
-                className="w-full rounded bg-fuchsia-500 px-4 py-2 text-sm font-bold text-white hover:bg-fuchsia-400 disabled:opacity-40 sm:w-auto"
-              >
-                {saving ? "salvando..." : "Salvar token"}
-              </button>
-            </div>
-            <div className="mt-4 rounded border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300">
-              Depois de salvar, abra o <b>BakersWhisper.exe</b> → seção
-              <b> Servidor</b> → cole o mesmo token → <b>💾 Salvar servidor</b>
-              → <b>🌐 Testar</b>.
-            </div>
-          </section>
-        </>
-      )}
-    </div>
-  );
-}
+              <span>
+                <span className="block text-sm">{label}</span>
+                <span className="block text-xs text-slate-500">{hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
 
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-lg border border-slate-700 bg-slate-950 p-4">
-      <div className="text-2xl font-bold text-slate-100">{value}</div>
-      <div className="mt-1 text-xs uppercase tracking-wider text-slate-500">
-        {label}
+      <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+          Timings
+        </h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          {NUM_FIELDS.map(([key, label, min, max, step]) => (
+            <label key={key} className="block">
+              <span className="flex items-center justify-between text-sm">
+                {label}
+                <span className="text-xs text-slate-400">
+                  {controls[key] as number}
+                </span>
+              </span>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={controls[key] as number}
+                onChange={(e) =>
+                  setControls({ ...controls, [key]: Number(e.target.value) })
+                }
+                className="mt-2 w-full accent-emerald-500"
+              />
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 disabled:opacity-40"
+        >
+          {saving ? "salvando…" : "Salvar"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/10"
+        >
+          Recarregar
+        </button>
+        {msg ? <span className="text-sm text-emerald-300">{msg}</span> : null}
       </div>
     </div>
   );
